@@ -1,0 +1,47 @@
+# ADR-0008: Isolate local, staging, and production and promote releases explicitly
+
+## Status
+
+Accepted.
+
+## Context
+
+The service runs on Cloudflare Workers with D1 and R2. Worker versions do not include the mutable state of attached storage resources, so application releases and data migrations cannot be treated as one automatically reversible unit.
+
+## Decision
+
+Use three operational contexts: local development, staging, and production.
+
+Staging and production are separate Cloudflare Worker environments and use separate D1 databases, R2 buckets, secrets, domains/routes, and environment-specific configuration. Mutable resources must never be shared between staging and production.
+
+Pull requests initially run local/CI checks only; per-PR deployed Cloudflare infrastructure is deferred.
+
+Once deployment automation exists, merges to `main` may deploy automatically to staging. Production is an explicit promotion/release step and records the source commit plus resulting Worker version/deployment identifier.
+
+Database migrations are version controlled and validated against local/disposable D1 before merge. Production schema changes use an expand-deploy-contract strategy whenever rollback compatibility could matter:
+
+1. introduce backward-compatible schema;
+2. deploy code that uses the expanded schema;
+3. remove obsolete schema only in a later release.
+
+A Worker code rollback is not a data rollback. D1 Time Travel is the emergency point-in-time data recovery mechanism and requires an explicit runbook and confirmation.
+
+Smoke tests are required after staging and production deployment.
+
+## Consequences
+
+- Deployment automation must select environment-specific bindings explicitly.
+- Secrets are configured outside source control.
+- Migration design must account for the immediately preceding Worker version when rollback is plausible.
+- Destructive migrations cannot be casually coupled to the code release that stops using the old shape.
+- Production releases are slightly more deliberate than continuous deployment to every environment, in exchange for safer schema/data operations.
+
+## Deferred
+
+- Gradual/canary production deployments.
+- Ephemeral per-PR environments.
+- Long-term database archive beyond D1 Time Travel retention.
+
+## Research
+
+See `docs/research/environments-observability-operations.md`.
