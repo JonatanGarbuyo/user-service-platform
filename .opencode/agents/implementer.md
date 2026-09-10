@@ -5,32 +5,32 @@ model: opencode/muse-spark-1.3-contributor-free
 permission:
   edit: allow
   read:
-    "*": allow
-    ".env": deny
-    ".env.*": deny
-    "**/.env": deny
-    "**/.env.*": deny
-    ".dev.vars": deny
-    "**/.dev.vars": deny
+    '*': allow
+    '.env': deny
+    '.env.*': deny
+    '**/.env': deny
+    '**/.env.*': deny
+    '.dev.vars': deny
+    '**/.dev.vars': deny
   external_directory: deny
   bash:
-    "*": ask
-    "git push*": deny
-    "git push --force*": deny
-    "gh pr merge*": deny
-    "gh release*": deny
-    "npm publish*": deny
-    "npx wrangler deploy*": deny
-    "wrangler deploy*": deny
-    "npx wrangler secret*": deny
-    "wrangler secret*": deny
-    "npx wrangler delete*": deny
-    "wrangler delete*": deny
-    "npx wrangler d1 delete*": deny
-    "wrangler d1 delete*": deny
-    "npx wrangler r2 bucket delete*": deny
-    "wrangler r2 bucket delete*": deny
-    "rm -rf *": deny
+    '*': allow
+    'git push*': deny
+    'git push --force*': deny
+    'gh pr merge*': deny
+    'gh release*': deny
+    'npm publish*': deny
+    'npx wrangler deploy*': deny
+    'wrangler deploy*': deny
+    'npx wrangler secret*': deny
+    'wrangler secret*': deny
+    'npx wrangler delete*': deny
+    'wrangler delete*': deny
+    'npx wrangler d1 delete*': deny
+    'wrangler d1 delete*': deny
+    'npx wrangler r2 bucket delete*': deny
+    'wrangler r2 bucket delete*': deny
+    'rm -rf *': deny
 ---
 
 You are the implementation agent for this repository.
