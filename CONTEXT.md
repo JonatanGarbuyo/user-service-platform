@@ -10,7 +10,10 @@ A reusable user-service foundation for content-oriented web products. The first 
 A registered end user of the consuming site. Editorial CMS operators are not Users in this domain.
 
 ### Identity
-Authentication identity, credentials, linked providers, account recovery, and session lifecycle.
+Authentication identity, credentials, linked providers, account recovery, email verification, and session lifecycle.
+
+### Auth Policy
+Deployment-level configuration that controls supported authentication behaviour without exposing Better Auth configuration directly to feature code. It includes capabilities such as registration enablement, email/password enablement, required email verification, OAuth providers, and auth/session lifetimes. The initial deployment requires verified email before login succeeds.
 
 ### Profile
 User-facing account data such as display name, avatar reference, and preferences.
@@ -41,6 +44,8 @@ Traffic/product analytics is a separate service or third-party platform. This se
 ### In scope initially
 
 - identity and sessions
+- configurable authentication policy
+- required email verification for the initial deployment
 - profile
 - subscription state
 - follows
@@ -58,6 +63,9 @@ Traffic/product analytics is a separate service or third-party platform. This se
 - community/comments/replies/votes
 - follow users
 - referral/promotion metadata
+- OTP/passwordless authentication
+- MFA/passkeys
+- new-device authentication alerts
 - internal operator/admin authentication and admin UI
 
 ### Out of scope
@@ -77,4 +85,10 @@ A vertical unit that owns an externally observable capability across contract, d
 A runtime-validatable public interface. HTTP contracts are the source for generated OpenAPI and clients.
 
 ### Adapter
-A narrow integration boundary for infrastructure whose implementation may change, such as object storage or an external provider.
+A narrow integration boundary for infrastructure whose implementation may change, such as object storage, transactional email, or an external provider.
+
+### Authenticated User
+The stable application-facing identity exposed to feature slices after authentication. It must not expose Better Auth persistence models or provider-specific types.
+
+### Session Context
+The stable application-facing session data available to authenticated feature slices. It is an application contract, not a Better Auth internal type.
