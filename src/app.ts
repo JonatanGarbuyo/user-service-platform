@@ -16,11 +16,12 @@ export interface AppBindings {
 }
 
 // Reads the deployment environment without assuming bindings are present.
-// Requests driven via `app.request()` without an explicit Env leave `c.env`
-// undefined; liveness and error paths must never crash on that.
+// Hono types `c.env` as always defined, but requests driven via
+// `app.request()` without an explicit Env leave it undefined at runtime;
+// liveness and error paths must never crash on that.
 function readEnvironment(c: Context<AppBindings>): string {
-  const bindings = (c.env ?? {}) as Partial<Env>;
-  return bindings.ENVIRONMENT ?? 'local';
+  const bindings = c.env as Partial<Env> | undefined;
+  return bindings?.ENVIRONMENT ?? 'local';
 }
 
 // Application composition root. Feature slices register their OpenAPI-aware
