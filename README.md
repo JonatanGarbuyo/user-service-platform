@@ -4,7 +4,7 @@ Reusable user-service foundation, initially intended for a single-client deploym
 
 ## Status
 
-Architecture and repository bootstrap. Product implementation must follow the decision workflow before code is added.
+Architecture and repository bootstrap. Product implementation follows the decision workflow before code is added.
 
 ## Engineering workflow
 
@@ -14,17 +14,27 @@ This repository follows Matt Pocock's engineering skills workflow:
 2. `wayfinder` — resolve architectural/product decisions while there is still fog.
 3. `to-spec` — turn settled decisions into a durable implementation specification.
 4. `to-tickets` — split the spec into dependency-aware tracer-bullet vertical slices.
-5. `implement` — build one ticket at a time using TDD and code review.
+5. `implement` — build one approved ticket at a time using TDD and code review.
 
 See `AGENTS.md`, `CONTEXT.md`, `docs/agents/`, and `docs/adr/` before making changes.
 
+## Toolchain
+
+Use the repository-pinned Node.js LTS version:
+
+```bash
+nvm use
+```
+
+The baseline is Node.js 24 LTS. npm and TypeScript are pinned in `package.json`; the initial compiler line is TypeScript 6.
+
 ## Skills installation
 
-For Codex and other agents supported by the open skills CLI:
+OpenCode is the primary implementation harness. Install the project-local Matt Pocock skills with:
 
 ```bash
 npx skills@latest add mattpocock/skills \
-  --agent codex \
+  --agent opencode \
   --skill setup-matt-pocock-skills \
   --skill wayfinder \
   --skill domain-modeling \
@@ -35,21 +45,23 @@ npx skills@latest add mattpocock/skills \
   --skill to-tickets \
   --skill tdd \
   --skill code-review \
-  --skill implement
+  --skill implement \
+  --skill handoff \
+  -y
 ```
 
-The skills are project-scoped and should be committed with the repository when installed.
+OpenCode discovers these from `.agents/skills/`. The installed skills and lock metadata should be committed so implementation agents share the same workflow version. See `docs/agents/opencode.md`.
 
 ## Code quality
 
-Repository formatting and linting are mechanical and non-negotiable:
+Repository formatting and linting are mechanical:
 
 ```bash
 npm run format
 npm run check
 ```
 
-Prettier owns formatting. ESLint owns correctness, maintainability, and—once the source layout is finalized—architecture dependency rules. Surface style is StandardJS-inspired: no semicolons, single quotes, two-space indentation.
+Prettier owns formatting. ESLint owns correctness, maintainability, and—once the source layout exists—architecture dependency rules. Formatting uses semicolons, single quotes and two-space indentation.
 
 ## Current architectural direction
 
@@ -57,7 +69,10 @@ Prettier owns formatting. ESLint owns correctness, maintainability, and—once t
 - Hono as the HTTP framework.
 - Cloudflare D1 as the initial relational store.
 - Better Auth behind an application-owned configurable auth policy.
+- Drizzle ORM for application persistence, pinned to a Better Auth-compatible stable line for the first release.
 - Contract-first HTTP APIs with runtime validation and generated OpenAPI.
 - Vertical feature slices rather than global controller/service/repository layers.
 - Object storage separate from relational data.
 - Analytics remains a separate service or third-party concern.
+
+The current parent implementation specification is GitHub issue #8. It must be decomposed with `to-tickets` and approved before implementation agents start `implement` tickets.
