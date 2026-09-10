@@ -3,6 +3,7 @@ import { QUALITY_GATES, runQualityGates } from '../../scripts/review/gates.js';
 import {
   buildAddressReviewArgs,
   buildReviewAxisArgs,
+  reviewAxisWorker,
   runAddressReview,
   runReviewAxis,
 } from '../../scripts/review/runner.js';
@@ -46,6 +47,17 @@ describe('review worker invocation', () => {
       'address-review',
       '17',
     ]);
+  });
+
+  it('maps each axis to its pinned worker for targeted marker retries', () => {
+    expect(reviewAxisWorker('standards')).toEqual({
+      command: 'review-standards',
+      agent: 'reviewer-standards',
+    });
+    expect(reviewAxisWorker('spec')).toEqual({
+      command: 'review-spec',
+      agent: 'reviewer-spec',
+    });
   });
 
   it('executes the built worker command without touching subprocesses', async () => {

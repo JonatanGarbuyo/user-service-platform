@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decideStartSync } from '../../scripts/review/cycle-policy.js';
-import { commitChecksPass } from '../../scripts/review/pr-checks.js';
+import { commitChecksPass, decideCheckPoll } from '../../scripts/review/pr-checks.js';
 
 // Seam under test: HEAD-sync and exact-SHA CI verification (PR #17 final
 // acceptance blocker 2). The loop must never report READY for a local HEAD
@@ -48,5 +48,33 @@ describe('exact-SHA commit checks', () => {
     expect(
       commitChecksPass([{ name: 'quality gates', status: 'completed', conclusion: 'failure' }]),
     ).toBe(false);
+  });
+
+  it('fails when no check runs are registered yet (no vacuous pass)', () => {
+    expect(commitChecksPass([])).toBe(false);
+  });
+});
+
+describe('check polling policy', () => {
+  it('passes when every check run completed successfully', () => {
+    expect(
+      decideCheckPoll([{ name: 'quality gates', status: 'completed', conclusion: 'success' }]),
+    ).toBe('pass');
+  });
+
+  it('waits while checks are pending or absent', () => {
+    expect(decideCheckPoll([])).toBe('pending');
+    expect(
+      decideCheckPoll([{ name: 'quality gates', status: 'in_progress', conclusion: null }]),
+    ).toBe('pending');
+  });
+
+  it('fails fast when any completed check did not succeed', () => {
+    expect(
+      decideCheckPoll([{ name: 'quality gates', status: 'completed', conclusion: 'failure' }]),
+    ).toBe('fail');
+    expect(
+      decideCheckPoll([{ name: 'quality gates', status: 'completed', conclusion: null }]),
+    ).toBe('fail');
   });
 });

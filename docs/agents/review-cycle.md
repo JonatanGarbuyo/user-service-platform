@@ -60,11 +60,15 @@ Cycles: <n>
    axis for the exact current HEAD SHA, and only from the configured model
    family for that axis (Standards is MiMo, Spec is Nemotron). Stale markers
    from older HEADs are ignored when a newer report for that axis exists.
+   Results are never inferred from prose: if an axis published without its
+   marker, only that axis's worker is retried (bounded to 2 attempts per
+   axis) before escalating.
 4. If both axes report `PASS` for the current HEAD, run the repository
    quality gates (lint, formatting, typecheck, OpenAPI drift, Workers tests,
    Node/harness tests), then verify the PR still points at the reviewed HEAD
-   and CI checks for that exact commit are green before finishing ready for
-   final acceptance.
+   and poll CI checks for that exact commit until they succeed, fail, or
+   time out (an empty check list never counts as success) before finishing
+   ready for final acceptance.
 5. If a valid blocking `FAIL` exists, invoke Muse through the existing
    `/address-review` workflow for the smallest in-scope correction, commit
    locally, then rerun both axes against the new HEAD.

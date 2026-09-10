@@ -1,16 +1,27 @@
 import {
   DEFAULT_MAX_CORRECTION_CYCLES,
+  DEFAULT_MAX_MARKER_RETRIES,
+  axesEligibleForMarkerRetry,
   decideNextStep,
   decideStartSync,
   formatReadySummary,
+  type MarkerRetries,
 } from './review/cycle-policy.js';
 import { qualityGatesPass, runQualityGates } from './review/gates.js';
-import { commitChecksPass, fetchCommitCheckRuns, getRepoSlug } from './review/pr-checks.js';
+import {
+  CHECK_POLL_ATTEMPTS,
+  CHECK_POLL_DELAY_MS,
+  decideCheckPoll,
+  fetchCommitCheckRuns,
+  getRepoSlug,
+  type CheckPollDecision,
+} from './review/pr-checks.js';
 import { parseReviewMarkers, selectCurrentHeadReports } from './review/result-marker.js';
 import {
   getCurrentHead,
   getPrForBranch,
   listPrComments,
+  reviewAxisWorker,
   runAddressReview,
   runReviewAxis,
 } from './review/runner.js';
@@ -155,11 +166,27 @@ async function main(): Promise<void> {
     pr = refreshed;
   }
 
-  for (let cycles = 0; ; cycles += 1) {
-    await Promise.all([
-      runReviewAxis('review-standards', 'reviewer-standards', pr.number),
-      runReviewAxis('review-spec', 'reviewer-spec', pr.number),
-    ]);
+  for (
+    let cycles = 0,
+      markerRetries: MarkerRetries = { standards: 0, spec: 0 },
+      pendingAxes: ('standards' | 'spec')[] | null = null;
+    ;
+  ) {
+    if (pendingAxes === null) {
+      await Promise.all([
+        runReviewAxis('review-standards', 'reviewer-standards', pr.number),
+        runReviewAxis('review-spec', 'reviewer-spec', pr.number),
+      ]);
+    } else {
+      // Blocker 1 (PR #17): a reviewer published without its marker — retry
+      // only the missing axis instead of demanding manual intervention.
+      for (const axis of pendingAxes) {
+        const worker = reviewAxisWorker(axis);
+        await runReviewAxis(worker.command, worker.agent, pr.number);
+        markerRetries[axis] += 1;
+      }
+      pendingAxes = null;
+    }
 
     const comments = await listPrComments(pr.number);
     const markerCount = comments.reduce((total, comment) => {
@@ -199,11 +226,22 @@ async function main(): Promise<void> {
         return;
       }
       const repoSlug = await getRepoSlug();
-      const runs = await fetchCommitCheckRuns(repoSlug, head);
-      for (const run of runs) {
-        console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
+      let checkDecision: CheckPollDecision = 'pending';
+      for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
+        const runs = await fetchCommitCheckRuns(repoSlug, head);
+        for (const run of runs) {
+          console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
+        }
+        checkDecision = decideCheckPoll(runs);
+        if (checkDecision !== 'pending') {
+          break;
+        }
+        if (attempt < CHECK_POLL_ATTEMPTS - 1) {
+          console.log(`CI checks for ${head} are pending; waiting before rechecking.`);
+          await sleep(CHECK_POLL_DELAY_MS);
+        }
       }
-      if (!commitChecksPass(runs)) {
+      if (checkDecision !== 'pass') {
         console.error(
           'REVIEW-CYCLE BLOCKED: CI checks for the exact reviewed HEAD are not all successful.',
         );
@@ -216,10 +254,22 @@ async function main(): Promise<void> {
     }
 
     if (decision.kind === 'awaiting-reviews') {
-      console.error(
-        `REVIEW-CYCLE INCOMPLETE: missing current-HEAD reports for: ${decision.missing.join(', ')}.`,
+      const retryAxes = axesEligibleForMarkerRetry(
+        decision.missing,
+        markerRetries,
+        DEFAULT_MAX_MARKER_RETRIES,
       );
-      console.error('Rerun npm run review:cycle once both reviewers have published markers.');
+      if (retryAxes.length > 0) {
+        console.log(
+          `Missing current-HEAD markers for: ${retryAxes.join(', ')}. Retrying only those reviewers (bounded to ${String(DEFAULT_MAX_MARKER_RETRIES)} attempts per axis).`,
+        );
+        pendingAxes = retryAxes;
+        continue;
+      }
+      console.error(
+        `REVIEW-CYCLE INCOMPLETE: missing current-HEAD reports for: ${decision.missing.join(', ')} after ${String(DEFAULT_MAX_MARKER_RETRIES)} retries.`,
+      );
+      console.error('Inspect the reviewer output on the PR; markers may be malformed.');
       process.exitCode = 1;
       return;
     }
@@ -244,8 +294,9 @@ async function main(): Promise<void> {
     }
 
     // decision.kind === 'address-review'
+    cycles += 1;
     console.log(
-      `Blocking findings for ${head}: invoking /address-review (cycle ${String(cycles + 1)}).`,
+      `Blocking findings for ${head}: invoking /address-review (correction cycle ${String(cycles)}).`,
     );
     await runAddressReview(pr.number);
     const newHead = await getCurrentHead();
@@ -257,6 +308,7 @@ async function main(): Promise<void> {
       return;
     }
     head = newHead;
+    markerRetries = { standards: 0, spec: 0 };
 
     if (options.push) {
       const pushed = await safePushBranch(options.prArg);

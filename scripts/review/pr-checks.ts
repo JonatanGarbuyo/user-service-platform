@@ -6,11 +6,32 @@ export interface CommitCheckRun {
   conclusion: string | null;
 }
 
-// Exact-SHA CI verification (PR #17 final acceptance blocker 2). The READY
+// Exact-SHA CI verification (PR #17 final acceptance blockers). The READY
 // path must confirm the checks attached to the reviewed commit itself — the
-// PR rollup alone cannot prove the local HEAD is what CI ran.
+// PR rollup alone cannot prove the local HEAD is what CI ran. An empty run
+// list (checks not registered yet) is never a pass.
 export function commitChecksPass(runs: CommitCheckRun[]): boolean {
-  return runs.every((run) => run.status === 'completed' && run.conclusion === 'success');
+  return (
+    runs.length > 0 &&
+    runs.every((run) => run.status === 'completed' && run.conclusion === 'success')
+  );
+}
+
+export type CheckPollDecision = 'pass' | 'fail' | 'pending';
+
+export const CHECK_POLL_ATTEMPTS = 12;
+export const CHECK_POLL_DELAY_MS = 10000;
+
+// Polling policy for exact-SHA checks: pending/absent runs wait, a completed
+// non-success fails fast, and only a non-empty all-success set passes.
+export function decideCheckPoll(runs: CommitCheckRun[]): CheckPollDecision {
+  if (runs.some((run) => run.status === 'completed' && run.conclusion !== 'success')) {
+    return 'fail';
+  }
+  if (commitChecksPass(runs)) {
+    return 'pass';
+  }
+  return 'pending';
 }
 
 interface GhCheckRun {

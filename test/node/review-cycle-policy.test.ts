@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideNextStep } from '../../scripts/review/cycle-policy.js';
+import { axesEligibleForMarkerRetry, decideNextStep } from '../../scripts/review/cycle-policy.js';
 
 // Seam under test: deterministic correction-loop policy (ticket #16).
 // Both axes stay independent, the loop is bounded, and decision-class
@@ -65,5 +65,25 @@ describe('review cycle policy', () => {
     });
 
     expect(decision.kind).toBe('needs-decision');
+  });
+});
+
+describe('missing-marker retry policy', () => {
+  it('retries a missing axis while attempts remain', () => {
+    expect(axesEligibleForMarkerRetry(['spec'], { standards: 0, spec: 0 }, 2)).toEqual(['spec']);
+  });
+
+  it('retries each missing axis independently', () => {
+    expect(axesEligibleForMarkerRetry(['standards', 'spec'], { standards: 1, spec: 0 }, 2)).toEqual(
+      ['standards', 'spec'],
+    );
+  });
+
+  it('stops retrying an axis once its bound is reached', () => {
+    expect(axesEligibleForMarkerRetry(['spec'], { standards: 0, spec: 2 }, 2)).toEqual([]);
+  });
+
+  it('never retries an axis that already reported', () => {
+    expect(axesEligibleForMarkerRetry(['spec'], { standards: 5, spec: 0 }, 2)).toEqual(['spec']);
   });
 });

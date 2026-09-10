@@ -1,6 +1,7 @@
 import type { ReviewMarker } from './result-marker.js';
 
 export const DEFAULT_MAX_CORRECTION_CYCLES = 3;
+export const DEFAULT_MAX_MARKER_RETRIES = 2;
 
 export interface CycleState {
   standards?: ReviewMarker;
@@ -83,4 +84,19 @@ export function formatReadySummary(options: {
     `CI/local gates: ${options.gates}`,
     `Cycles: ${String(options.cycles)}`,
   ].join('\n');
+}
+
+export type MarkerRetries = Record<'standards' | 'spec', number>;
+
+// Missing-marker retry policy (PR #17 final acceptance blocker 1). A reviewer
+// can publish a complete report yet omit its machine-readable marker; the
+// orchestrator must retry only the missing axis a small bounded number of
+// times instead of demanding manual intervention. Never infer results from
+// prose — only a marker counts. Axes that already reported are never retried.
+export function axesEligibleForMarkerRetry(
+  missing: readonly ('standards' | 'spec')[],
+  retries: MarkerRetries,
+  maxRetries: number,
+): ('standards' | 'spec')[] {
+  return missing.filter((axis) => retries[axis] < maxRetries);
 }

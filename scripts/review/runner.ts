@@ -103,6 +103,20 @@ export async function listPrComments(
 export type ReviewAxisName = 'review-standards' | 'review-spec';
 export type ReviewAgentName = 'reviewer-standards' | 'reviewer-spec';
 
+export interface ReviewAxisWorker {
+  command: ReviewAxisName;
+  agent: ReviewAgentName;
+}
+
+// Pinned worker per axis for targeted marker retries (PR #17 blocker 1):
+// only the axis missing its marker is relaunched, the other is left alone.
+export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
+  if (axis === 'standards') {
+    return { command: 'review-standards', agent: 'reviewer-standards' };
+  }
+  return { command: 'review-spec', agent: 'reviewer-spec' };
+}
+
 // Worker commands run with `opencode run --auto` so the review loop can run
 // unattended (PR #17 blocker 1). Explicit `deny` permission rules in the agent
 // definitions remain effective under `--auto`.
