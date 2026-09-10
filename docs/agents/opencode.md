@@ -4,23 +4,26 @@ Use OpenCode as an implementation harness. Product/architecture decisions remain
 
 ## Bootstrap
 
-Install the Matt Pocock skills project-locally for OpenCode:
+The Matt Pocock skills are committed project-locally under `.agents/skills/`. OpenCode discovers them automatically.
 
-```bash
-npx skills@latest add mattpocock/skills \
-  --agent opencode \
-  --skill setup-matt-pocock-skills \
-  --skill wayfinder \
-  --skill to-spec \
-  --skill to-tickets \
-  --skill implement \
-  --skill tdd \
-  --skill code-review \
-  --skill handoff \
-  -y
+Connect OpenCode Zen locally with `/connect`, then verify the configured implementation model appears in `/models`.
+
+The repository defines `.opencode/agents/implementer.md` as the dedicated implementation agent. It uses:
+
+```text
+opencode/muse-spark-1.3-contributor-free
 ```
 
-OpenCode discovers project skills from `.agents/skills/`. Commit the installed skill files/lock metadata so every implementation agent uses the same workflow version.
+`/implement` is wired to this agent. Planning and independent review are intentionally not forced onto the same model.
+
+## Contributor-model data boundary
+
+Muse Spark 1.3 Contributor Free is a Contributor model. Prompts and responses may be used to improve future models. Treat the implementation environment accordingly.
+
+- Never expose production credentials, API keys, customer data, `.env` files, or `.dev.vars` to the agent.
+- Do not rely solely on OpenCode permission rules as a secret boundary when the agent has shell access.
+- Unattended runs must use a clean worktree/container/account with no production credentials available in the workspace, environment, shell profile, credential stores, or Cloudflare tooling.
+- Repository code is expected to be safe to share with this implementation model; secrets are not.
 
 ## Source of truth
 
@@ -63,10 +66,12 @@ Such changes return to planning/Wayfinder before implementation continues.
 
 ## Unattended execution safety
 
-For unattended runs, use OpenCode permission rules rather than unrestricted shell access. At minimum deny production-impacting operations such as `git push`, Worker deployment, secret mutation, and destructive infrastructure commands. Agents may commit on their isolated local ticket branch, but publishing/deploying remains a deliberate human action.
+The `implementer` agent has repository-local guardrails denying obvious production-impacting operations such as pushes, deployments, secret mutation, package publishing, PR merges, and destructive infrastructure commands. These are defense in depth, not a sandbox.
+
+Agents may commit on their isolated local ticket branch. Publishing and deployment remain deliberate human actions.
 
 ## Current execution entry point
 
 The current parent specification is GitHub issue #8: `Spec: Foundation and verified-email identity walking skeleton`.
 
-Run `to-tickets` against #8 and obtain human approval of ticket granularity/blocking edges before publishing them. Once published, execute the first unblocked implementation ticket with `implement`.
+Run `to-tickets` against #8 and obtain human approval of ticket granularity/blocking edges before publishing them. Once published, execute the first unblocked implementation ticket with `/implement owner/repo#issue`.
