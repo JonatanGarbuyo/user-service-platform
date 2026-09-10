@@ -8,6 +8,8 @@ export interface CommandResult {
   stderr: string;
 }
 
+export type CommandExecutor = (command: string, args: readonly string[]) => Promise<CommandResult>;
+
 export async function runCommand(command: string, args: readonly string[]): Promise<CommandResult> {
   const { stdout, stderr } = await execFileAsync(command, [...args], {
     maxBuffer: 10 * 1024 * 1024,
@@ -15,18 +17,18 @@ export async function runCommand(command: string, args: readonly string[]): Prom
   return { stdout: stdout, stderr: stderr };
 }
 
-export async function getCurrentHead(): Promise<string> {
-  const { stdout } = await runCommand('git', ['rev-parse', 'HEAD']);
+export async function getCurrentHead(execute: CommandExecutor = runCommand): Promise<string> {
+  const { stdout } = await execute('git', ['rev-parse', 'HEAD']);
   return stdout.trim();
 }
 
-export async function getCurrentBranch(): Promise<string> {
-  const { stdout } = await runCommand('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+export async function getCurrentBranch(execute: CommandExecutor = runCommand): Promise<string> {
+  const { stdout } = await execute('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
   return stdout.trim();
 }
 
-export async function isWorktreeClean(): Promise<boolean> {
-  const { stdout } = await runCommand('git', ['status', '--porcelain']);
+export async function isWorktreeClean(execute: CommandExecutor = runCommand): Promise<boolean> {
+  const { stdout } = await execute('git', ['status', '--porcelain']);
   return stdout.trim() === '';
 }
 
@@ -44,12 +46,15 @@ interface GhPrView {
   headRefOid: string;
 }
 
-export async function getPrForBranch(prArg?: string): Promise<PrInfo> {
+export async function getPrForBranch(
+  prArg?: string,
+  execute: CommandExecutor = runCommand,
+): Promise<PrInfo> {
   const args =
     prArg !== undefined
       ? ['pr', 'view', prArg, '--json', 'number,headRefName,baseRefName,headRefOid']
       : ['pr', 'view', '--json', 'number,headRefName,baseRefName,headRefOid'];
-  const { stdout } = await runCommand('gh', args);
+  const { stdout } = await execute('gh', args);
   const parsed = JSON.parse(stdout) as GhPrView;
   return {
     number: parsed.number,
@@ -64,8 +69,11 @@ export interface PrComment {
   createdAt: string;
 }
 
-export async function listPrComments(prNumber: number): Promise<PrComment[]> {
-  const { stdout } = await runCommand('gh', [
+export async function listPrComments(
+  prNumber: number,
+  execute: CommandExecutor = runCommand,
+): Promise<PrComment[]> {
+  const { stdout } = await execute('gh', [
     'pr',
     'view',
     String(prNumber),
@@ -95,30 +103,43 @@ export async function listPrComments(prNumber: number): Promise<PrComment[]> {
 export type ReviewAxisName = 'review-standards' | 'review-spec';
 export type ReviewAgentName = 'reviewer-standards' | 'reviewer-spec';
 
-export async function runReviewAxis(
+// Worker commands run with `opencode run --auto` so the review loop can run
+// unattended (PR #17 blocker 1). Explicit `deny` permission rules in the agent
+// definitions remain effective under `--auto`.
+export function buildReviewAxisArgs(
   command: ReviewAxisName,
   agent: ReviewAgentName,
   prNumber: number,
   extraArgs: readonly string[] = [],
-): Promise<void> {
-  await runCommand('opencode', [
-    'run',
-    '--agent',
-    agent,
-    '--command',
-    command,
-    ...extraArgs,
-    String(prNumber),
-  ]);
+): string[] {
+  return ['run', '--auto', '--agent', agent, '--command', command, ...extraArgs, String(prNumber)];
 }
 
-export async function runAddressReview(prNumber: number): Promise<void> {
-  await runCommand('opencode', [
+export function buildAddressReviewArgs(prNumber: number): string[] {
+  return [
     'run',
+    '--auto',
     '--agent',
     'implementer',
     '--command',
     'address-review',
     String(prNumber),
-  ]);
+  ];
+}
+
+export async function runReviewAxis(
+  command: ReviewAxisName,
+  agent: ReviewAgentName,
+  prNumber: number,
+  extraArgs: readonly string[] = [],
+  execute: CommandExecutor = runCommand,
+): Promise<void> {
+  await execute('opencode', buildReviewAxisArgs(command, agent, prNumber, extraArgs));
+}
+
+export async function runAddressReview(
+  prNumber: number,
+  execute: CommandExecutor = runCommand,
+): Promise<void> {
+  await execute('opencode', buildAddressReviewArgs(prNumber));
 }

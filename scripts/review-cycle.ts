@@ -1,20 +1,20 @@
 import {
   DEFAULT_MAX_CORRECTION_CYCLES,
   decideNextStep,
+  decideStartSync,
   formatReadySummary,
 } from './review/cycle-policy.js';
 import { qualityGatesPass, runQualityGates } from './review/gates.js';
+import { commitChecksPass, fetchCommitCheckRuns, getRepoSlug } from './review/pr-checks.js';
 import { parseReviewMarkers, selectCurrentHeadReports } from './review/result-marker.js';
 import {
-  getCurrentBranch,
   getCurrentHead,
   getPrForBranch,
   listPrComments,
   runAddressReview,
-  runCommand,
   runReviewAxis,
 } from './review/runner.js';
-import { checkSafePush } from './review/safe-push.js';
+import { safePushBranch } from './review/safe-push.js';
 
 interface CycleOptions {
   maxCycles: number;
@@ -23,6 +23,31 @@ interface CycleOptions {
 }
 
 class HelpRequested extends Error {}
+
+const PR_REFRESH_ATTEMPTS = 5;
+const PR_REFRESH_DELAY_MS = 5000;
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function refreshPrUntilHead(
+  prArg: string | undefined,
+  localHead: string,
+): Promise<Awaited<ReturnType<typeof getPrForBranch>> | null> {
+  for (let attempt = 0; attempt < PR_REFRESH_ATTEMPTS; attempt += 1) {
+    const pr = await getPrForBranch(prArg);
+    if (pr.headRefOid.toLowerCase() === localHead.toLowerCase()) {
+      return pr;
+    }
+    if (attempt < PR_REFRESH_ATTEMPTS - 1) {
+      await sleep(PR_REFRESH_DELAY_MS);
+    }
+  }
+  return null;
+}
 
 function parseArgs(argv: readonly string[]): CycleOptions {
   let maxCycles = DEFAULT_MAX_CORRECTION_CYCLES;
@@ -96,6 +121,40 @@ async function main(): Promise<void> {
     `Review cycle: PR #${String(pr.number)} (${pr.headRefName} -> ${pr.baseRefName}), HEAD ${head}`,
   );
 
+  // Blocker 2 (PR #17): markers are matched against the local HEAD, so refuse
+  // to review while the PR still points at an older SHA.
+  const startSync = decideStartSync({
+    localHead: head,
+    prHeadOid: pr.headRefOid,
+    push: options.push,
+  });
+  if (startSync.kind === 'abort-diverged') {
+    console.error(
+      'REVIEW-CYCLE ABORTED: local HEAD differs from the PR head and --no-push was passed.',
+    );
+    console.error('Push the ticket branch first, then rerun npm run review:cycle.');
+    process.exitCode = 1;
+    return;
+  }
+  if (startSync.kind === 'push-and-refresh') {
+    console.log(`Local HEAD ${head} is ahead of the PR; pushing via safe-push.`);
+    const pushed = await safePushBranch(options.prArg);
+    if (!pushed.ok) {
+      console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
+      process.exitCode = 1;
+      return;
+    }
+    const refreshed = await refreshPrUntilHead(options.prArg, head);
+    if (refreshed === null) {
+      console.error(
+        'REVIEW-CYCLE ABORTED: the PR head did not catch up with the local HEAD after push.',
+      );
+      process.exitCode = 1;
+      return;
+    }
+    pr = refreshed;
+  }
+
   for (let cycles = 0; ; cycles += 1) {
     await Promise.all([
       runReviewAxis('review-standards', 'reviewer-standards', pr.number),
@@ -126,6 +185,28 @@ async function main(): Promise<void> {
       }
       if (!pass) {
         console.error('REVIEW-CYCLE BLOCKED: quality gates failed for the reviewed HEAD.');
+        process.exitCode = 1;
+        return;
+      }
+      // Blocker 2 (PR #17): confirm the PR still points at the reviewed HEAD
+      // and CI checks for that exact commit are green before claiming READY.
+      const finalPr = await getPrForBranch(options.prArg);
+      if (finalPr.headRefOid.toLowerCase() !== head.toLowerCase()) {
+        console.error(
+          'REVIEW-CYCLE BLOCKED: the PR head moved away from the reviewed HEAD. Rerun npm run review:cycle.',
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const repoSlug = await getRepoSlug();
+      const runs = await fetchCommitCheckRuns(repoSlug, head);
+      for (const run of runs) {
+        console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
+      }
+      if (!commitChecksPass(runs)) {
+        console.error(
+          'REVIEW-CYCLE BLOCKED: CI checks for the exact reviewed HEAD are not all successful.',
+        );
         process.exitCode = 1;
         return;
       }
@@ -178,23 +259,13 @@ async function main(): Promise<void> {
     head = newHead;
 
     if (options.push) {
-      const branch = await getCurrentBranch();
-      const refreshedPr = await getPrForBranch(options.prArg);
-      const { stdout } = await runCommand('git', ['status', '--porcelain']);
-      const check = checkSafePush({
-        currentBranch: branch,
-        prHead: refreshedPr.headRefName,
-        prBase: refreshedPr.baseRefName,
-        pushTarget: 'origin',
-        worktreeClean: stdout.trim() === '',
-      });
-      if (!check.ok) {
-        console.error(`REVIEW-CYCLE PUSH REFUSED: ${check.reason}`);
+      const pushed = await safePushBranch(options.prArg);
+      if (!pushed.ok) {
+        console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
         process.exitCode = 1;
         return;
       }
-      await runCommand('git', ['push', 'origin', branch]);
-      console.log(`Pushed correction commit via safe-push: origin/${branch} @ ${head}`);
+      console.log(`Pushed correction commit via safe-push: origin/${pushed.branch} @ ${head}`);
     }
   }
 }

@@ -1,3 +1,5 @@
+import { getCurrentBranch, getPrForBranch, runCommand, type CommandExecutor } from './runner.js';
+
 export interface SafePushState {
   currentBranch: string;
   prHead: string;
@@ -8,7 +10,7 @@ export interface SafePushState {
 
 export type SafePushCheck = { ok: true } | { ok: false; reason: string };
 
-const TICKET_BRANCH_PATTERN = /^(feat|fix|chore)\/\d+-[a-z0-9-]+$/;
+const TICKET_BRANCH_PATTERN = /^(feat|fix|chore|ticket)\/\d+-[a-z0-9-]+$/;
 
 export function isTicketBranch(branch: string): boolean {
   return TICKET_BRANCH_PATTERN.test(branch);
@@ -37,4 +39,29 @@ export function checkSafePush(state: SafePushState): SafePushCheck {
     return { ok: false, reason: 'push must never target main directly' };
   }
   return { ok: true };
+}
+
+export type SafePushOutcome = { ok: true; branch: string } | { ok: false; reason: string };
+
+// The only automated push path: deterministic guards first, then a plain
+// `git push` of the current ticket branch. Never targets `main` itself.
+export async function safePushBranch(
+  prArg?: string,
+  execute: CommandExecutor = runCommand,
+): Promise<SafePushOutcome> {
+  const branch = await getCurrentBranch(execute);
+  const pr = await getPrForBranch(prArg, execute);
+  const { stdout } = await execute('git', ['status', '--porcelain']);
+  const check = checkSafePush({
+    currentBranch: branch,
+    prHead: pr.headRefName,
+    prBase: pr.baseRefName,
+    pushTarget: 'origin',
+    worktreeClean: stdout.trim() === '',
+  });
+  if (!check.ok) {
+    return check;
+  }
+  await execute('git', ['push', 'origin', branch]);
+  return { ok: true, branch };
 }

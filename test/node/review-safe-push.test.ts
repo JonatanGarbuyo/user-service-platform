@@ -17,6 +17,16 @@ describe('safe-push guards', () => {
     expect(checkSafePush(valid).ok).toBe(true);
   });
 
+  it('accepts the ticket/<number>-... branch convention used by the workflow', () => {
+    const result = checkSafePush({
+      ...valid,
+      currentBranch: 'ticket/10-register-verify',
+      prHead: 'ticket/10-register-verify',
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it('refuses to push from main itself', () => {
     const result = checkSafePush({ ...valid, currentBranch: 'main', prHead: 'main' });
 

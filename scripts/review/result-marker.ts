@@ -55,6 +55,11 @@ export function selectCurrentHeadReports(
 
   for (const comment of comments) {
     for (const marker of parseReviewMarkers(comment.body)) {
+      // Acceptance criterion (PR #17): an axis only counts reports from its
+      // configured model family — Standards is MiMo, Spec is Nemotron.
+      if (marker.model !== expectedModelForAxis(marker.axis)) {
+        continue;
+      }
       const existing = latestByAxis.get(marker.axis);
       if (existing === undefined || comment.createdAt >= existing.createdAt) {
         latestByAxis.set(marker.axis, { ...marker, createdAt: comment.createdAt });

@@ -1,4 +1,4 @@
-import { runCommand } from './runner.js';
+import { runCommand, type CommandExecutor } from './runner.js';
 
 export interface GateResult {
   name: string;
@@ -10,7 +10,7 @@ export interface GateResult {
 // zero warnings, formatting, typecheck, OpenAPI drift, Workers runtime tests,
 // and Node harness tests. They run sequentially and stop at the first failure
 // so the terminal report names the failing gate.
-const QUALITY_GATES: readonly { name: string; args: readonly string[] }[] = [
+export const QUALITY_GATES: readonly { name: string; args: readonly string[] }[] = [
   { name: 'lint', args: ['run', 'lint'] },
   { name: 'format:check', args: ['run', 'format:check'] },
   { name: 'typecheck', args: ['run', 'typecheck'] },
@@ -19,11 +19,13 @@ const QUALITY_GATES: readonly { name: string; args: readonly string[] }[] = [
   { name: 'node/harness tests', args: ['run', 'test:harness'] },
 ];
 
-export async function runQualityGates(): Promise<GateResult[]> {
+export async function runQualityGates(
+  execute: CommandExecutor = runCommand,
+): Promise<GateResult[]> {
   const results: GateResult[] = [];
   for (const gate of QUALITY_GATES) {
     try {
-      const { stdout, stderr } = await runCommand('npm', gate.args);
+      const { stdout, stderr } = await execute('npm', gate.args);
       results.push({ name: gate.name, ok: true, output: `${stdout}${stderr}`.slice(-2000) });
     } catch (error) {
       const output = error instanceof Error ? error.message.slice(-2000) : String(error);

@@ -73,4 +73,30 @@ describe('review result marker', () => {
     expect(selected.standards?.result).toBe('FAIL');
     expect(selected.spec).toBeUndefined();
   });
+
+  it('ignores markers whose model is not the configured model for that axis', () => {
+    const currentHead = '3'.repeat(40);
+    const comments = [
+      {
+        body: formatReviewMarker({
+          axis: 'standards',
+          model: 'nemotron-3-ultra',
+          head: currentHead,
+          result: 'PASS',
+        }),
+        createdAt: '2026-01-04T00:00:00Z',
+      },
+      {
+        body: formatReviewMarker({
+          axis: 'spec',
+          model: 'mimo-v2.5',
+          head: currentHead,
+          result: 'PASS',
+        }),
+        createdAt: '2026-01-05T00:00:00Z',
+      },
+    ];
+
+    expect(selectCurrentHeadReports(comments, currentHead)).toEqual({});
+  });
 });

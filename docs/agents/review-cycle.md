@@ -14,7 +14,8 @@ prose.
 
 ## Prerequisites
 
-- Work on an isolated ticket branch (for example `chore/16-review-cycle`).
+- Work on an isolated ticket branch (`ticket/<number>-...`, or
+  `feat|fix|chore/<number>-...`).
 - Push the branch and open a draft PR before running the cycle.
 - Start from the worktree root.
 
@@ -46,16 +47,24 @@ Cycles: <n>
 
 ## How one cycle works
 
-1. Resolve the PR for the current ticket branch.
-2. Run both axes concurrently: `/review-standards` with
-   `reviewer-standards` (MiMo-V2.5) and `/review-spec` with `reviewer-spec`
-   (Nemotron 3 Ultra).
+1. Resolve the PR for the current ticket branch and compare the PR head with
+   the local HEAD. If they diverge, push the local HEAD through the
+   deterministic safe-push path and wait for the PR head to catch up (or
+   abort under `--no-push`). The loop never reviews a SHA the PR does not
+   point at.
+2. Run both axes concurrently as `opencode run --auto` workers:
+   `/review-standards` with `reviewer-standards` (MiMo-V2.5) and
+   `/review-spec` with `reviewer-spec` (Nemotron 3 Ultra). Explicit `deny`
+   rules remain effective under `--auto`.
 3. Collect PR comments and keep only the latest machine-readable marker per
-   axis for the exact current HEAD SHA. Stale markers from older HEADs are
-   ignored when a newer report for that axis exists.
+   axis for the exact current HEAD SHA, and only from the configured model
+   family for that axis (Standards is MiMo, Spec is Nemotron). Stale markers
+   from older HEADs are ignored when a newer report for that axis exists.
 4. If both axes report `PASS` for the current HEAD, run the repository
    quality gates (lint, formatting, typecheck, OpenAPI drift, Workers tests,
-   Node/harness tests) and finish ready for final acceptance.
+   Node/harness tests), then verify the PR still points at the reviewed HEAD
+   and CI checks for that exact commit are green before finishing ready for
+   final acceptance.
 5. If a valid blocking `FAIL` exists, invoke Muse through the existing
    `/address-review` workflow for the smallest in-scope correction, commit
    locally, then rerun both axes against the new HEAD.
