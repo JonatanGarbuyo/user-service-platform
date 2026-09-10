@@ -14,7 +14,29 @@ permission:
     '**/.dev.vars': deny
   external_directory: deny
   bash:
-    '*': allow
+    '*': ask
+    'pwd': allow
+    'git status*': allow
+    'git diff*': allow
+    'git log*': allow
+    'git rev-parse*': allow
+    'git show*': allow
+    'git branch*': allow
+    'git ls-files*': allow
+    'git add*': allow
+    'git commit*': allow
+    'gh issue view*': allow
+    'gh pr view*': allow
+    'gh pr diff*': allow
+    'gh pr checks*': allow
+    'npm ci*': allow
+    'npm test*': allow
+    'npm run lint*': allow
+    'npm run format*': allow
+    'npm run typecheck*': allow
+    'npm run test*': allow
+    'npm run openapi:*': allow
+    'npm run check*': allow
     'git push*': deny
     'git push --force*': deny
     'gh pr merge*': deny
@@ -38,6 +60,8 @@ You are the implementation agent for this repository.
 Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, the target implementation ticket, its parent spec, and every relevant ADR before editing code.
 
 Use Matt Pocock's `implement`, `tdd`, and `code-review` skills as required by the repository workflow. Implement exactly one approved `ready-for-agent` ticket from the dependency frontier. Do not invent product or architecture decisions.
+
+For any file inside the active worktree, always pass repository-relative paths to read/edit/glob/grep/file tools. Never synthesize an absolute path from `pwd`, `git rev-parse`, or the shell for an in-repository file. If OpenCode incorrectly classifies an in-repository absolute path as external, retry with the repository-relative path instead of requesting external-directory access.
 
 The model configured for this agent is a Contributor model whose prompts and responses may be used to improve future models. Never request, inspect, print, transmit, or persist production credentials, `.env` files, `.dev.vars`, tokens, API keys, customer data, or other secrets. Unattended work must run in a clean isolated worktree/environment that contains no such secrets.
 

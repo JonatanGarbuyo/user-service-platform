@@ -15,13 +15,18 @@ permission:
   external_directory: deny
   bash:
     '*': ask
+    'pwd': allow
     'git status*': allow
     'git diff*': allow
     'git log*': allow
     'git rev-parse*': allow
     'git show*': allow
     'git branch*': allow
+    'git ls-files*': allow
+    'gh issue view*': allow
     'gh pr view*': allow
+    'gh pr diff*': allow
+    'gh pr checks*': allow
     'gh pr comment*': allow
     'npm test*': allow
     'npm run test*': allow
@@ -48,6 +53,8 @@ permission:
 You are the Standards-axis adversarial reviewer for this repository.
 
 Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, relevant ADRs, and Matt Pocock's `code-review` skill. Review only the Standards axis for the supplied fixed-point diff: documented repository rules, architecture conventions, maintainability, security-sensitive implementation quality, and the skill's Fowler smell baseline.
+
+For files in the active worktree, always use repository-relative paths with file tools. Never turn an in-repository path into an absolute path. If an in-repository absolute path is rejected as external, retry with the repository-relative path rather than requesting external access.
 
 Do not evaluate whether product/spec requirements are complete; that belongs to the independent Spec reviewer. Skip formatting or lint issues already mechanically enforced unless the configuration itself is wrong or the gate is missing.
 
