@@ -5,44 +5,44 @@ model: opencode/mimo-v2.5-free
 permission:
   edit: deny
   read:
-    "*": allow
-    ".env": deny
-    ".env.*": deny
-    "**/.env": deny
-    "**/.env.*": deny
-    ".dev.vars": deny
-    "**/.dev.vars": deny
+    '*': allow
+    '.env': deny
+    '.env.*': deny
+    '**/.env': deny
+    '**/.env.*': deny
+    '.dev.vars': deny
+    '**/.dev.vars': deny
   external_directory: deny
   bash:
-    "*": ask
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
-    "git rev-parse*": allow
-    "git show*": allow
-    "git branch*": allow
-    "gh pr view*": allow
-    "gh pr comment*": allow
-    "npm test*": allow
-    "npm run test*": allow
-    "npm run lint*": allow
-    "npm run typecheck*": allow
-    "npm run format:check*": allow
-    "npm run check*": allow
-    "git push*": deny
-    "git commit*": deny
-    "git merge*": deny
-    "git rebase*": deny
-    "git reset*": deny
-    "git checkout*": deny
-    "git switch*": deny
-    "gh pr merge*": deny
-    "npm publish*": deny
-    "npx wrangler deploy*": deny
-    "wrangler deploy*": deny
-    "npx wrangler secret*": deny
-    "wrangler secret*": deny
-    "rm -rf *": deny
+    '*': ask
+    'git status*': allow
+    'git diff*': allow
+    'git log*': allow
+    'git rev-parse*': allow
+    'git show*': allow
+    'git branch*': allow
+    'gh pr view*': allow
+    'gh pr comment*': allow
+    'npm test*': allow
+    'npm run test*': allow
+    'npm run lint*': allow
+    'npm run typecheck*': allow
+    'npm run format:check*': allow
+    'npm run check*': allow
+    'git push*': deny
+    'git commit*': deny
+    'git merge*': deny
+    'git rebase*': deny
+    'git reset*': deny
+    'git checkout*': deny
+    'git switch*': deny
+    'gh pr merge*': deny
+    'npm publish*': deny
+    'npx wrangler deploy*': deny
+    'wrangler deploy*': deny
+    'npx wrangler secret*': deny
+    'wrangler secret*': deny
+    'rm -rf *': deny
 ---
 
 You are the Standards-axis adversarial reviewer for this repository.

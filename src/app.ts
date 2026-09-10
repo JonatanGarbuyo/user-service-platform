@@ -88,7 +88,10 @@ export function createApp() {
     ),
   );
 
-  app.onError((err, c) => {
+  // Exception messages are never logged: future auth/DB/provider errors can
+  // carry secrets, so the log carries only stable identifiers and safe
+  // metadata (ADR-0009, PR #15 acceptance review).
+  app.onError((_err, c) => {
     console.log(
       JSON.stringify({
         level: 'error',
@@ -98,7 +101,6 @@ export function createApp() {
         status: 500,
         code: 'internal-error',
         environment: readEnvironment(c),
-        message: err.message,
       }),
     );
     return c.json(

@@ -29,6 +29,39 @@ describe('generated OpenAPI artifact', () => {
     expect(document.paths['/v1/health']?.get?.operationId).toBe('getHealth');
   });
 
+  it('publishes the Problem Details error contract (PR #15 acceptance)', async () => {
+    const raw = await readFile(artifactPath, 'utf8');
+    const document = JSON.parse(raw) as {
+      components: {
+        schemas: Record<string, { required?: string[] }>;
+      };
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            responses?: Record<
+              string,
+              { content?: Record<string, { schema?: { $ref?: string } }> }
+            >;
+          }
+        >
+      >;
+    };
+
+    expect(document.components.schemas.ProblemDetails?.required).toEqual([
+      'type',
+      'title',
+      'status',
+      'code',
+    ]);
+
+    const healthGet = document.paths['/v1/health']?.get;
+    expect(healthGet?.responses?.default?.content?.['application/problem+json']?.schema?.$ref).toBe(
+      '#/components/schemas/ProblemDetails',
+    );
+  });
+
   it('regenerates byte-identically from source contracts', async () => {
     const raw = await readFile(artifactPath, 'utf8');
     const regenerated = `${JSON.stringify(createApp().getOpenAPI31Document(openApiConfig), null, 2)}\n`;
