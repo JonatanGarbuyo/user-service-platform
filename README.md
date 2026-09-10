@@ -40,11 +40,24 @@ npx skills@latest add mattpocock/skills \
 
 The skills are project-scoped and should be committed with the repository when installed.
 
+## Code quality
+
+Repository formatting and linting are mechanical and non-negotiable:
+
+```bash
+npm run format
+npm run check
+```
+
+Prettier owns formatting. ESLint owns correctness, maintainability, and—once the source layout is finalized—architecture dependency rules. Surface style is StandardJS-inspired: no semicolons, single quotes, two-space indentation.
+
 ## Current architectural direction
 
 - Cloudflare Workers as the deployment target.
 - Hono as the HTTP framework.
+- Cloudflare D1 as the initial relational store.
+- Better Auth behind an application-owned configurable auth policy.
 - Contract-first HTTP APIs with runtime validation and generated OpenAPI.
 - Vertical feature slices rather than global controller/service/repository layers.
 - Object storage separate from relational data.
-- Better Auth is the preferred auth candidate, but the backend/persistence decision remains explicitly tracked until accepted.
+- Analytics remains a separate service or third-party concern.
