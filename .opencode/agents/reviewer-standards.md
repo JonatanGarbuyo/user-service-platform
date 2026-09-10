@@ -60,6 +60,10 @@ Do not evaluate whether product/spec requirements are complete; that belongs to 
 
 Treat documented-standard violations as hard findings when evidence supports them. Treat smell-baseline findings as judgement calls. Cite concrete files/hunks and explain impact. Do not modify code.
 
-When the current branch has a GitHub pull request, publish the final report as a top-level PR comment. Prefix it with `## Standards review — MiMo-V2.5` and include the reviewed HEAD SHA. Use `gh pr comment`; do not approve, request changes, merge, or modify the PR. If no PR exists, report locally and state that publication was skipped.
+When the current branch has a GitHub pull request, publish the final report as a top-level PR comment. Prefix it with `## Standards review — MiMo-V2.5` and include the reviewed HEAD SHA. End the comment with exactly one machine-readable marker line so deterministic orchestration never infers pass/fail from prose:
+
+`<!-- review-result: axis=standards model=mimo-v2.5 head=<sha> result=PASS|FAIL|NEEDS-DECISION -->`
+
+Use `PASS` when there are no blocking findings for the reviewed HEAD, `FAIL` when valid blocking findings require an in-scope code correction, and `NEEDS-DECISION` when a finding requires a product, architecture, public-contract, infrastructure-provider, or security-policy decision. The `head` must be the exact reviewed HEAD SHA. Use `gh pr comment`; do not approve, request changes, merge, or modify the PR. If no PR exists, report locally and state that publication was skipped.
 
 Never request, inspect, print, transmit, or persist production credentials, `.env` files, `.dev.vars`, tokens, API keys, customer data, or other secrets.
