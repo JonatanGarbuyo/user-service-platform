@@ -70,8 +70,20 @@ The `implementer` agent has repository-local guardrails denying obvious producti
 
 Agents may commit on their isolated local ticket branch. Publishing and deployment remain deliberate human actions.
 
-## Current execution entry point
+## Current implementation frontier
 
-The current parent specification is GitHub issue #8: `Spec: Foundation and verified-email identity walking skeleton`.
+The parent specification is GitHub issue #8: `Spec: Foundation and verified-email identity walking skeleton`.
 
-Run `to-tickets` against #8 and obtain human approval of ticket granularity/blocking edges before publishing them. Once published, execute the first unblocked implementation ticket with `/implement owner/repo#issue`.
+Approved implementation tickets are #9 through #14. Blocking edges are recorded in each ticket.
+
+The current dependency frontier contains only:
+
+- #9 `Serve a contract-tested Worker health endpoint`
+
+Run:
+
+```text
+/implement JonatanGarbuyo/user-service-platform#9
+```
+
+Do not start #10 or later tickets until all of their listed blockers are complete and reviewed. After each implementation ticket, use a fresh context for the next frontier ticket.
