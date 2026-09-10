@@ -16,7 +16,7 @@ reviewer-standards   -> opencode/mimo-v2.5-free
 reviewer-spec        -> opencode/nemotron-3-ultra-free
 ```
 
-`/implement` is wired to `implementer`. `/review-standards` and `/review-spec` run as background subagents so both review axes have independent context and different model families.
+`/implement` is wired to `implementer`. `/review-standards` and `/review-spec` run as subagents so both review axes have independent context and different model families.
 
 ## Model data boundary
 
@@ -46,6 +46,12 @@ A chat transcript is not stronger authority than these artifacts.
 - Follow the ticket's highest agreed test seam and use TDD where required.
 - A green formatter/linter is not sufficient; every acceptance criterion must be verified.
 
+## Pull request as the review handoff
+
+After local implementation is complete, push the ticket branch and open a draft pull request before adversarial review. The pull request is the durable handoff between implementation, automated/model review, and final human/ChatGPT acceptance.
+
+The PR should reference the implementation ticket and parent spec. Review findings belong on the PR rather than being copied into chat or posted to the implementation issue.
+
 ## Dual adversarial review gate
 
 Every implementation ticket must pass two independent read-only reviews before final acceptance:
@@ -53,14 +59,20 @@ Every implementation ticket must pass two independent read-only reviews before f
 1. **Standards — MiMo-V2.5 Free**: repository rules, architecture conventions, maintainability, and Matt Pocock's smell baseline.
 2. **Spec — Nemotron 3 Ultra Free**: missing/incorrect requirements and scope creep against the implementation ticket and parent spec.
 
-For a ticket branch based on `main`, run both commands from the implementation branch:
+From the implementation branch with an open PR, run:
 
 ```text
-/review-standards main
-/review-spec main
+/review-standards
+/review-spec
 ```
 
-Both commands execute as background child sessions. Their findings remain separate; do not let one axis cancel or rerank the other. Material findings go back to the implementer or human reviewer. After corrections, rerun both reviews from fresh contexts.
+Optionally pass a PR number or URL when reviewing something other than the current branch's PR.
+
+Each reviewer resolves the PR base as its fixed point and publishes one top-level PR comment through GitHub CLI. Every report includes its axis/model and the exact reviewed HEAD SHA so stale reviews are visible after subsequent commits.
+
+The findings remain separate; do not let one axis cancel or rerank the other. Material findings go back to the implementer or human reviewer. After corrections, rerun both reviews from fresh contexts and publish new SHA-stamped reports.
+
+Final acceptance can then inspect the PR diff, CI and both review comments directly from GitHub; no manual copy/paste into chat is required.
 
 ## Decision boundary
 
@@ -68,7 +80,7 @@ Implementation agents may choose local details that do not alter public contract
 
 ## Unattended execution safety
 
-The implementer may commit locally on its isolated ticket branch but may not push, deploy, publish, merge, mutate production infrastructure, or change secrets. Both review agents are read-only and may inspect diffs/history and run non-mutating verification commands.
+The implementer may commit locally on its isolated ticket branch but may not deploy, publish, merge, mutate production infrastructure, or change secrets. Publishing the implementation branch and opening a draft PR are deliberate developer/harness operations. Both review agents are otherwise read-only; their only GitHub write permission is publishing their review report as a PR comment.
 
 ## Current implementation frontier
 
@@ -80,8 +92,10 @@ Current sequence:
 
 ```text
 /implement JonatanGarbuyo/user-service-platform#9
-/review-standards main
-/review-spec main
+# push branch + open draft PR
+/review-standards
+/review-spec
+# final acceptance reads PR + CI + both comments
 ```
 
 Do not start #10 until #9 is implemented, both review axes have completed, material findings are resolved, and final acceptance is complete.
