@@ -1,0 +1,53 @@
+{
+  // Cloudflare Worker configuration. Local, staging and production are separate
+  // operational contexts (ADR-0008): staging/production use distinct databases and
+  // are never provisioned or mutated by ticket #9. The database_id values below are
+  // local/test placeholders; real staging/production resources are provisioned
+  // out-of-band when deployment automation lands (ticket #14).
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "user-service",
+  "main": "src/index.ts",
+  // Must not exceed the newest compatibility date supported by the workerd
+  // binary bundled with the installed test toolchain (currently 2026-08-22);
+  // newer dates fail to boot under Miniflare/vitest-pool-workers.
+  "compatibility_date": "2026-08-22",
+  "vars": {
+    "ENVIRONMENT": "local",
+  },
+  // D1 binding/configuration seam for isolated local tests (ticket #9). No business
+  // persistence abstractions are introduced here; Drizzle schema and migrations
+  // arrive with the identity slice (ticket #10).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "user-service-local",
+      "database_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+  ],
+  "env": {
+    "staging": {
+      "vars": {
+        "ENVIRONMENT": "staging",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "user-service-staging",
+          "database_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      ],
+    },
+    "production": {
+      "vars": {
+        "ENVIRONMENT": "production",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "user-service-production",
+          "database_id": "cccccccccccccccccccccccccccccccc",
+        },
+      ],
+    },
+  },
+}

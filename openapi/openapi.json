@@ -1,0 +1,69 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "User Service API",
+    "version": "0.0.0",
+    "description": "Reusable user-service foundation for content-oriented web products. Public operations are namespaced under /v1."
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          },
+          "service": {
+            "type": "string",
+            "example": "user-service"
+          },
+          "version": {
+            "type": "string",
+            "example": "v1"
+          },
+          "now": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-10T00:00:00.000Z"
+          }
+        },
+        "required": [
+          "status",
+          "service",
+          "version",
+          "now"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Service liveness",
+        "description": "Lightweight liveness probe. It proves the Worker and router are running without touching D1 or any other dependency.",
+        "tags": [
+          "health"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Worker is running.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

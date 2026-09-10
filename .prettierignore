@@ -3,3 +3,6 @@ dist
 coverage
 .wrangler
 package-lock.json
+# Generated contract artifacts are build outputs (ADR-0007). They must stay
+# byte-identical to the generator; drift is enforced by `npm run openapi:check`.
+openapi/openapi.json

@@ -8,18 +8,35 @@
     "node": ">=24.21.0 <25"
   },
   "scripts": {
+    "dev": "wrangler dev",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:harness": "vitest run --config vitest.harness.config.ts",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json",
     "check": "npm run lint && npm run format:check"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "5.20260910.1",
     "@eslint/js": "10.0.1",
+    "@types/node": "24.10.1",
     "eslint": "10.10.0",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.9.6",
+    "tsx": "4.20.6",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "typescript-eslint": "8.70.0"
+    "typescript-eslint": "8.70.0",
+    "vitest": "4.1.11",
+    "wrangler": "4.130.0"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "1.6.3",
+    "hono": "4.13.7",
+    "zod": "4.6.1"
   }
 }
