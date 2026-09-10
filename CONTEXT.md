@@ -58,6 +58,7 @@ Traffic/product analytics is a separate service or third-party platform. This se
 - community/comments/replies/votes
 - follow users
 - referral/promotion metadata
+- internal operator/admin authentication and admin UI
 
 ### Out of scope
 
@@ -65,6 +66,7 @@ Traffic/product analytics is a separate service or third-party platform. This se
 - newsletter delivery
 - web/product analytics platform
 - hard protection of premium content; consuming products may use a client-side soft paywall
+- internal operator/admin authentication and admin UI in the initial version
 
 ## Architectural vocabulary
 
@@ -76,6 +78,3 @@ A runtime-validatable public interface. HTTP contracts are the source for genera
 
 ### Adapter
 A narrow integration boundary for infrastructure whose implementation may change, such as object storage or an external provider.
-
-### Operator
-An internal administrator/support user. Operators are conceptually separate from public Users even if a chosen authentication mechanism later shares infrastructure.
