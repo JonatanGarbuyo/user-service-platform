@@ -1,7 +1,7 @@
-import js from '@eslint/js'
-import { defineConfig } from 'eslint/config'
-import eslintConfigPrettier from 'eslint-config-prettier/flat'
-import tseslint from 'typescript-eslint'
+import js from '@eslint/js';
+import { defineConfig } from 'eslint/config';
+import eslintConfigPrettier from 'eslint-config-prettier/flat';
+import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
@@ -9,11 +9,7 @@ export default defineConfig(
   },
   {
     files: ['**/*.{js,mjs,cjs,ts,mts,cts}'],
-    extends: [
-      js.configs.recommended,
-      tseslint.configs.strict,
-      tseslint.configs.stylistic,
-    ],
+    extends: [js.configs.recommended, tseslint.configs.strict, tseslint.configs.stylistic],
     rules: {
       eqeqeq: ['error', 'always'],
       '@typescript-eslint/consistent-type-imports': [
@@ -26,4 +22,4 @@ export default defineConfig(
     },
   },
   eslintConfigPrettier,
-)
+);

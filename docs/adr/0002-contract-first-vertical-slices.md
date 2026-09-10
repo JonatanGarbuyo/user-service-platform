@@ -1,6 +1,7 @@
 # ADR-0002: Contract-first vertical slices
 
 ## Status
+
 Accepted
 
 ## Context

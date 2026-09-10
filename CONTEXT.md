@@ -7,36 +7,47 @@ A reusable user-service foundation for content-oriented web products. The first 
 ## Core concepts
 
 ### User
+
 A registered end user of the consuming site. Editorial CMS operators are not Users in this domain.
 
 ### Identity
+
 Authentication identity, credentials, linked providers, account recovery, email verification, and session lifecycle.
 
 ### Auth Policy
+
 Deployment-level configuration that controls supported authentication behaviour without exposing Better Auth configuration directly to feature code. It includes capabilities such as registration enablement, email/password enablement, required email verification, OAuth providers, and auth/session lifetimes. The initial deployment requires verified email before login succeeds.
 
 ### Profile
+
 User-facing account data such as display name, avatar reference, and preferences.
 
 ### Subscription
+
 The user's commercial access state. Subscription is not an editorial role. It may contain plan, status, dates, and external billing references.
 
 ### Follow
+
 A relationship in which a User follows a target entity identified by an external canonical id and target type. Targets may include teams, topics, competitions, players, authors, or eventually users.
 
 ### Bookmark
+
 A User's saved reference to content for later access.
 
 ### Audience
+
 A queryable/segmentable set of Users used for operational or commercial export. The service supports segmentation/export but does not deliver newsletters.
 
 ### Marketing consent
+
 The User's explicit communication preference and its relevant metadata, such as timestamp/source.
 
 ### Community
+
 Optional future functionality containing comments, replies, votes, reports, and moderation. Community is not part of the initial core.
 
 ### Analytics
+
 Traffic/product analytics is a separate service or third-party platform. This service may emit events for analytics consumers but does not own analytics storage/reporting.
 
 ## Product boundaries
@@ -79,16 +90,21 @@ Traffic/product analytics is a separate service or third-party platform. This se
 ## Architectural vocabulary
 
 ### Feature slice
+
 A vertical unit that owns an externally observable capability across contract, domain behaviour, persistence and tests.
 
 ### Contract
+
 A runtime-validatable public interface. HTTP contracts are the source for generated OpenAPI and clients.
 
 ### Adapter
+
 A narrow integration boundary for infrastructure whose implementation may change, such as object storage, transactional email, or an external provider.
 
 ### Authenticated User
+
 The stable application-facing identity exposed to feature slices after authentication. It must not expose Better Auth persistence models or provider-specific types.
 
 ### Session Context
+
 The stable application-facing session data available to authenticated feature slices. It is an application contract, not a Better Auth internal type.
