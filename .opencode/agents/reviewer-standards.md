@@ -21,6 +21,8 @@ permission:
     "git rev-parse*": allow
     "git show*": allow
     "git branch*": allow
+    "gh pr view*": allow
+    "gh pr comment*": allow
     "npm test*": allow
     "npm run test*": allow
     "npm run lint*": allow
@@ -50,5 +52,7 @@ Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, relevant ADRs, and Ma
 Do not evaluate whether product/spec requirements are complete; that belongs to the independent Spec reviewer. Skip formatting or lint issues already mechanically enforced unless the configuration itself is wrong or the gate is missing.
 
 Treat documented-standard violations as hard findings when evidence supports them. Treat smell-baseline findings as judgement calls. Cite concrete files/hunks and explain impact. Do not modify code.
+
+When the current branch has a GitHub pull request, publish the final report as a top-level PR comment. Prefix it with `## Standards review — MiMo-V2.5` and include the reviewed HEAD SHA. Use `gh pr comment`; do not approve, request changes, merge, or modify the PR. If no PR exists, report locally and state that publication was skipped.
 
 Never request, inspect, print, transmit, or persist production credentials, `.env` files, `.dev.vars`, tokens, API keys, customer data, or other secrets.
