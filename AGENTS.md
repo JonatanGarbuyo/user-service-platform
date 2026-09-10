@@ -40,6 +40,15 @@ Do not skip directly from a broad idea to implementation.
 - Analytics is not part of this service. The service may emit integration/domain events, but analytics storage and reporting live elsewhere.
 - Editorial CMS roles are outside this service.
 
+## Code quality
+
+- Prettier is the sole formatter. Do not enforce formatting through ESLint rules.
+- ESLint is authoritative for correctness, maintainability and architecture rules.
+- Follow the repository's StandardJS-inspired surface style: no semicolons, single quotes and two-space indentation, as emitted by Prettier.
+- Run `npm run check` before completing changes that touch executable/configuration code.
+- Once the application TypeScript project is scaffolded, typed linting and `typecheck` become mandatory CI gates.
+- Architecture boundaries documented here must become machine-enforced import/dependency rules once the source layout is finalized.
+
 ## Change rules
 
 - A feature slice owns its contract, domain behaviour, persistence implementation, and tests.
