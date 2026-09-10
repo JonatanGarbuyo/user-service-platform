@@ -8,6 +8,10 @@ This repository is developed through explicit architecture, contracts, vertical 
 
 Specs, wayfinder maps, decision tickets, and implementation tickets live in GitHub Issues. See `docs/agents/issue-tracker.md`.
 
+### Triage labels
+
+Use the default Matt Pocock triage vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
 ### Domain docs
 
 This is a single-context repository. Read `CONTEXT.md` and relevant ADRs under `docs/adr/` before changing code. See `docs/agents/domain.md`.
