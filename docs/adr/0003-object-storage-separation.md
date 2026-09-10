@@ -1,6 +1,7 @@
 # ADR-0003: Separate object storage from relational data
 
 ## Status
+
 Accepted
 
 ## Context
