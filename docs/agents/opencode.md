@@ -90,7 +90,7 @@ The PR should reference the implementation ticket and parent spec. Review findin
 
 Every implementation ticket must pass two independent read-only reviews before final acceptance:
 
-1. **Standards — MiMo-V2.5 Free**: repository rules, architecture conventions, maintainability, and Matt Pocock's smell baseline.
+1. **Standards — MiMo-V2.5 Free**: repository rules, architecture conventions, maintainability, and the repository-pinned code-review skill's smell baseline.
 2. **Spec — Nemotron 3 Ultra Free**: missing/incorrect requirements and scope creep against the implementation ticket and parent spec.
 
 From the implementation branch with an open PR, run:

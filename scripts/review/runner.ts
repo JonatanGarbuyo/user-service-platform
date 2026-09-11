@@ -101,54 +101,49 @@ export async function listPrComments(
 }
 
 export type ReviewAxisName = 'review-standards' | 'review-spec';
-export type ReviewAgentName = 'reviewer-standards' | 'reviewer-spec';
 
 export interface ReviewAxisWorker {
   command: ReviewAxisName;
-  agent: ReviewAgentName;
 }
 
 // Pinned worker per axis for targeted marker retries (PR #17 blocker 1):
 // only the axis missing its marker is relaunched, the other is left alone.
+// The command frontmatter is the single source of truth for the configured
+// subagent/model (ticket #18): Standards resolves to MiMo-V2.5 via
+// `reviewer-standards`, Spec resolves to Nemotron 3 Ultra via
+// `reviewer-spec`. Callers must not pass `--agent`.
 export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
   if (axis === 'standards') {
-    return { command: 'review-standards', agent: 'reviewer-standards' };
+    return { command: 'review-standards' };
   }
-  return { command: 'review-spec', agent: 'reviewer-spec' };
+  return { command: 'review-spec' };
 }
 
 // Worker commands run with `opencode run --auto` so the review loop can run
 // unattended (PR #17 blocker 1). Explicit `deny` permission rules in the agent
-// definitions remain effective under `--auto`.
+// definitions remain effective under `--auto`. No `--agent` flag is passed:
+// each custom command's frontmatter already pins its subagent/model, and
+// passing `--agent` with a subagent triggers an "subagent, not a primary
+// agent" warning.
 export function buildReviewAxisArgs(
   command: ReviewAxisName,
-  agent: ReviewAgentName,
   prNumber: number,
   extraArgs: readonly string[] = [],
 ): string[] {
-  return ['run', '--auto', '--agent', agent, '--command', command, ...extraArgs, String(prNumber)];
+  return ['run', '--auto', '--command', command, ...extraArgs, String(prNumber)];
 }
 
 export function buildAddressReviewArgs(prNumber: number): string[] {
-  return [
-    'run',
-    '--auto',
-    '--agent',
-    'implementer',
-    '--command',
-    'address-review',
-    String(prNumber),
-  ];
+  return ['run', '--auto', '--command', 'address-review', String(prNumber)];
 }
 
 export async function runReviewAxis(
   command: ReviewAxisName,
-  agent: ReviewAgentName,
   prNumber: number,
   extraArgs: readonly string[] = [],
   execute: CommandExecutor = runCommand,
 ): Promise<void> {
-  await execute('opencode', buildReviewAxisArgs(command, agent, prNumber, extraArgs));
+  await execute('opencode', buildReviewAxisArgs(command, prNumber, extraArgs));
 }
 
 export async function runAddressReview(

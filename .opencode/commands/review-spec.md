@@ -1,10 +1,10 @@
 ---
-description: Run the Spec axis of Matt Pocock code review and publish it to the current pull request
+description: Run the Spec axis of project code review and publish it to the current pull request
 agent: reviewer-spec
 subagent: true
 ---
 
-Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, the originating implementation ticket and comments, its parent spec, relevant ADRs, and Matt Pocock's `code-review` skill.
+Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, the originating implementation ticket and comments, its parent spec, relevant ADRs, and the repository-pinned `code-review` skill.
 
 Resolve the pull request from `$ARGUMENTS` when supplied; otherwise resolve the pull request for the current branch with `gh pr view`. Determine its base branch and use the corresponding local or remote-tracking base ref as the fixed point. Confirm the fixed point resolves, record the current HEAD SHA, and review the three-dot diff plus commit list required by the skill.
 
