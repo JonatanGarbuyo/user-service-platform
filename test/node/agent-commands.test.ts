@@ -263,6 +263,21 @@ describe('agent workflow contracts', () => {
     expect(workflow).toMatch(/\.review-cycle\/latest\.json/);
   });
 
+  it('pins agent-fix-cycle execution to the validated exact HEAD', () => {
+    const workflow = readWorkflow('agent-fix-cycle.yml');
+    const checkoutIndex = workflow.indexOf('Check out PR head after authorization');
+
+    expect(checkoutIndex).toBeGreaterThan(-1);
+    expect(workflow).toMatch(/steps\.guard\.outputs\.head/);
+    expect(workflow).toMatch(/git rev-parse HEAD/);
+    expect(workflow).toMatch(/AGENT-FIX-CYCLE REFUSED/);
+    const verificationIndex = workflow.indexOf('Verify checked-out HEAD matches validated OID');
+    expect(verificationIndex).toBeGreaterThan(checkoutIndex);
+    const addressReviewIndex = workflow.indexOf('Run address-review correction');
+    expect(verificationIndex).toBeGreaterThan(-1);
+    expect(verificationIndex).toBeLessThan(addressReviewIndex);
+  });
+
   it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
     'never merges, deploys, publishes, or pushes main on %s',
     (name) => {

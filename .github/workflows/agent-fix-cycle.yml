@@ -122,6 +122,20 @@ jobs:
           ref: ${{ steps.guard.outputs.branch }}
           fetch-depth: 0
 
+      - name: Verify checked-out HEAD matches validated OID
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ steps.guard.outputs.pr }}"
+          EXPECTED="${{ steps.guard.outputs.head }}"
+          ACTUAL="$(git rev-parse HEAD)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "/agent-fix-cycle refused: PR #$PR_NUMBER advanced after validation (expected $EXPECTED, checked out $ACTUAL)."
+            gh pr comment "$PR_NUMBER" --body "AGENT-FIX-CYCLE REFUSED: PR #$PR_NUMBER advanced after validation (expected $EXPECTED, checked out $ACTUAL). Rerun /agent-fix-cycle once the PR HEAD is settled." || true
+            exit 1
+          fi
+          echo "Checked-out HEAD $ACTUAL matches validated OID."
+
       - name: Install pinned OpenCode
         if: steps.guard.outputs.run == 'true'
         run: |
