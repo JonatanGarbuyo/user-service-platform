@@ -27,7 +27,24 @@ describe('resolveAuthPolicy', () => {
     });
   });
 
-  it('treats unknown values as disabled rather than failing open', () => {
-    expect(resolveAuthPolicy({ AUTH_REGISTRATION_ENABLED: 'yes' }).registrationEnabled).toBe(false);
+  it('accepts explicit true/false values case-insensitively', () => {
+    expect(
+      resolveAuthPolicy({
+        AUTH_REGISTRATION_ENABLED: 'TRUE',
+        AUTH_EMAIL_PASSWORD_ENABLED: ' False ',
+        AUTH_REQUIRE_EMAIL_VERIFICATION: 'True',
+      }),
+    ).toEqual({
+      registrationEnabled: true,
+      emailPasswordEnabled: false,
+      requireEmailVerification: true,
+    });
+  });
+
+  it('rejects malformed values instead of silently disabling verification', () => {
+    expect(() => resolveAuthPolicy({ AUTH_REQUIRE_EMAIL_VERIFICATION: 'treu' })).toThrow();
+    expect(() => resolveAuthPolicy({ AUTH_REGISTRATION_ENABLED: 'yes' })).toThrow();
+    expect(() => resolveAuthPolicy({ AUTH_EMAIL_PASSWORD_ENABLED: '' })).toThrow();
+    expect(() => resolveAuthPolicy({ AUTH_REQUIRE_EMAIL_VERIFICATION: '2' })).toThrow();
   });
 });

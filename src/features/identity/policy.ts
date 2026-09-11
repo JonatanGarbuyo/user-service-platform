@@ -23,16 +23,26 @@ export const DEFAULT_AUTH_POLICY: AuthPolicy = {
   requireEmailVerification: true,
 };
 
-function parseFlag(value: string | undefined, fallback: boolean): boolean {
+function parseFlag(value: string | undefined, fallback: boolean, name: string): boolean {
   if (value === undefined) {
     return fallback;
   }
-  return value.toLowerCase() === 'true';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+  throw new Error(`Invalid boolean for ${name}: expected "true" or "false".`);
 }
 
-// Resolves the effective policy from Worker environment vars. Unknown or
-// absent values fall back to the deployment defaults; only the explicit
-// string "true" (case-insensitive) enables a capability.
+// Resolves the effective policy from Worker environment vars. Absent values
+// fall back to the deployment defaults; only the explicit strings "true" /
+// "false" (case-insensitive) are accepted. Malformed values reject
+// configuration by throwing so a typo such as
+// AUTH_REQUIRE_EMAIL_VERIFICATION=treu can never silently disable the
+// verification gate (fail closed via the application 500 boundary).
 export function resolveAuthPolicy(
   env: Pick<
     Env,
@@ -43,14 +53,17 @@ export function resolveAuthPolicy(
     registrationEnabled: parseFlag(
       env.AUTH_REGISTRATION_ENABLED,
       DEFAULT_AUTH_POLICY.registrationEnabled,
+      'AUTH_REGISTRATION_ENABLED',
     ),
     emailPasswordEnabled: parseFlag(
       env.AUTH_EMAIL_PASSWORD_ENABLED,
       DEFAULT_AUTH_POLICY.emailPasswordEnabled,
+      'AUTH_EMAIL_PASSWORD_ENABLED',
     ),
     requireEmailVerification: parseFlag(
       env.AUTH_REQUIRE_EMAIL_VERIFICATION,
       DEFAULT_AUTH_POLICY.requireEmailVerification,
+      'AUTH_REQUIRE_EMAIL_VERIFICATION',
     ),
   };
 }
