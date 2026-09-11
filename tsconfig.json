@@ -12,5 +12,12 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["src", "scripts", "test", "vitest.config.ts", "vitest.harness.config.ts"]
+  "include": [
+    "src",
+    "scripts",
+    "test",
+    "vitest.config.ts",
+    "vitest.harness.config.ts",
+    "drizzle.config.ts"
+  ]
 }

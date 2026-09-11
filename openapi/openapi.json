@@ -72,6 +72,161 @@
           "status",
           "code"
         ]
+      },
+      "RegisteredUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "abc123"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "emailVerified"
+        ]
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "example": "Ada Lovelace"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "example": "correct-horse-41"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "password"
+        ]
+      },
+      "LoginResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "abc123"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "emailVerified"
+        ]
+      },
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "example": "correct-horse-41"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "VerifyEmailResult": {
+        "type": "object",
+        "properties": {
+          "emailVerified": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "example": true
+          }
+        },
+        "required": [
+          "emailVerified"
+        ]
+      },
+      "VerifyEmailRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Verification token from the action URL."
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "RequestVerificationResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "RequestVerificationRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          }
+        },
+        "required": [
+          "email"
+        ]
       }
     },
     "parameters": {}
@@ -98,6 +253,170 @@
           },
           "default": {
             "description": "Unexpected failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/register": {
+      "post": {
+        "operationId": "registerIdentity",
+        "summary": "Register an email identity",
+        "description": "Creates an unverified email/password identity when the deployment policy allows registration, and schedules a verification message through the application mail boundary. The account cannot establish a session until verification succeeds while the policy requires verified email.",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The identity was created (unverified).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredUser"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Registration failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "operationId": "loginIdentity",
+        "summary": "Establish an email/password session",
+        "description": "Authenticates an email/password identity. While the deployment policy requires verified email, unverified accounts receive a machine-readable verification-required failure instead of a session.",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated. The session travels in the Set-Cookie header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Authentication failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/verify-email": {
+      "post": {
+        "operationId": "verifyIdentityEmail",
+        "summary": "Complete email verification",
+        "description": "Marks the email address verified from the token delivered by the verification action. Clients extract the `token` query parameter from the action URL and submit it here. Invalid or expired actions fail safely without revealing token material.",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The email address is verified.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyEmailResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Verification failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/request-verification": {
+      "post": {
+        "operationId": "requestIdentityVerification",
+        "summary": "Request a verification message",
+        "description": "Schedules a fresh verification message for an unverified email address without creating duplicate identities. The response is identical whether or not the address is registered, so it cannot be used for account enumeration.",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestVerificationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The request was accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestVerificationResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request failure as RFC 9457 Problem Details.",
             "content": {
               "application/problem+json": {
                 "schema": {
