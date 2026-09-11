@@ -55,7 +55,11 @@ Cycles: <n>
 2. Run both axes concurrently as `opencode run --auto` workers:
    `/review-standards` with `reviewer-standards` (MiMo-V2.5) and
    `/review-spec` with `reviewer-spec` (Nemotron 3 Ultra). Explicit `deny`
-   rules remain effective under `--auto`.
+   rules remain effective under `--auto`. Workers stream stdout/stderr live
+   with `[standards]`, `[spec]`, and `[address-review]` prefixes plus
+   `started`/`completed`/`failed` lifecycle lines and a silence heartbeat,
+   so the long-running command never looks frozen; short git/gh/npm
+   commands stay on the buffered path.
 3. Collect PR comments and keep only the latest machine-readable marker per
    axis for the exact current HEAD SHA, and only from the configured model
    family for that axis (Standards is MiMo, Spec is Nemotron). Stale markers

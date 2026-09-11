@@ -24,8 +24,10 @@ import {
   reviewAxisWorker,
   runAddressReview,
   runReviewAxis,
+  type CommandExecutor,
 } from './review/runner.js';
 import { safePushBranch } from './review/safe-push.js';
+import { runWorkerStream } from './review/worker-stream.js';
 
 interface CycleOptions {
   maxCycles: number;
@@ -58,6 +60,14 @@ async function refreshPrUntilHead(
     }
   }
   return null;
+}
+
+// OpenCode workers stream live prefixed output (PR #17 dogfood finding) so
+// the single long-running command shows liveness. Short git/gh/npm commands
+// stay on the buffered path. The injected `CommandExecutor` seam is unchanged,
+// so tests still observe exact invocations without real subprocesses.
+function streamingWorkerExecutor(label: string): CommandExecutor {
+  return (command, args) => runWorkerStream(command, args, { label });
 }
 
 function parseArgs(argv: readonly string[]): CycleOptions {
@@ -174,15 +184,33 @@ async function main(): Promise<void> {
   ) {
     if (pendingAxes === null) {
       await Promise.all([
-        runReviewAxis('review-standards', 'reviewer-standards', pr.number),
-        runReviewAxis('review-spec', 'reviewer-spec', pr.number),
+        runReviewAxis(
+          'review-standards',
+          'reviewer-standards',
+          pr.number,
+          [],
+          streamingWorkerExecutor('standards'),
+        ),
+        runReviewAxis(
+          'review-spec',
+          'reviewer-spec',
+          pr.number,
+          [],
+          streamingWorkerExecutor('spec'),
+        ),
       ]);
     } else {
       // Blocker 1 (PR #17): a reviewer published without its marker — retry
       // only the missing axis instead of demanding manual intervention.
       for (const axis of pendingAxes) {
         const worker = reviewAxisWorker(axis);
-        await runReviewAxis(worker.command, worker.agent, pr.number);
+        await runReviewAxis(
+          worker.command,
+          worker.agent,
+          pr.number,
+          [],
+          streamingWorkerExecutor(axis),
+        );
         markerRetries[axis] += 1;
       }
       pendingAxes = null;
@@ -298,7 +326,7 @@ async function main(): Promise<void> {
     console.log(
       `Blocking findings for ${head}: invoking /address-review (correction cycle ${String(cycles)}).`,
     );
-    await runAddressReview(pr.number);
+    await runAddressReview(pr.number, streamingWorkerExecutor('address-review'));
     const newHead = await getCurrentHead();
     if (newHead === head) {
       console.error(
