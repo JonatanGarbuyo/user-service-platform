@@ -39,7 +39,7 @@ export function parseReviewMarkers(body: string): ReviewMarker[] {
 }
 
 export function expectedModelForAxis(axis: ReviewAxis): string {
-  return axis === 'standards' ? 'mimo-v2.5' : 'nemotron-3-ultra';
+  return axis === 'standards' ? 'mimo-v2.5' : 'nemotron-3.5-lightning';
 }
 
 export interface CurrentHeadReports {

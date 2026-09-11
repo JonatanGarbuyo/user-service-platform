@@ -20,15 +20,17 @@ describe('review result marker', () => {
   it('round-trips a spec FAIL marker without inferring from prose', () => {
     const head = 'b'.repeat(40);
     const body = [
-      '## Spec review — Nemotron 3 Ultra',
+      '## Spec review — Nemotron 3.5 Lightning',
       'Reviewed HEAD: ' + head,
       'This prose claims everything passes but the marker rules.',
-      formatReviewMarker({ axis: 'spec', model: 'nemotron-3-ultra', head, result: 'FAIL' }),
+      formatReviewMarker({ axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'FAIL' }),
     ].join('\n');
 
     const markers = parseReviewMarkers(body);
 
-    expect(markers).toEqual([{ axis: 'spec', model: 'nemotron-3-ultra', head, result: 'FAIL' }]);
+    expect(markers).toEqual([
+      { axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'FAIL' },
+    ]);
   });
 
   it('returns no markers when the body has no machine-readable marker', () => {
@@ -60,7 +62,7 @@ describe('review result marker', () => {
       {
         body: formatReviewMarker({
           axis: 'spec',
-          model: 'nemotron-3-ultra',
+          model: 'nemotron-3.5-lightning',
           head: oldHead,
           result: 'PASS',
         }),
@@ -80,7 +82,7 @@ describe('review result marker', () => {
       {
         body: formatReviewMarker({
           axis: 'standards',
-          model: 'nemotron-3-ultra',
+          model: 'nemotron-3.5-lightning',
           head: currentHead,
           result: 'PASS',
         }),
@@ -94,6 +96,23 @@ describe('review result marker', () => {
           result: 'PASS',
         }),
         createdAt: '2026-01-05T00:00:00Z',
+      },
+    ];
+
+    expect(selectCurrentHeadReports(comments, currentHead)).toEqual({});
+  });
+
+  it('rejects stale Ultra spec markers once the axis requires Lightning', () => {
+    const currentHead = '4'.repeat(40);
+    const comments = [
+      {
+        body: formatReviewMarker({
+          axis: 'spec',
+          model: 'nemotron-3-ultra',
+          head: currentHead,
+          result: 'PASS',
+        }),
+        createdAt: '2026-01-06T00:00:00Z',
       },
     ];
 
