@@ -1,4 +1,9 @@
-import { currentBellPolicy, notifyTerminalState, shouldRingBell, type BellPolicy } from './bell.js';
+import {
+  currentBellPolicy,
+  ringTerminalNotification,
+  shouldRingBell,
+  type BellPolicy,
+} from './bell.js';
 
 // Top-level fatal-error boundary for the review cycle (final acceptance on
 // PR #19). Handled terminal paths inside `main()` return normally with their
@@ -47,9 +52,7 @@ export function handleFatalTermination(
   const notify =
     deps.notify ??
     ((bellPolicy: BellPolicy) => {
-      notifyTerminalState(bellPolicy, (output: string) => {
-        process.stdout.write(output);
-      });
+      ringTerminalNotification(bellPolicy);
     });
   logError(formatFatalMessage(error));
   setExitCode(1);

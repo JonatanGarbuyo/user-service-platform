@@ -117,8 +117,12 @@ It refuses otherwise and never merges.
 ## Terminal notification and headless use
 
 Terminal states (`READY`, `NEEDS-DECISION`, and blocked/fatal stops) emit one
-audible terminal bell (BEL) only when stdout is an interactive TTY and the run
-is not in CI. CI and other non-TTY runs never emit bell control characters.
+audible notification only when stdout is an interactive TTY and the run
+is not in CI. The notification writes BEL as an always-on baseline and
+additionally plays a local sound where a supported mechanism exists
+(`afplay` on macOS, `paplay`/`aplay` with a system sound on Linux); sound
+playback is best-effort and never fails the cycle. CI and other non-TTY runs
+never emit bell control characters or play sounds.
 Pass `--no-bell` to disable the notification.
 
 Headless agents do not depend on interactive questions. Human-required
