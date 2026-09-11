@@ -17,6 +17,7 @@ import {
   fetchCommitCheckRuns,
   getRepoSlug,
   type CheckPollDecision,
+  type CommitCheckRun,
 } from './review/pr-checks.js';
 import { parseReviewMarkers, selectCurrentHeadReports } from './review/result-marker.js';
 import {
@@ -28,6 +29,15 @@ import {
   runReviewAxis,
   type CommandExecutor,
 } from './review/runner.js';
+import {
+  createRunSummaryRecorder,
+  formatSummaryPathMessage,
+  persistRunSummary,
+  type CiDecision,
+  type RunSummaryRecorder,
+  type TerminalOutcome,
+  type WorkerAttemptResult,
+} from './review/run-summary.js';
 import { safePushBranch } from './review/safe-push.js';
 import { runWorkerStream } from './review/worker-stream.js';
 
@@ -117,6 +127,43 @@ function parseArgs(argv: readonly string[]): CycleOptions {
   return { maxCycles, prArg, push, noBell };
 }
 
+function syncPrIntoRecorder(
+  recorder: RunSummaryRecorder,
+  pr: Awaited<ReturnType<typeof getPrForBranch>>,
+): void {
+  recorder.setPr({
+    number: pr.number,
+    ...(pr.url === undefined ? {} : { url: pr.url }),
+    headRefName: pr.headRefName,
+    baseRefName: pr.baseRefName,
+  });
+  recorder.setBranch(pr.headRefName, pr.baseRefName);
+}
+
+// Structured run summaries (ticket #22) are best-effort: a persistence
+// failure is reported on stderr but never changes the terminal outcome or
+// exit code of the review cycle itself.
+async function concludeWithSummary(
+  recorder: RunSummaryRecorder,
+  outcome: TerminalOutcome,
+  detail?: string,
+): Promise<void> {
+  const summary = recorder.finish(outcome, detail);
+  try {
+    const { latestPath } = await persistRunSummary(summary);
+    console.log(formatSummaryPathMessage(latestPath));
+  } catch (error) {
+    console.error(
+      `Run summary persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function fatalDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(0, 300);
+}
+
 // Repository-owned deterministic orchestration for the dual review loop
 // (ticket #16). This command is not an LLM agent: it invokes the existing
 // OpenCode review commands as workers, reads only machine-readable markers,
@@ -125,6 +172,20 @@ function parseArgs(argv: readonly string[]): CycleOptions {
 // decisions are surfaced as explicit NEEDS-DECISION/BLOCKED escalation output,
 // never as hidden stdin prompts.
 async function main(): Promise<void> {
+  const recorder = createRunSummaryRecorder();
+  try {
+    await runCycle(recorder);
+  } catch (error) {
+    // Unhandled rejection/exception (e.g. a failed OpenCode worker): persist
+    // a FATAL summary with the final known state, then rethrow so the
+    // fatal-error boundary still reports REVIEW-CYCLE FATAL and rings once.
+    // Persistence itself is best-effort inside concludeWithSummary.
+    await concludeWithSummary(recorder, 'FATAL', fatalDetail(error));
+    throw error;
+  }
+}
+
+async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
   let options: CycleOptions;
   try {
     options = parseArgs(process.argv.slice(2));
@@ -137,6 +198,7 @@ async function main(): Promise<void> {
       'usage: review-cycle [--max-cycles N] [--pr <number|url>] [--no-push|--push] [--no-bell|--bell]',
     );
     process.exitCode = 1;
+    await concludeWithSummary(recorder, 'BLOCKED', 'invalid arguments');
     notifyTerminalBell(parseNoBellFlag(process.argv.slice(2)));
     return;
   }
@@ -150,11 +212,15 @@ async function main(): Promise<void> {
       'Push the ticket branch and open a draft PR before running npm run review:cycle.',
     );
     process.exitCode = 1;
+    await concludeWithSummary(recorder, 'BLOCKED', 'no pull request for the ticket branch');
     notifyTerminalBell(options.noBell);
     return;
   }
+  syncPrIntoRecorder(recorder, pr);
 
   let head = await getCurrentHead();
+  recorder.setInitialHead(head);
+  recorder.setReviewedHead(head);
   console.log(
     `Review cycle: PR #${String(pr.number)} (${pr.headRefName} -> ${pr.baseRefName}), HEAD ${head}`,
   );
@@ -172,6 +238,7 @@ async function main(): Promise<void> {
     );
     console.error('Push the ticket branch first, then rerun npm run review:cycle.');
     process.exitCode = 1;
+    await concludeWithSummary(recorder, 'BLOCKED', 'local HEAD diverged under --no-push');
     notifyTerminalBell(options.noBell);
     return;
   }
@@ -181,6 +248,7 @@ async function main(): Promise<void> {
     if (!pushed.ok) {
       console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
       process.exitCode = 1;
+      await concludeWithSummary(recorder, 'BLOCKED', `push refused: ${pushed.reason}`);
       notifyTerminalBell(options.noBell);
       return;
     }
@@ -190,10 +258,16 @@ async function main(): Promise<void> {
         'REVIEW-CYCLE ABORTED: the PR head did not catch up with the local HEAD after push.',
       );
       process.exitCode = 1;
+      await concludeWithSummary(
+        recorder,
+        'BLOCKED',
+        'PR head did not catch up with the local HEAD after push',
+      );
       notifyTerminalBell(options.noBell);
       return;
     }
     pr = refreshed;
+    syncPrIntoRecorder(recorder, pr);
   }
 
   for (
@@ -202,20 +276,60 @@ async function main(): Promise<void> {
       pendingAxes: ('standards' | 'spec')[] | null = null;
     ;
   ) {
-    if (pendingAxes === null) {
-      await Promise.all([
-        runReviewAxis('review-standards', pr.number, [], streamingWorkerExecutor('standards')),
-        runReviewAxis('review-spec', pr.number, [], streamingWorkerExecutor('spec')),
-      ]);
-    } else {
-      // Blocker 1 (PR #17): a reviewer published without its marker — retry
-      // only the missing axis instead of demanding manual intervention.
-      for (const axis of pendingAxes) {
-        const worker = reviewAxisWorker(axis);
-        await runReviewAxis(worker.command, pr.number, [], streamingWorkerExecutor(axis));
-        markerRetries[axis] += 1;
+    recorder.setMarkerRetries({ ...markerRetries });
+    const justRan: ('standards' | 'spec')[] =
+      pendingAxes === null ? ['standards', 'spec'] : [...pendingAxes];
+    const timings = new Map<'standards' | 'spec', { start: number; end: number }>();
+    try {
+      if (pendingAxes === null) {
+        let standardsStart = 0;
+        let standardsEnd = 0;
+        let specStart = 0;
+        let specEnd = 0;
+        await Promise.all([
+          (async (): Promise<void> => {
+            standardsStart = Date.now();
+            await runReviewAxis(
+              'review-standards',
+              pr.number,
+              [],
+              streamingWorkerExecutor('standards'),
+            );
+            standardsEnd = Date.now();
+          })(),
+          (async (): Promise<void> => {
+            specStart = Date.now();
+            await runReviewAxis('review-spec', pr.number, [], streamingWorkerExecutor('spec'));
+            specEnd = Date.now();
+          })(),
+        ]);
+        timings.set('standards', { start: standardsStart, end: standardsEnd });
+        timings.set('spec', { start: specStart, end: specEnd });
+      } else {
+        // Blocker 1 (PR #17): a reviewer published without its marker — retry
+        // only the missing axis instead of demanding manual intervention.
+        for (const axis of pendingAxes) {
+          const worker = reviewAxisWorker(axis);
+          const startedAt = Date.now();
+          await runReviewAxis(worker.command, pr.number, [], streamingWorkerExecutor(axis));
+          timings.set(axis, { start: startedAt, end: Date.now() });
+          markerRetries[axis] += 1;
+        }
+        pendingAxes = null;
       }
-      pendingAxes = null;
+    } catch (workerError) {
+      const failedAt = Date.now();
+      for (const axis of justRan) {
+        const timing = timings.get(axis);
+        recorder.recordWorkerAttempt(
+          axis,
+          'ERROR',
+          timing?.start ?? failedAt,
+          timing?.end ?? failedAt,
+        );
+      }
+      recorder.setMarkerRetries({ ...markerRetries });
+      throw workerError;
     }
 
     const comments = await listPrComments(pr.number);
@@ -226,6 +340,19 @@ async function main(): Promise<void> {
       `Collected ${String(comments.length)} PR comments (${String(markerCount)} markers).`,
     );
     const reports = selectCurrentHeadReports(comments, head);
+    for (const axis of justRan) {
+      const report = axis === 'standards' ? reports.standards : reports.spec;
+      const timing = timings.get(axis);
+      const result: WorkerAttemptResult = report?.result ?? 'MISSING';
+      recorder.recordWorkerAttempt(
+        axis,
+        result,
+        timing?.start ?? Date.now(),
+        timing?.end ?? Date.now(),
+      );
+    }
+    recorder.setMarkerRetries({ ...markerRetries });
+    recorder.setReviewedHead(head);
 
     const decision = decideNextStep({
       standards: reports.standards,
@@ -236,6 +363,7 @@ async function main(): Promise<void> {
 
     if (decision.kind === 'ready-for-acceptance') {
       const gates = await runQualityGates();
+      recorder.setQualityGates(gates.map((gate) => ({ name: gate.name, ok: gate.ok })));
       const pass = qualityGatesPass(gates);
       for (const gate of gates) {
         console.log(`gate ${gate.name}: ${gate.ok ? 'PASS' : 'FAIL'}`);
@@ -243,6 +371,7 @@ async function main(): Promise<void> {
       if (!pass) {
         console.error('REVIEW-CYCLE BLOCKED: quality gates failed for the reviewed HEAD.');
         process.exitCode = 1;
+        await concludeWithSummary(recorder, 'BLOCKED', 'quality gates failed');
         notifyTerminalBell(options.noBell);
         return;
       }
@@ -254,13 +383,16 @@ async function main(): Promise<void> {
           'REVIEW-CYCLE BLOCKED: the PR head moved away from the reviewed HEAD. Rerun npm run review:cycle.',
         );
         process.exitCode = 1;
+        await concludeWithSummary(recorder, 'BLOCKED', 'PR head moved away from the reviewed HEAD');
         notifyTerminalBell(options.noBell);
         return;
       }
       const repoSlug = await getRepoSlug();
       let checkDecision: CheckPollDecision = 'pending';
+      let lastRuns: CommitCheckRun[] = [];
       for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
         const runs = await fetchCommitCheckRuns(repoSlug, head);
+        lastRuns = runs;
         for (const run of runs) {
           console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
         }
@@ -273,16 +405,28 @@ async function main(): Promise<void> {
           await sleep(CHECK_POLL_DELAY_MS);
         }
       }
+      const ciDecision: CiDecision =
+        checkDecision === 'pass' ? 'pass' : checkDecision === 'fail' ? 'fail' : 'pending';
+      recorder.setCi(
+        ciDecision,
+        lastRuns.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion })),
+      );
       if (checkDecision !== 'pass') {
         console.error(
           'REVIEW-CYCLE BLOCKED: CI checks for the exact reviewed HEAD are not all successful.',
         );
         process.exitCode = 1;
+        await concludeWithSummary(
+          recorder,
+          'BLOCKED',
+          'CI checks for the reviewed HEAD are not successful',
+        );
         notifyTerminalBell(options.noBell);
         return;
       }
       console.log('');
       console.log(formatReadySummary({ head, cycles, gates: 'PASS' }));
+      await concludeWithSummary(recorder, 'READY', 'ready for final acceptance');
       notifyTerminalBell(options.noBell);
       return;
     }
@@ -305,6 +449,11 @@ async function main(): Promise<void> {
       );
       console.error('Inspect the reviewer output on the PR; markers may be malformed.');
       process.exitCode = 1;
+      await concludeWithSummary(
+        recorder,
+        'BLOCKED',
+        `missing current-HEAD reports for: ${decision.missing.join(', ')}`,
+      );
       notifyTerminalBell(options.noBell);
       return;
     }
@@ -317,6 +466,11 @@ async function main(): Promise<void> {
         'Product, architecture, public-contract, infrastructure-provider, or security-policy decisions belong to planning — not to this loop. Stopping without code changes.',
       );
       process.exitCode = 2;
+      await concludeWithSummary(
+        recorder,
+        'NEEDS-DECISION',
+        `${decision.axis} reported NEEDS-DECISION`,
+      );
       notifyTerminalBell(options.noBell);
       return;
     }
@@ -326,6 +480,7 @@ async function main(): Promise<void> {
         `REVIEW-CYCLE STOPPED: ${String(decision.cycles)} correction cycles reached the bound of ${String(decision.maxCycles)}. Escalating to a human.`,
       );
       process.exitCode = 1;
+      await concludeWithSummary(recorder, 'STOPPED', 'correction-cycle bound reached');
       notifyTerminalBell(options.noBell);
       return;
     }
@@ -335,17 +490,28 @@ async function main(): Promise<void> {
     console.log(
       `Blocking findings for ${head}: invoking /address-review (correction cycle ${String(cycles)}).`,
     );
-    await runAddressReview(pr.number, streamingWorkerExecutor('address-review'));
+    const addressStartedAt = Date.now();
+    try {
+      await runAddressReview(pr.number, streamingWorkerExecutor('address-review'));
+    } catch (addressError) {
+      recorder.recordAddressReviewAttempt('error', addressStartedAt, Date.now());
+      throw addressError;
+    }
+    const addressEndedAt = Date.now();
     const newHead = await getCurrentHead();
     if (newHead === head) {
+      recorder.recordAddressReviewAttempt('unchanged', addressStartedAt, addressEndedAt);
       console.error(
         'REVIEW-CYCLE STOPPED: /address-review left HEAD unchanged while blocking findings remain. Escalating to a human.',
       );
       process.exitCode = 1;
+      await concludeWithSummary(recorder, 'STOPPED', '/address-review left HEAD unchanged');
       notifyTerminalBell(options.noBell);
       return;
     }
+    recorder.recordAddressReviewAttempt('advanced', addressStartedAt, addressEndedAt);
     head = newHead;
+    recorder.setReviewedHead(head);
     markerRetries = { standards: 0, spec: 0 };
 
     if (options.push) {
@@ -353,6 +519,7 @@ async function main(): Promise<void> {
       if (!pushed.ok) {
         console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
         process.exitCode = 1;
+        await concludeWithSummary(recorder, 'BLOCKED', `push refused: ${pushed.reason}`);
         notifyTerminalBell(options.noBell);
         return;
       }
