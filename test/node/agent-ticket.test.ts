@@ -5,11 +5,13 @@ import {
   buildPrCreateArgs,
   buildReviewCycleArgs,
   checkInitialPush,
+  checkMainCurrency,
   checkStartState,
   checkTicketIssue,
   extractSummaryPath,
   formatPrBody,
   formatPrTitle,
+  getRemoteMainHead,
   parseIssueView,
   parseTicketArg,
   runAgentTicket,
@@ -240,16 +242,20 @@ const ISSUE_VIEW = JSON.stringify({
   labels: [{ name: 'ready-for-agent' }],
 });
 
+const MAIN_HEAD = 'a'.repeat(40);
+const NEXT_HEAD = 'b'.repeat(40);
+
 function successScript(): Record<string, unknown> {
   return {
     'git rev-parse --abbrev-ref HEAD': 'main\n',
     'git status --porcelain': '',
+    'git rev-parse HEAD': `${MAIN_HEAD}\n`,
+    'git ls-remote origin refs/heads/main': `${MAIN_HEAD}\trefs/heads/main\n`,
     'gh issue view 10 --json number,title,state,labels': `${ISSUE_VIEW}\n`,
     'git show-ref --verify refs/heads/ticket/10-register-and-verify-an-email-identity': new Error(
       "fatal: 'refs/heads/ticket/10-register-and-verify-an-email-identity' - not a valid ref",
     ),
     'git checkout -b ticket/10-register-and-verify-an-email-identity': '',
-    'git rev-parse HEAD': 'aaa\n',
     'npm run lint': '',
     'npm run format:check': '',
     'npm run typecheck': '',
@@ -276,7 +282,10 @@ describe('agent:ticket success orchestration', () => {
     const execute: CommandExecutor = (command, args) => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         headCalls += 1;
-        return Promise.resolve({ stdout: headCalls === 1 ? 'aaa\n' : 'bbb\n', stderr: '' });
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
       }
       return fixture.execute(command, args);
     };
@@ -299,7 +308,7 @@ describe('agent:ticket success orchestration', () => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         orderedHeads.push('x');
         return Promise.resolve({
-          stdout: orderedHeads.length === 1 ? 'aaa\n' : 'bbb\n',
+          stdout: orderedHeads.length === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
           stderr: '',
         });
       }
@@ -331,7 +340,10 @@ describe('agent:ticket success orchestration', () => {
     const execute: CommandExecutor = (command, args) => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         headCalls += 1;
-        return Promise.resolve({ stdout: headCalls === 1 ? 'aaa\n' : 'bbb\n', stderr: '' });
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
       }
       return fixture.execute(command, args);
     };
@@ -374,6 +386,8 @@ describe('agent:ticket failure and escalation paths', () => {
     const fixture = scriptedDeps({
       'git rev-parse --abbrev-ref HEAD': 'main\n',
       'git status --porcelain': '',
+      'git rev-parse HEAD': `${MAIN_HEAD}\n`,
+      'git ls-remote origin refs/heads/main': `${MAIN_HEAD}\trefs/heads/main\n`,
       'gh issue view 10 --json number,title,state,labels':
         '{"number":10,"title":"T","state":"OPEN","labels":[]}\n',
     });
@@ -391,6 +405,8 @@ describe('agent:ticket failure and escalation paths', () => {
     const fixture = scriptedDeps({
       'git rev-parse --abbrev-ref HEAD': 'main\n',
       'git status --porcelain': '',
+      'git rev-parse HEAD': `${MAIN_HEAD}\n`,
+      'git ls-remote origin refs/heads/main': `${MAIN_HEAD}\trefs/heads/main\n`,
       'gh issue view 10 --json number,title,state,labels': `${ISSUE_VIEW}\n`,
       'git show-ref --verify refs/heads/ticket/10-register-and-verify-an-email-identity': '',
     });
@@ -444,7 +460,10 @@ describe('agent:ticket failure and escalation paths', () => {
     const execute: CommandExecutor = (command, args) => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         headCalls += 1;
-        return Promise.resolve({ stdout: headCalls === 1 ? 'aaa\n' : 'bbb\n', stderr: '' });
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
       }
       return fixture.execute(command, args);
     };
@@ -469,7 +488,10 @@ describe('agent:ticket failure and escalation paths', () => {
     const execute: CommandExecutor = (command, args) => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         headCalls += 1;
-        return Promise.resolve({ stdout: headCalls === 1 ? 'aaa\n' : 'bbb\n', stderr: '' });
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
       }
       return fixture.execute(command, args);
     };
@@ -491,7 +513,10 @@ describe('agent:ticket failure and escalation paths', () => {
     const execute: CommandExecutor = (command, args) => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         headCalls += 1;
-        return Promise.resolve({ stdout: headCalls === 1 ? 'aaa\n' : 'bbb\n', stderr: '' });
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
       }
       return fixture.execute(command, args);
     };
@@ -515,7 +540,10 @@ describe('agent:ticket failure and escalation paths', () => {
     const execute: CommandExecutor = (command, args) => {
       if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
         headCalls += 1;
-        return Promise.resolve({ stdout: headCalls === 1 ? 'aaa\n' : 'bbb\n', stderr: '' });
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
       }
       return fixture.execute(command, args);
     };
@@ -542,5 +570,78 @@ describe('agent:ticket failure and escalation paths', () => {
     await runAgentTicket('10', { execute: fixture.execute, runWorker });
 
     expect(runWorker).toHaveBeenCalledWith('opencode', buildImplementArgs(10), 'implement');
+  });
+});
+
+describe('agent:ticket main currency', () => {
+  it('accepts a local main that matches origin/main', () => {
+    expect(checkMainCurrency({ localHead: MAIN_HEAD, remoteHead: MAIN_HEAD }).ok).toBe(true);
+  });
+
+  it('refuses a stale or diverged local main without mutating anything', () => {
+    const result = checkMainCurrency({ localHead: MAIN_HEAD, remoteHead: NEXT_HEAD });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/origin\/main/);
+      expect(result.reason).toMatch(/stale/i);
+    }
+  });
+
+  it('resolves the remote main HEAD without touching local refs', async () => {
+    const fixture = scriptedDeps({
+      'git ls-remote origin refs/heads/main': `${MAIN_HEAD}\trefs/heads/main\n`,
+    });
+
+    await expect(getRemoteMainHead(fixture.execute)).resolves.toBe(MAIN_HEAD);
+    expect(fixture.calls).toEqual([
+      { command: 'git', args: ['ls-remote', 'origin', 'refs/heads/main'] },
+    ]);
+  });
+
+  it('treats unparseable remote output as unresolvable', async () => {
+    const fixture = scriptedDeps({ 'git ls-remote origin refs/heads/main': '\n' });
+
+    await expect(getRemoteMainHead(fixture.execute)).rejects.toThrow(/origin\/main/);
+  });
+
+  it('stops before branch creation when local main is behind origin/main', async () => {
+    const fixture = scriptedDeps({
+      'git rev-parse --abbrev-ref HEAD': 'main\n',
+      'git status --porcelain': '',
+      'git rev-parse HEAD': `${MAIN_HEAD}\n`,
+      'git ls-remote origin refs/heads/main': `${NEXT_HEAD}\trefs/heads/main\n`,
+    });
+
+    const result = await runAgentTicket('10', {
+      execute: fixture.execute,
+      runWorker: fixture.runWorker,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.failedStage).toBe('start-state');
+    expect(result.reason).toMatch(/origin\/main/);
+    expect(result.branch).toBeUndefined();
+    expect(fixture.calls.some((call) => call.args.includes('checkout'))).toBe(false);
+  });
+
+  it('stops when origin/main cannot be resolved', async () => {
+    const fixture = scriptedDeps({
+      'git rev-parse --abbrev-ref HEAD': 'main\n',
+      'git status --porcelain': '',
+      'git rev-parse HEAD': `${MAIN_HEAD}\n`,
+      'git ls-remote origin refs/heads/main': new Error('network unreachable'),
+    });
+
+    const result = await runAgentTicket('10', {
+      execute: fixture.execute,
+      runWorker: fixture.runWorker,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.failedStage).toBe('start-state');
+    expect(result.reason).toMatch(/origin\/main/);
+    expect(result.branch).toBeUndefined();
+    expect(fixture.calls.some((call) => call.args.includes('checkout'))).toBe(false);
   });
 });

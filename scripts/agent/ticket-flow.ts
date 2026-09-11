@@ -114,6 +114,41 @@ export function checkStartState(state: StartState): StartStateCheck {
   return { ok: true };
 }
 
+export interface MainCurrency {
+  localHead: string;
+  remoteHead: string;
+}
+
+export type MainCurrencyCheck = { ok: true } | { ok: false; reason: string };
+
+// Ticket #23 requires starting from a *current* main, not just a clean one:
+// a stale local main would silently base the ticket branch on outdated code.
+// The remote is only inspected (`ls-remote`); local refs and the worktree are
+// never mutated here, and nothing is rebased or merged automatically.
+export function checkMainCurrency(currency: MainCurrency): MainCurrencyCheck {
+  if (currency.localHead.toLowerCase() === currency.remoteHead.toLowerCase()) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    reason:
+      `local main (${currency.localHead}) is not current with origin/main ` +
+      `(${currency.remoteHead}): update local main (e.g. git pull --ff-only on main) and ` +
+      'rerun; refusing to branch from a stale base',
+  };
+}
+
+export async function getRemoteMainHead(execute: CommandExecutor = runCommand): Promise<string> {
+  const { stdout } = await execute('git', ['ls-remote', 'origin', 'refs/heads/main']);
+  const head = stdout.split(/\s+/)[0] ?? '';
+  if (!/^[0-9a-fA-F]{40}$/.test(head)) {
+    throw new Error(
+      `cannot resolve origin/main HEAD from git ls-remote output: ${stdout.trim().slice(0, 120)}`,
+    );
+  }
+  return head;
+}
+
 export interface TicketIssue {
   number: number;
   title: string;
@@ -305,6 +340,24 @@ export async function runAgentTicket(
     return failResult('start-state', startCheck.reason);
   }
 
+  let mainHead: string;
+  let originHead: string;
+  try {
+    mainHead = await getCurrentHead(execute);
+    originHead = await getRemoteMainHead(execute);
+  } catch (error) {
+    const reason =
+      `cannot prove local main is current with origin/main: ${errorMessage(error)}; ` +
+      'refusing to start from an unverifiable base';
+    console.error(`AGENT-TICKET BLOCKED (start-state): ${reason}`);
+    return failResult('start-state', reason);
+  }
+  const currencyCheck = checkMainCurrency({ localHead: mainHead, remoteHead: originHead });
+  if (!currencyCheck.ok) {
+    console.error(`AGENT-TICKET BLOCKED (start-state): ${currencyCheck.reason}`);
+    return failResult('start-state', currencyCheck.reason);
+  }
+
   let issue: TicketIssue;
   try {
     const { stdout } = await execute('gh', [
@@ -349,7 +402,9 @@ export async function runAgentTicket(
   }
   console.log(`Created ticket branch ${branch} from main.`);
 
-  const headBefore = await getCurrentHead(execute);
+  // `git checkout -b` does not move HEAD, so the pre-checkout main tip is the
+  // baseline the implementation must advance.
+  const headBefore = mainHead;
   try {
     await runWorker('opencode', buildImplementArgs(ticket), 'implement');
   } catch (error) {
