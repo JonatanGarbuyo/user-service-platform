@@ -179,17 +179,12 @@ export function checkTicketIssue(issue: TicketIssue): TicketIssueCheck {
   return { ok: true };
 }
 
-export interface InitialPushState {
-  currentBranch: string;
-  worktreeClean: boolean;
-}
-
 // The initial push happens before the PR exists, so it cannot go through the
 // PR-bound `safePushBranch`; it reuses the same `checkSafePush` guards with
 // the intended PR shape (head is this branch, base is `main`) instead of
 // reimplementing push safety inconsistently. Later pushes go through
 // `review:cycle` and its safe-push path.
-export function checkInitialPush(state: InitialPushState): SafePushCheck {
+export function checkInitialPush(state: StartState): SafePushCheck {
   return checkSafePush({
     currentBranch: state.currentBranch,
     prHead: state.currentBranch,
@@ -269,6 +264,12 @@ function reportDurableState(partial: { branch?: string; prNumber?: number; prUrl
   console.error(`Durable state: ${parts.join(' ')}`);
 }
 
+function failResult(stage: string, reason: string, branch?: string): AgentTicketResult {
+  return branch === undefined
+    ? { exitCode: 1, failedStage: stage, reason }
+    : { exitCode: 1, failedStage: stage, reason, branch };
+}
+
 export async function runAgentTicket(
   rawTicket: string | undefined,
   deps: AgentTicketDeps = {},
@@ -284,7 +285,7 @@ export async function runAgentTicket(
     const reason = errorMessage(error);
     console.error(`AGENT-TICKET BLOCKED (validate): ${reason}`);
     console.error('usage: agent-ticket <issue-number>');
-    return { exitCode: 1, failedStage: 'validate', reason };
+    return failResult('validate', reason);
   }
 
   let start: StartState;
@@ -296,12 +297,12 @@ export async function runAgentTicket(
   } catch (error) {
     const reason = `cannot validate the starting worktree: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (start-state): ${reason}`);
-    return { exitCode: 1, failedStage: 'start-state', reason };
+    return failResult('start-state', reason);
   }
   const startCheck = checkStartState(start);
   if (!startCheck.ok) {
     console.error(`AGENT-TICKET BLOCKED (start-state): ${startCheck.reason}`);
-    return { exitCode: 1, failedStage: 'start-state', reason: startCheck.reason };
+    return failResult('start-state', startCheck.reason);
   }
 
   let issue: TicketIssue;
@@ -317,17 +318,17 @@ export async function runAgentTicket(
   } catch (error) {
     const reason = `cannot read ticket #${String(ticket)}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (ticket): ${reason}`);
-    return { exitCode: 1, failedStage: 'ticket', reason };
+    return failResult('ticket', reason);
   }
   if (issue.number !== ticket) {
     const reason = `ticket mismatch: requested #${String(ticket)} but gh returned #${String(issue.number)}`;
     console.error(`AGENT-TICKET BLOCKED (ticket): ${reason}`);
-    return { exitCode: 1, failedStage: 'ticket', reason };
+    return failResult('ticket', reason);
   }
   const issueCheck = checkTicketIssue(issue);
   if (!issueCheck.ok) {
     console.error(`AGENT-TICKET BLOCKED (ticket): ${issueCheck.reason}`);
-    return { exitCode: 1, failedStage: 'ticket', reason: issueCheck.reason };
+    return failResult('ticket', issueCheck.reason);
   }
 
   const branch = ticketBranchName(ticket, issue.title);
@@ -335,7 +336,7 @@ export async function runAgentTicket(
     await execute('git', ['show-ref', '--verify', `refs/heads/${branch}`]);
     const reason = `${branch} already exists; refusing to reuse or repair an existing branch`;
     console.error(`AGENT-TICKET BLOCKED (branch): ${reason}`);
-    return { exitCode: 1, failedStage: 'branch', reason, branch };
+    return failResult('branch', reason, branch);
   } catch {
     // Absent locally: the expected case, continue.
   }
@@ -344,7 +345,7 @@ export async function runAgentTicket(
   } catch (error) {
     const reason = `cannot create ticket branch ${branch}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (branch): ${reason}`);
-    return { exitCode: 1, failedStage: 'branch', reason, branch };
+    return failResult('branch', reason, branch);
   }
   console.log(`Created ticket branch ${branch} from main.`);
 
@@ -355,20 +356,20 @@ export async function runAgentTicket(
     const reason = `/implement failed for ticket #${String(ticket)}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET FAILED (implement): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'implement', reason, branch };
+    return failResult('implement', reason, branch);
   }
   const headAfter = await getCurrentHead(execute);
   if (headAfter === headBefore) {
     const reason = `/implement produced no local commits on ${branch}`;
     console.error(`AGENT-TICKET FAILED (implement): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'implement', reason, branch };
+    return failResult('implement', reason, branch);
   }
   if (!(await isWorktreeClean(execute))) {
     const reason = `/implement left uncommitted changes on ${branch}; refusing to push a dirty worktree`;
     console.error(`AGENT-TICKET FAILED (implement): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'implement', reason, branch };
+    return failResult('implement', reason, branch);
   }
   console.log(`Implementation advanced ${branch}: ${headBefore} -> ${headAfter}.`);
 
@@ -380,7 +381,7 @@ export async function runAgentTicket(
     const reason = 'repository quality gates failed for the implementation HEAD';
     console.error(`AGENT-TICKET BLOCKED (gates): ${reason}.`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'gates', reason, branch };
+    return failResult('gates', reason, branch);
   }
 
   const pushCheck = checkInitialPush({ currentBranch: branch, worktreeClean: true });
@@ -388,7 +389,7 @@ export async function runAgentTicket(
     const reason = `initial push refused: ${pushCheck.reason}`;
     console.error(`AGENT-TICKET BLOCKED (push): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'push', reason, branch };
+    return failResult('push', reason, branch);
   }
   try {
     await execute('git', ['push', '-u', 'origin', branch]);
@@ -396,7 +397,7 @@ export async function runAgentTicket(
     const reason = `initial push of ${branch} failed: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (push): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'push', reason, branch };
+    return failResult('push', reason, branch);
   }
   console.log(`Pushed ticket branch: origin/${branch}`);
 
@@ -406,7 +407,7 @@ export async function runAgentTicket(
     const reason = `draft PR creation failed for ${branch}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (pr): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'pr', reason, branch };
+    return failResult('pr', reason, branch);
   }
   let prNumber: number;
   let prUrl: string | undefined;
@@ -418,7 +419,7 @@ export async function runAgentTicket(
     const reason = `draft PR was created but cannot be resolved: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (pr): ${reason}`);
     reportDurableState({ branch });
-    return { exitCode: 1, failedStage: 'pr', reason, branch };
+    return failResult('pr', reason, branch);
   }
   console.log(
     `Draft PR #${String(prNumber)}${prUrl === undefined ? '' : `: ${prUrl}`} (base main).`,
