@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { requestId } from 'hono/request-id';
 import type { Env } from './env.js';
 import { createHealthRouter } from './features/health/index.js';
+import { createIdentityRouter, type IdentityRouterOptions } from './features/identity/index.js';
 import { openApiConfig } from './openapi.js';
 import { PROBLEM_JSON, createProblem } from './shared/problem.js';
 
@@ -27,7 +28,7 @@ function readEnvironment(c: Context<AppBindings>): string {
 // Application composition root. Feature slices register their OpenAPI-aware
 // routers here under the `/v1` namespace; cross-feature imports must stay on
 // public slice interfaces (AGENTS.md change rules).
-export function createApp() {
+export function createApp(identityOptions: IdentityRouterOptions = {}) {
   const app = new OpenAPIHono<AppBindings>({
     // Contract-wide validation failure shape: invalid public API input uses the
     // RFC 9457 Problem Details envelope instead of the framework default.
@@ -72,6 +73,7 @@ export function createApp() {
   });
 
   app.route('/v1', createHealthRouter());
+  app.route('/v1', createIdentityRouter(identityOptions));
 
   app.doc('/v1/openapi.json', openApiConfig);
 

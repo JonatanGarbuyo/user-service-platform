@@ -17,7 +17,15 @@ export const ProblemDetailsSchema = z
 
 export type ProblemDetails = z.infer<typeof ProblemDetailsSchema>;
 
-export type ProblemCode = 'bad-request' | 'not-found' | 'internal-error';
+export type ProblemCode =
+  | 'bad-request'
+  | 'not-found'
+  | 'internal-error'
+  | 'registration-disabled'
+  | 'email-password-disabled'
+  | 'email-verification-required'
+  | 'invalid-credentials'
+  | 'verification-invalid';
 
 interface CreateProblemInput {
   status: number;

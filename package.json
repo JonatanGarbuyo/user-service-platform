@@ -18,16 +18,19 @@
     "test:harness": "vitest run --config vitest.harness.config.ts",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json",
+    "db:generate": "drizzle-kit generate",
     "agent:ticket": "tsx scripts/agent-ticket.ts",
     "review:cycle": "tsx scripts/review-cycle.ts",
     "review:safe-push": "tsx scripts/safe-push.ts",
     "check": "npm run lint && npm run format:check"
   },
   "devDependencies": {
+    "@better-auth/drizzle-adapter": "1.7.4",
     "@cloudflare/vitest-pool-workers": "0.22.0",
     "@cloudflare/workers-types": "5.20260910.1",
     "@eslint/js": "10.0.1",
     "@types/node": "24.10.1",
+    "drizzle-kit": "0.31.10",
     "eslint": "10.10.0",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.9.6",
@@ -39,6 +42,8 @@
   },
   "dependencies": {
     "@hono/zod-openapi": "1.6.3",
+    "better-auth": "1.7.4",
+    "drizzle-orm": "0.45.2",
     "hono": "4.13.7",
     "zod": "4.6.1"
   }

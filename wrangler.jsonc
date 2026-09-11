@@ -11,41 +11,60 @@
   // binary bundled with the installed test toolchain (currently 2026-08-22);
   // newer dates fail to boot under Miniflare/vitest-pool-workers.
   "compatibility_date": "2026-08-22",
+  // Better Auth relies on AsyncLocalStorage and Node.js crypto (scrypt) for
+  // password hashing; both require the Node.js compatibility flag on Workers
+  // (ticket #10, ADR-0005).
+  "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "ENVIRONMENT": "local",
+    // Application-owned authentication policy defaults (ADR-0005). These are
+    // deployment configuration, not secrets: the identity slice translates
+    // them into Better Auth behaviour per request.
+    "AUTH_REGISTRATION_ENABLED": "true",
+    "AUTH_EMAIL_PASSWORD_ENABLED": "true",
+    "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
   },
   // D1 binding/configuration seam for isolated local tests (ticket #9). No business
-  // persistence abstractions are introduced here; Drizzle schema and migrations
-  // arrive with the identity slice (ticket #10).
+  // persistence abstractions are introduced here; the identity slice owns its
+  // Drizzle schema and versioned migrations under `./drizzle` (ticket #10).
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "user-service-local",
       "database_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "migrations_dir": "drizzle",
     },
   ],
   "env": {
     "staging": {
       "vars": {
         "ENVIRONMENT": "staging",
+        "AUTH_REGISTRATION_ENABLED": "true",
+        "AUTH_EMAIL_PASSWORD_ENABLED": "true",
+        "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
       },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "user-service-staging",
           "database_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "migrations_dir": "drizzle",
         },
       ],
     },
     "production": {
       "vars": {
         "ENVIRONMENT": "production",
+        "AUTH_REGISTRATION_ENABLED": "true",
+        "AUTH_EMAIL_PASSWORD_ENABLED": "true",
+        "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
       },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "user-service-production",
           "database_id": "cccccccccccccccccccccccccccccccc",
+          "migrations_dir": "drizzle",
         },
       ],
     },
