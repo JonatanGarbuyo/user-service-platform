@@ -1,3 +1,5 @@
+import { notifyTerminalBell } from './review/bell.js';
+import { parseNoBellFlag, runWithFatalBoundary } from './review/fatal.js';
 import {
   DEFAULT_MAX_CORRECTION_CYCLES,
   DEFAULT_MAX_MARKER_RETRIES,
@@ -33,6 +35,7 @@ interface CycleOptions {
   maxCycles: number;
   prArg?: string;
   push: boolean;
+  noBell: boolean;
 }
 
 class HelpRequested extends Error {}
@@ -74,6 +77,7 @@ function parseArgs(argv: readonly string[]): CycleOptions {
   let maxCycles = DEFAULT_MAX_CORRECTION_CYCLES;
   let prArg: string | undefined;
   let push = true;
+  let noBell = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -96,21 +100,30 @@ function parseArgs(argv: readonly string[]): CycleOptions {
       push = false;
     } else if (arg === '--push') {
       push = true;
+    } else if (arg === '--no-bell') {
+      noBell = true;
+    } else if (arg === '--bell') {
+      noBell = false;
     } else if (arg === '--help' || arg === '-h') {
-      console.log('usage: review-cycle [--max-cycles N] [--pr <number|url>] [--no-push|--push]');
+      console.log(
+        'usage: review-cycle [--max-cycles N] [--pr <number|url>] [--no-push|--push] [--no-bell|--bell]',
+      );
       throw new HelpRequested();
     } else {
       throw new Error(`unknown argument: ${arg ?? '(missing)'}`);
     }
   }
 
-  return { maxCycles, prArg, push };
+  return { maxCycles, prArg, push, noBell };
 }
 
 // Repository-owned deterministic orchestration for the dual review loop
 // (ticket #16). This command is not an LLM agent: it invokes the existing
 // OpenCode review commands as workers, reads only machine-readable markers,
 // keeps both axes independent, bounds corrections, and escalates decisions.
+// Headless agents do not depend on interactive questions: human-required
+// decisions are surfaced as explicit NEEDS-DECISION/BLOCKED escalation output,
+// never as hidden stdin prompts.
 async function main(): Promise<void> {
   let options: CycleOptions;
   try {
@@ -120,8 +133,11 @@ async function main(): Promise<void> {
       return;
     }
     console.error(error instanceof Error ? error.message : String(error));
-    console.error('usage: review-cycle [--max-cycles N] [--pr <number|url>] [--no-push|--push]');
+    console.error(
+      'usage: review-cycle [--max-cycles N] [--pr <number|url>] [--no-push|--push] [--no-bell|--bell]',
+    );
     process.exitCode = 1;
+    notifyTerminalBell(parseNoBellFlag(process.argv.slice(2)));
     return;
   }
 
@@ -134,6 +150,7 @@ async function main(): Promise<void> {
       'Push the ticket branch and open a draft PR before running npm run review:cycle.',
     );
     process.exitCode = 1;
+    notifyTerminalBell(options.noBell);
     return;
   }
 
@@ -155,6 +172,7 @@ async function main(): Promise<void> {
     );
     console.error('Push the ticket branch first, then rerun npm run review:cycle.');
     process.exitCode = 1;
+    notifyTerminalBell(options.noBell);
     return;
   }
   if (startSync.kind === 'push-and-refresh') {
@@ -163,6 +181,7 @@ async function main(): Promise<void> {
     if (!pushed.ok) {
       console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
       process.exitCode = 1;
+      notifyTerminalBell(options.noBell);
       return;
     }
     const refreshed = await refreshPrUntilHead(options.prArg, head);
@@ -171,6 +190,7 @@ async function main(): Promise<void> {
         'REVIEW-CYCLE ABORTED: the PR head did not catch up with the local HEAD after push.',
       );
       process.exitCode = 1;
+      notifyTerminalBell(options.noBell);
       return;
     }
     pr = refreshed;
@@ -184,33 +204,15 @@ async function main(): Promise<void> {
   ) {
     if (pendingAxes === null) {
       await Promise.all([
-        runReviewAxis(
-          'review-standards',
-          'reviewer-standards',
-          pr.number,
-          [],
-          streamingWorkerExecutor('standards'),
-        ),
-        runReviewAxis(
-          'review-spec',
-          'reviewer-spec',
-          pr.number,
-          [],
-          streamingWorkerExecutor('spec'),
-        ),
+        runReviewAxis('review-standards', pr.number, [], streamingWorkerExecutor('standards')),
+        runReviewAxis('review-spec', pr.number, [], streamingWorkerExecutor('spec')),
       ]);
     } else {
       // Blocker 1 (PR #17): a reviewer published without its marker — retry
       // only the missing axis instead of demanding manual intervention.
       for (const axis of pendingAxes) {
         const worker = reviewAxisWorker(axis);
-        await runReviewAxis(
-          worker.command,
-          worker.agent,
-          pr.number,
-          [],
-          streamingWorkerExecutor(axis),
-        );
+        await runReviewAxis(worker.command, pr.number, [], streamingWorkerExecutor(axis));
         markerRetries[axis] += 1;
       }
       pendingAxes = null;
@@ -241,6 +243,7 @@ async function main(): Promise<void> {
       if (!pass) {
         console.error('REVIEW-CYCLE BLOCKED: quality gates failed for the reviewed HEAD.');
         process.exitCode = 1;
+        notifyTerminalBell(options.noBell);
         return;
       }
       // Blocker 2 (PR #17): confirm the PR still points at the reviewed HEAD
@@ -251,6 +254,7 @@ async function main(): Promise<void> {
           'REVIEW-CYCLE BLOCKED: the PR head moved away from the reviewed HEAD. Rerun npm run review:cycle.',
         );
         process.exitCode = 1;
+        notifyTerminalBell(options.noBell);
         return;
       }
       const repoSlug = await getRepoSlug();
@@ -274,10 +278,12 @@ async function main(): Promise<void> {
           'REVIEW-CYCLE BLOCKED: CI checks for the exact reviewed HEAD are not all successful.',
         );
         process.exitCode = 1;
+        notifyTerminalBell(options.noBell);
         return;
       }
       console.log('');
       console.log(formatReadySummary({ head, cycles, gates: 'PASS' }));
+      notifyTerminalBell(options.noBell);
       return;
     }
 
@@ -299,6 +305,7 @@ async function main(): Promise<void> {
       );
       console.error('Inspect the reviewer output on the PR; markers may be malformed.');
       process.exitCode = 1;
+      notifyTerminalBell(options.noBell);
       return;
     }
 
@@ -310,6 +317,7 @@ async function main(): Promise<void> {
         'Product, architecture, public-contract, infrastructure-provider, or security-policy decisions belong to planning — not to this loop. Stopping without code changes.',
       );
       process.exitCode = 2;
+      notifyTerminalBell(options.noBell);
       return;
     }
 
@@ -318,6 +326,7 @@ async function main(): Promise<void> {
         `REVIEW-CYCLE STOPPED: ${String(decision.cycles)} correction cycles reached the bound of ${String(decision.maxCycles)}. Escalating to a human.`,
       );
       process.exitCode = 1;
+      notifyTerminalBell(options.noBell);
       return;
     }
 
@@ -333,6 +342,7 @@ async function main(): Promise<void> {
         'REVIEW-CYCLE STOPPED: /address-review left HEAD unchanged while blocking findings remain. Escalating to a human.',
       );
       process.exitCode = 1;
+      notifyTerminalBell(options.noBell);
       return;
     }
     head = newHead;
@@ -343,6 +353,7 @@ async function main(): Promise<void> {
       if (!pushed.ok) {
         console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
         process.exitCode = 1;
+        notifyTerminalBell(options.noBell);
         return;
       }
       console.log(`Pushed correction commit via safe-push: origin/${pushed.branch} @ ${head}`);
@@ -350,4 +361,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Fatal-error boundary (final acceptance on PR #19): handled terminal paths
+// above return normally with their own notification, so this catch fires only
+// for unhandled rejections/exceptions such as a failed OpenCode worker. It
+// reports REVIEW-CYCLE FATAL, sets a non-zero exit code, and rings the bell
+// once per the TTY/CI/--no-bell policy — never twice for one terminal state.
+await runWithFatalBoundary(main, process.argv.slice(2));

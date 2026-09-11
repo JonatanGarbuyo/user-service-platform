@@ -25,6 +25,7 @@ prose.
 npm run review:cycle
 npm run review:cycle -- --max-cycles 3
 npm run review:cycle -- --pr 42 --no-push
+npm run review:cycle -- --no-bell
 ```
 
 Options:
@@ -33,6 +34,8 @@ Options:
 - `--pr <number|url>` reviews a PR other than the current branch's PR.
 - `--no-push` skips the safe-push after a correction commit (pushing is on by
   default so the PR tracks the corrected HEAD).
+- `--no-bell` disables the audible terminal notification for terminal states
+  (`--bell` re-enables it; the bell is on by default in interactive TTY use).
 
 A successful run ends with:
 
@@ -53,8 +56,9 @@ Cycles: <n>
    abort under `--no-push`). The loop never reviews a SHA the PR does not
    point at.
 2. Run both axes concurrently as `opencode run --auto` workers:
-   `/review-standards` with `reviewer-standards` (MiMo-V2.5) and
-   `/review-spec` with `reviewer-spec` (Nemotron 3 Ultra). Explicit `deny`
+   `/review-standards` (MiMo-V2.5) and `/review-spec` (Nemotron 3 Ultra). Each
+   custom command's frontmatter is the single source of truth for its
+   configured subagent/model, so no `--agent` flag is passed. Explicit `deny`
    rules remain effective under `--auto`. Workers stream stdout/stderr live
    with `[standards]`, `[spec]`, and `[address-review]` prefixes plus
    `started`/`completed`/`failed` lifecycle lines and a silence heartbeat,
@@ -109,6 +113,24 @@ operations. The only automated push path is the deterministic
 verifies the current branch is a ticket branch, the PR head matches it, the
 base is `main`, the worktree is clean, and the push cannot target `main`.
 It refuses otherwise and never merges.
+
+## Terminal notification and headless use
+
+Terminal states (`READY`, `NEEDS-DECISION`, and blocked/fatal stops) emit one
+audible notification only when stdout is an interactive TTY and the run
+is not in CI. The notification writes BEL as an always-on baseline and
+additionally plays a local sound where a supported mechanism exists
+(`afplay` on macOS, `paplay`/`aplay` with a system sound on Linux); sound
+playback is best-effort and never fails the cycle. CI and other non-TTY runs
+never emit bell control characters or play sounds.
+Pass `--no-bell` to disable the notification.
+
+Headless agents do not depend on interactive questions. Human-required
+decisions are surfaced as explicit escalation output (`NEEDS-DECISION`,
+`BLOCKED`, or `STOPPED` lines with a non-zero exit code) rather than hidden
+stdin prompts, so unattended runs can detect them without a terminal.
+An unhandled failure (for example a crashed review worker) surfaces as
+`REVIEW-CYCLE FATAL` with a non-zero exit code and the same bell policy.
 
 ## Unattended usage (OpenCode v1.18.x)
 

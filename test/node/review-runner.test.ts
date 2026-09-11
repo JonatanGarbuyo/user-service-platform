@@ -9,67 +9,67 @@ import {
 } from '../../scripts/review/runner.js';
 
 // Seam under test: deterministic worker-invocation and gate policy (PR #17
-// final acceptance blockers 1 and 5). Review workers must launch with
-// `opencode run --auto` (explicit deny rules still apply), and gate execution
-// order/fail-fast behavior must be pinned by tests, not prose.
+// final acceptance blockers 1 and 5, ticket #18 command ownership). Review
+// workers must launch with `opencode run --auto` without `--agent`: the command
+// frontmatter is the single source of truth for the configured subagent/model
+// ( Standards is MiMo, Spec is Nemotron), and gate execution order/fail-fast
+// behavior must be pinned by tests, not prose.
 describe('review worker invocation', () => {
-  it('launches the Standards reviewer with --auto and its pinned agent', () => {
-    expect(buildReviewAxisArgs('review-standards', 'reviewer-standards', 17)).toEqual([
+  it('launches the Standards reviewer without --agent (frontmatter owns the model)', () => {
+    expect(buildReviewAxisArgs('review-standards', 17)).toEqual([
       'run',
       '--auto',
-      '--agent',
-      'reviewer-standards',
       '--command',
       'review-standards',
       '17',
     ]);
   });
 
-  it('launches the Spec reviewer with --auto and its pinned agent', () => {
-    expect(buildReviewAxisArgs('review-spec', 'reviewer-spec', 17)).toEqual([
+  it('launches the Spec reviewer without --agent (frontmatter owns the model)', () => {
+    expect(buildReviewAxisArgs('review-spec', 17)).toEqual([
       'run',
       '--auto',
-      '--agent',
-      'reviewer-spec',
       '--command',
       'review-spec',
       '17',
     ]);
   });
 
-  it('launches /address-review with --auto through the implementer agent', () => {
+  it('never passes --agent for review workers', () => {
+    expect(buildReviewAxisArgs('review-standards', 17)).not.toContain('--agent');
+    expect(buildReviewAxisArgs('review-spec', 17)).not.toContain('--agent');
+    expect(buildAddressReviewArgs(17)).not.toContain('--agent');
+  });
+
+  it('launches /address-review with --auto and without --agent', () => {
     expect(buildAddressReviewArgs(17)).toEqual([
       'run',
       '--auto',
-      '--agent',
-      'implementer',
       '--command',
       'address-review',
       '17',
     ]);
   });
 
-  it('maps each axis to its pinned worker for targeted marker retries', () => {
+  it('maps each axis to its pinned worker command for targeted marker retries', () => {
     expect(reviewAxisWorker('standards')).toEqual({
       command: 'review-standards',
-      agent: 'reviewer-standards',
     });
     expect(reviewAxisWorker('spec')).toEqual({
       command: 'review-spec',
-      agent: 'reviewer-spec',
     });
   });
 
   it('executes the built worker command without touching subprocesses', async () => {
     const executor = vi.fn(() => Promise.resolve({ stdout: '', stderr: '' }));
 
-    await runReviewAxis('review-standards', 'reviewer-standards', 17, [], executor);
+    await runReviewAxis('review-standards', 17, [], executor);
     await runAddressReview(17, executor);
 
     expect(executor).toHaveBeenNthCalledWith(
       1,
       'opencode',
-      buildReviewAxisArgs('review-standards', 'reviewer-standards', 17),
+      buildReviewAxisArgs('review-standards', 17),
     );
     expect(executor).toHaveBeenNthCalledWith(2, 'opencode', buildAddressReviewArgs(17));
   });
