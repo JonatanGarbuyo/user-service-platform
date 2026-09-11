@@ -37,6 +37,7 @@ export interface PrInfo {
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
+  url?: string;
 }
 
 interface GhPrView {
@@ -44,6 +45,7 @@ interface GhPrView {
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
+  url?: unknown;
 }
 
 export async function getPrForBranch(
@@ -52,8 +54,8 @@ export async function getPrForBranch(
 ): Promise<PrInfo> {
   const args =
     prArg !== undefined
-      ? ['pr', 'view', prArg, '--json', 'number,headRefName,baseRefName,headRefOid']
-      : ['pr', 'view', '--json', 'number,headRefName,baseRefName,headRefOid'];
+      ? ['pr', 'view', prArg, '--json', 'number,headRefName,baseRefName,headRefOid,url']
+      : ['pr', 'view', '--json', 'number,headRefName,baseRefName,headRefOid,url'];
   const { stdout } = await execute('gh', args);
   const parsed = JSON.parse(stdout) as GhPrView;
   return {
@@ -61,6 +63,7 @@ export async function getPrForBranch(
     headRefName: parsed.headRefName,
     baseRefName: parsed.baseRefName,
     headRefOid: parsed.headRefOid,
+    ...(typeof parsed.url === 'string' ? { url: parsed.url } : {}),
   };
 }
 
