@@ -1,4 +1,5 @@
 import { notifyTerminalBell } from './review/bell.js';
+import { parseNoBellFlag, runWithFatalBoundary } from './review/fatal.js';
 import {
   DEFAULT_MAX_CORRECTION_CYCLES,
   DEFAULT_MAX_MARKER_RETRIES,
@@ -136,7 +137,7 @@ async function main(): Promise<void> {
       'usage: review-cycle [--max-cycles N] [--pr <number|url>] [--no-push|--push] [--no-bell|--bell]',
     );
     process.exitCode = 1;
-    notifyTerminalBell(process.argv.includes('--no-bell'));
+    notifyTerminalBell(parseNoBellFlag(process.argv.slice(2)));
     return;
   }
 
@@ -360,4 +361,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+// Fatal-error boundary (final acceptance on PR #19): handled terminal paths
+// above return normally with their own notification, so this catch fires only
+// for unhandled rejections/exceptions such as a failed OpenCode worker. It
+// reports REVIEW-CYCLE FATAL, sets a non-zero exit code, and rings the bell
+// once per the TTY/CI/--no-bell policy — never twice for one terminal state.
+await runWithFatalBoundary(main, process.argv.slice(2));

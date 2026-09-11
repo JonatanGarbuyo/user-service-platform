@@ -125,6 +125,8 @@ Headless agents do not depend on interactive questions. Human-required
 decisions are surfaced as explicit escalation output (`NEEDS-DECISION`,
 `BLOCKED`, or `STOPPED` lines with a non-zero exit code) rather than hidden
 stdin prompts, so unattended runs can detect them without a terminal.
+An unhandled failure (for example a crashed review worker) surfaces as
+`REVIEW-CYCLE FATAL` with a non-zero exit code and the same bell policy.
 
 ## Unattended usage (OpenCode v1.18.x)
 
