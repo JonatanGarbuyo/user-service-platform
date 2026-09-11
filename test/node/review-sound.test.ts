@@ -11,11 +11,12 @@ import {
 } from '../../scripts/review/bell.js';
 
 // Seam under test: platform-aware audible notification (final acceptance
-// follow-up on PR #19). BEL alone is terminal-emulator dependent, so terminal
-// states additionally play a local sound where a supported mechanism exists,
-// keeping BEL as the baseline. Policy (--no-bell, CI, non-TTY silence),
-// best-effort playback (never fails the cycle), and selection/fallback are
-// all deterministic without real audio hardware via injected seams.
+// follow-up on PR #19, desktop notification sound on ticket #25). BEL alone
+// is terminal-emulator dependent, so terminal states additionally play a
+// local sound where a supported mechanism exists, keeping BEL as the
+// baseline. Policy (--no-bell, CI, non-TTY silence), best-effort playback
+// (never fails the cycle), and selection/fallback are all deterministic
+// without real audio hardware via injected seams.
 describe('audible sound selection', () => {
   const yes = () => true;
   const no = () => false;
@@ -35,6 +36,20 @@ describe('audible sound selection', () => {
     expect(selectSoundSpec('darwin', no, yes)).toBeNull();
   });
 
+  it('selects the desktop-theme notification sound on Linux when available', () => {
+    expect(selectSoundSpec('linux', no, (cmd) => cmd === 'canberra-gtk-play')).toEqual({
+      command: 'canberra-gtk-play',
+      args: ['--id=complete', '--description=Review cycle complete'],
+    });
+  });
+
+  it('prefers the desktop-theme sound over paplay when both are available', () => {
+    expect(selectSoundSpec('linux', yes, yes)).toEqual({
+      command: 'canberra-gtk-play',
+      args: ['--id=complete', '--description=Review cycle complete'],
+    });
+  });
+
   it('selects paplay with the freedesktop sound on Linux when available', () => {
     expect(
       selectSoundSpec(
@@ -48,17 +63,34 @@ describe('audible sound selection', () => {
     });
   });
 
-  it('tries aplay as a Linux fallback when paplay is unavailable', () => {
+  it('falls back to BEL-only on Linux when only ALSA channel-test audio exists', () => {
     expect(
       selectSoundSpec(
         'linux',
         (file) => file.endsWith('.wav'),
         (cmd) => cmd === 'aplay',
       ),
-    ).toEqual({
-      command: 'aplay',
-      args: ['/usr/share/sounds/alsa/Front_Center.wav'],
-    });
+    ).toBeNull();
+  });
+
+  it('never selects ALSA channel-test samples on Linux', () => {
+    const candidates: {
+      exists: (file: string) => boolean;
+      canRun: (cmd: string) => boolean;
+    }[] = [
+      { exists: () => true, canRun: () => true },
+      { exists: (file) => file.includes('alsa'), canRun: (cmd) => cmd === 'aplay' },
+      {
+        exists: (file) => file.endsWith('Front_Center.wav'),
+        canRun: () => true,
+      },
+    ];
+    for (const { exists, canRun } of candidates) {
+      const spec = selectSoundSpec('linux', exists, canRun);
+      const serialized = JSON.stringify(spec);
+      expect(serialized).not.toContain('Front_Center.wav');
+      expect(serialized).not.toContain('/alsa/');
+    }
   });
 
   it('falls back to BEL-only on Linux without any supported player/sound', () => {

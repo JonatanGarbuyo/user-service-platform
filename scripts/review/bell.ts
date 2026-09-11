@@ -59,7 +59,7 @@ export interface SoundSpec {
 
 const MACOS_SOUND = '/System/Library/Sounds/Glass.aiff';
 const LINUX_PAPLAY_SOUND = '/usr/share/sounds/freedesktop/stereo/complete.oga';
-const LINUX_APLAY_SOUND = '/usr/share/sounds/alsa/Front_Center.wav';
+const LINUX_CANBERRA_ARGS = ['--id=complete', '--description=Review cycle complete'] as const;
 
 export type FileExists = (filePath: string) => boolean;
 export type CommandAvailable = (command: string) => boolean;
@@ -76,11 +76,11 @@ export function selectSoundSpec(
     return null;
   }
   if (platform === 'linux') {
+    if (canRun('canberra-gtk-play')) {
+      return { command: 'canberra-gtk-play', args: [...LINUX_CANBERRA_ARGS] };
+    }
     if (canRun('paplay') && exists(LINUX_PAPLAY_SOUND)) {
       return { command: 'paplay', args: [LINUX_PAPLAY_SOUND] };
-    }
-    if (canRun('aplay') && exists(LINUX_APLAY_SOUND)) {
-      return { command: 'aplay', args: [LINUX_APLAY_SOUND] };
     }
     return null;
   }
