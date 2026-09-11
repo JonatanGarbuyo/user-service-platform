@@ -10,8 +10,8 @@ Resolve the pull request from `$ARGUMENTS` when supplied; otherwise resolve the 
 
 Run only the Spec axis: missing or partial requirements, incorrect implementation, contradictions, and scope creep. Reference the exact ticket/spec requirement for each finding. Do not modify code.
 
-Publish the final report as a top-level comment on that pull request via `gh pr comment`. Begin with `## Spec review — Nemotron 3 Ultra` and include `Reviewed HEAD: <sha>`. End the comment with exactly one machine-readable marker line so deterministic orchestration never infers pass/fail from prose:
+Publish the final report as a top-level comment on that pull request via `gh pr comment`. Begin with `## Spec review — Nemotron 3.5 Lightning` and include `Reviewed HEAD: <sha>`. End the comment with exactly one machine-readable marker line so deterministic orchestration never infers pass/fail from prose:
 
-`<!-- review-result: axis=spec model=nemotron-3-ultra head=<sha> result=PASS|FAIL|NEEDS-DECISION -->`
+`<!-- review-result: axis=spec model=nemotron-3.5-lightning head=<sha> result=PASS|FAIL|NEEDS-DECISION -->`
 
 Use `PASS` when there are no blocking findings for the reviewed HEAD, `FAIL` when valid blocking findings require an in-scope code correction, and `NEEDS-DECISION` when a finding requires a product, architecture, public-contract, infrastructure-provider, or security-policy decision. The `head` must be the exact reviewed HEAD SHA. If publication fails, preserve the complete report in your response and report the publication error.
