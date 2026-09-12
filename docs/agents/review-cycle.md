@@ -43,7 +43,7 @@ A successful run ends with:
 READY FOR FINAL ACCEPTANCE
 HEAD: <sha>
 Standards: PASS — MiMo
-Spec: PASS — DeepSeek
+Spec: PASS — North Mini
 CI/local gates: PASS
 Cycles: <n>
 ```
@@ -56,7 +56,7 @@ Cycles: <n>
    abort under `--no-push`). The loop never reviews a SHA the PR does not
    point at.
 2. Run both axes concurrently as `opencode run --auto` workers:
-   `/review-standards` (MiMo-V2.5) and `/review-spec` (DeepSeek V4 Flash Free). Each
+   `/review-standards` (MiMo-V2.5) and `/review-spec` (North Mini Code Free). Each
    custom command's frontmatter is the single source of truth for its
    configured subagent/model, so no `--agent` flag is passed. Explicit `deny`
    rules remain effective under `--auto`. Workers stream stdout/stderr live
@@ -66,7 +66,7 @@ Cycles: <n>
    commands stay on the buffered path.
 3. Collect PR comments and keep only the latest machine-readable marker per
    axis for the exact current HEAD SHA, and only from the configured model
-   family for that axis (Standards is MiMo, Spec is DeepSeek). Stale markers
+   family for that axis (Standards is MiMo, Spec is North Mini). Stale markers
    from older HEADs are ignored when a newer report for that axis exists.
    Results are never inferred from prose: if an axis published without its
    marker, only that axis's worker is retried (bounded to 2 attempts per
@@ -95,7 +95,7 @@ Each review report ends with exactly one marker line:
 
 ```text
 <!-- review-result: axis=standards model=mimo-v2.5 head=<sha> result=PASS|FAIL|NEEDS-DECISION -->
-<!-- review-result: axis=spec model=deepseek-v4-flash-free head=<sha> result=PASS|FAIL|NEEDS-DECISION -->
+<!-- review-result: axis=spec model=north-mini-code-free head=<sha> result=PASS|FAIL|NEEDS-DECISION -->
 ```
 
 `PASS` means no blocking findings for the reviewed HEAD, `FAIL` means valid

@@ -113,7 +113,7 @@ export interface ReviewAxisWorker {
 // only the axis missing its marker is relaunched, the other is left alone.
 // The command frontmatter is the single source of truth for the configured
 // subagent/model (ticket #18): Standards resolves to MiMo-V2.5 via
-// `reviewer-standards`, Spec resolves to DeepSeek V4 Flash Free via
+// `reviewer-standards`, Spec resolves to North Mini Code Free via
 // `reviewer-spec`. Callers must not pass `--agent`.
 export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
   if (axis === 'standards') {

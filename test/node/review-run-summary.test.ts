@@ -49,7 +49,7 @@ describe('review run summary timing accumulation', () => {
       axis: 'spec',
       attempt: 1,
       durationMs: 2000,
-      model: 'deepseek-v4-flash-free',
+      model: 'north-mini-code-free',
       result: 'FAIL',
     });
     expect(summary.outcome).toBe('BLOCKED');
