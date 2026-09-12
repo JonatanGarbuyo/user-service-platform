@@ -80,7 +80,7 @@ export function formatReadySummary(options: {
     'READY FOR FINAL ACCEPTANCE',
     `HEAD: ${options.head}`,
     'Standards: PASS — MiMo',
-    'Spec: PASS — North Mini',
+    'Spec: PASS — Muse Spark',
     `CI/local gates: ${options.gates}`,
     `Cycles: ${String(options.cycles)}`,
   ].join('\n');

@@ -20,16 +20,21 @@ describe('review result marker', () => {
   it('round-trips a spec FAIL marker without inferring from prose', () => {
     const head = 'b'.repeat(40);
     const body = [
-      '## Spec review — North Mini Code Free',
+      '## Spec review — Muse Spark 1.3 Contributor Free',
       'Reviewed HEAD: ' + head,
       'This prose claims everything passes but the marker rules.',
-      formatReviewMarker({ axis: 'spec', model: 'north-mini-code-free', head, result: 'FAIL' }),
+      formatReviewMarker({
+        axis: 'spec',
+        model: 'muse-spark-1.3-contributor-free',
+        head,
+        result: 'FAIL',
+      }),
     ].join('\n');
 
     const markers = parseReviewMarkers(body);
 
     expect(markers).toEqual([
-      { axis: 'spec', model: 'north-mini-code-free', head, result: 'FAIL' },
+      { axis: 'spec', model: 'muse-spark-1.3-contributor-free', head, result: 'FAIL' },
     ]);
   });
 
@@ -62,7 +67,7 @@ describe('review result marker', () => {
       {
         body: formatReviewMarker({
           axis: 'spec',
-          model: 'north-mini-code-free',
+          model: 'muse-spark-1.3-contributor-free',
           head: oldHead,
           result: 'PASS',
         }),
@@ -102,7 +107,7 @@ describe('review result marker', () => {
     expect(selectCurrentHeadReports(comments, currentHead)).toEqual({});
   });
 
-  it('rejects stale Nemotron and DeepSeek spec markers once the axis requires North', () => {
+  it('rejects stale Nemotron, DeepSeek and North spec markers once the axis requires Muse Spark', () => {
     const currentHead = '4'.repeat(40);
     const comments = [
       {
@@ -132,18 +137,27 @@ describe('review result marker', () => {
         }),
         createdAt: '2026-01-06T02:00:00Z',
       },
+      {
+        body: formatReviewMarker({
+          axis: 'spec',
+          model: 'north-mini-code-free',
+          head: currentHead,
+          result: 'PASS',
+        }),
+        createdAt: '2026-01-06T03:00:00Z',
+      },
     ];
 
     expect(selectCurrentHeadReports(comments, currentHead)).toEqual({});
   });
 
-  it('accepts the North spec marker for the current HEAD', () => {
+  it('accepts the Muse Spark spec marker for the current HEAD', () => {
     const currentHead = '5'.repeat(40);
     const comments = [
       {
         body: formatReviewMarker({
           axis: 'spec',
-          model: 'north-mini-code-free',
+          model: 'muse-spark-1.3-contributor-free',
           head: currentHead,
           result: 'PASS',
         }),
@@ -152,7 +166,7 @@ describe('review result marker', () => {
     ];
 
     expect(selectCurrentHeadReports(comments, currentHead).spec).toMatchObject({
-      model: 'north-mini-code-free',
+      model: 'muse-spark-1.3-contributor-free',
       result: 'PASS',
     });
   });
