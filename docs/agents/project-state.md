@@ -181,19 +181,6 @@ The comment text is a fixed trigger for repository-owned workflows, never arbitr
 
 After issue #31 is accepted, this remote GitHub path becomes the default implementation/correction path. Local OpenCode is the fallback/debug path.
 
-### Trusted workflow-file publication
-
-Issue #36 establishes the accepted policy for changes under `.github/workflows/**`:
-
-- ordinary agent/model processes never receive broad workflow-write credentials;
-- agents may prepare and test workflow-file corrections locally;
-- repository-owned orchestration must detect workflow-file changes before an ordinary push attempt;
-- such corrections stop at a durable trusted-publication handoff with patch/evidence and exact base/head metadata;
-- a trusted human or ChatGPT GitHub operation publishes the reviewed workflow change;
-- exact-HEAD review and CI resume only after that trusted publication.
-
-A dedicated privileged publisher may be considered later only behind a narrow trusted boundary and explicit approval. It is not the current default.
-
 ## Immediate tooling blockers before #11 remote dogfood
 
 Issue #31 (`Add event-driven status and watchdogs to remote agent runs`) and PR #34 are not yet accepted.
@@ -202,7 +189,7 @@ Final acceptance found a real completed-stage observability gap. A subsequent `/
 
 The failure is now confirmed from Actions logs: GitHub rejected the push because the correction modifies `.github/workflows/agent-fix-cycle.yml` and the workflow's GitHub App/token lacks permission to create/update workflow files. This is a security/automation-boundary problem, not a safe-push branch-validation failure.
 
-Issue #36 now defines the accepted trusted-handoff policy for this class of change. Implement that policy and use a trusted publication step to recover/publish the #34 correction; do not broaden the model process credential.
+Do not solve this by exposing a broad PAT or unrestricted workflow-write credential to the model process. The workflow-file mutation path needs an explicit least-privilege design before remote correction can be considered complete.
 
 Do not launch #11 through remote dogfood until #31/#34 are corrected, reviewed on the corrected exact HEAD, accepted, and merged/closed as appropriate.
 
