@@ -8,10 +8,12 @@ import { createIdentityRouter, type IdentityRouterOptions } from './router.js';
 export { createIdentityRouter };
 export type { IdentityRouterOptions };
 export type {
+  CurrentUser,
   LoginRequest,
   LoginResult,
   RegisterRequest,
   RegisteredUser,
+  SignOutResult,
   VerifyEmailRequest,
   VerifyEmailResult,
 } from './contract.js';
@@ -19,3 +21,5 @@ export type { AuthMailer, VerificationMessage } from './mailer.js';
 export { InMemoryAuthMailer } from './mailer.js';
 export type { AuthPolicy } from './policy.js';
 export { DEFAULT_AUTH_POLICY, resolveAuthPolicy } from './policy.js';
+export type { AuthenticatedUser, ResolveSessionInput, SessionContext } from './session.js';
+export { resolveSessionContext, toAuthenticatedUser, toSessionContext } from './session.js';

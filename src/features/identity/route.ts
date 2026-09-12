@@ -1,12 +1,14 @@
 import { createRoute } from '@hono/zod-openapi';
 import { ProblemDetailsSchema } from '../../shared/problem.js';
 import {
+  CurrentUserSchema,
   LoginRequestSchema,
   LoginResultSchema,
   RegisterRequestSchema,
   RegisteredUserSchema,
   RequestVerificationRequestSchema,
   RequestVerificationResultSchema,
+  SignOutResultSchema,
   VerifyEmailRequestSchema,
   VerifyEmailResultSchema,
 } from './contract.js';
@@ -117,5 +119,42 @@ export const requestVerificationRoute = createRoute({
       description: 'The request was accepted.',
     },
     ...problemResponses('Request failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const currentUserRoute = createRoute({
+  method: 'get',
+  path: '/me',
+  operationId: 'getCurrentUser',
+  summary: 'Resolve the current User',
+  description:
+    'Returns the stable application-owned current-User representation for ' +
+    'the session carried by the request cookies. Anonymous or invalid ' +
+    'sessions receive the standard unauthenticated Problem Details response.',
+  tags: ['identity'],
+  responses: {
+    200: {
+      content: { 'application/json': { schema: CurrentUserSchema } },
+      description: 'The authenticated current User.',
+    },
+    ...problemResponses('Authentication failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const signOutRoute = createRoute({
+  method: 'post',
+  path: '/auth/sign-out',
+  operationId: 'signOutIdentity',
+  summary: 'Invalidate the current session',
+  description:
+    'Invalidates the session carried by the request cookies. Subsequent ' +
+    'authenticated-only requests with that session no longer resolve a User.',
+  tags: ['identity'],
+  responses: {
+    200: {
+      content: { 'application/json': { schema: SignOutResultSchema } },
+      description: 'The session was invalidated.',
+    },
+    ...problemResponses('Sign-out failure as RFC 9457 Problem Details.'),
   },
 });

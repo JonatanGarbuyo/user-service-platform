@@ -62,6 +62,58 @@ describe('generated OpenAPI artifact', () => {
     );
   });
 
+  it('describes the current-User and sign-out operations (ticket #11)', async () => {
+    const raw = await readFile(artifactPath, 'utf8');
+    const document = JSON.parse(raw) as {
+      components: {
+        schemas: Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
+      };
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            operationId?: string;
+            responses?: Record<
+              string,
+              { content?: Record<string, { schema?: { $ref?: string } }> }
+            >;
+          }
+        >
+      >;
+    };
+
+    expect(document.paths['/v1/me']?.get?.operationId).toBe('getCurrentUser');
+    expect(document.paths['/v1/auth/sign-out']?.post?.operationId).toBe('signOutIdentity');
+
+    // Application-owned success contracts without server-implementation refs.
+    expect(
+      document.paths['/v1/me']?.get?.responses?.['200']?.content?.['application/json']?.schema
+        ?.$ref,
+    ).toBe('#/components/schemas/CurrentUser');
+    expect(
+      document.paths['/v1/auth/sign-out']?.post?.responses?.['200']?.content?.['application/json']
+        ?.schema?.$ref,
+    ).toBe('#/components/schemas/SignOutResult');
+
+    // Error contracts stay on the shared Problem Details envelope.
+    expect(
+      document.paths['/v1/me']?.get?.responses?.default?.content?.['application/problem+json']
+        ?.schema?.$ref,
+    ).toBe('#/components/schemas/ProblemDetails');
+
+    // The current-User representation exposes only stable identity fields.
+    expect(document.components.schemas.CurrentUser?.required).toEqual([
+      'id',
+      'email',
+      'emailVerified',
+    ]);
+    const serialized = JSON.stringify(document.components.schemas.CurrentUser);
+    expect(serialized).not.toContain('password');
+    expect(serialized).not.toContain('token');
+    expect(serialized).not.toContain('session');
+  });
+
   it('regenerates byte-identically from source contracts', async () => {
     const raw = await readFile(artifactPath, 'utf8');
     const regenerated = `${JSON.stringify(createApp().getOpenAPI31Document(openApiConfig), null, 2)}\n`;

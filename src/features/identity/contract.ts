@@ -78,9 +78,25 @@ export const RequestVerificationResultSchema = z
   })
   .openapi('RequestVerificationResult');
 
+export const CurrentUserSchema = z
+  .object({
+    id: z.string().openapi({ example: 'abc123' }),
+    email: emailField,
+    emailVerified: z.boolean().openapi({ example: true }),
+  })
+  .openapi('CurrentUser');
+
+export const SignOutResultSchema = z
+  .object({
+    status: z.literal('ok').openapi({ example: 'ok' }),
+  })
+  .openapi('SignOutResult');
+
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
 export type RegisteredUser = z.infer<typeof RegisteredUserSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
 export type LoginResult = z.infer<typeof LoginResultSchema>;
 export type VerifyEmailRequest = z.infer<typeof VerifyEmailRequestSchema>;
 export type VerifyEmailResult = z.infer<typeof VerifyEmailResultSchema>;
+export type CurrentUser = z.infer<typeof CurrentUserSchema>;
+export type SignOutResult = z.infer<typeof SignOutResultSchema>;
