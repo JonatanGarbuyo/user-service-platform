@@ -223,14 +223,34 @@ describe('agent workflow contracts', () => {
     },
   );
 
-  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml', 'approve-agent-ci.yml', 'ci.yml'])(
     'pins third-party actions on %s instead of mutable refs',
     (name) => {
       const workflow = readWorkflow(name);
 
-      expect(workflow).toMatch(/actions\/checkout@v4/);
-      expect(workflow).toMatch(/actions\/setup-node@v4/);
+      expect(workflow).toMatch(/actions\/checkout@v7/);
+      expect(workflow).toMatch(/actions\/setup-node@v7/);
+      expect(workflow).not.toMatch(/actions\/(checkout|setup-node|upload-artifact)@v[456]/);
       expect(workflow).not.toMatch(/@main|@master/);
+    },
+  );
+
+  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+    'pins upload-artifact to the maintained line on %s',
+    (name) => {
+      const workflow = readWorkflow(name);
+
+      expect(workflow).toMatch(/actions\/upload-artifact@v7/);
+    },
+  );
+
+  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml', 'approve-agent-ci.yml', 'ci.yml'])(
+    'resolves the Node baseline from .nvmrc on %s',
+    (name) => {
+      const workflow = readWorkflow(name);
+
+      expect(workflow).toMatch(/node-version-file:\s*'.nvmrc'/);
+      expect(workflow).not.toMatch(/node-version:\s*'/);
     },
   );
 
