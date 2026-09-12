@@ -16,6 +16,14 @@ Use the default Matt Pocock triage vocabulary: `needs-triage`, `needs-info`, `re
 
 This is a single-context repository. Read `CONTEXT.md` and relevant ADRs under `docs/adr/` before changing code. See `docs/agents/domain.md`.
 
+### Session checkpoint
+
+Read `docs/agents/project-state.md` at the start of a fresh substantial planning/implementation session and reconcile it before ending a long planning/orchestration session. It is an operational handoff, not a replacement for live GitHub state, ADRs, specs, or tickets.
+
+### Project-local skills
+
+When a workflow names a project-local skill under `.agents/skills/`, read that skill before using it. Do not reconstruct Wayfinder/spec/ticket/implementation behavior from model memory.
+
 ### OpenCode implementation
 
 When OpenCode is used as the implementation harness, follow `docs/agents/opencode.md`. Implementation agents work only from approved `ready-for-agent` implementation tickets, one isolated ticket branch/worktree at a time.

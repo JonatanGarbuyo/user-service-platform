@@ -8,15 +8,9 @@ The Matt Pocock skills are committed project-locally under `.agents/skills/`. Op
 
 Connect OpenCode Zen locally with `/connect`, then verify the configured models appear in `/models`.
 
-The repository defines three dedicated agents:
+The repository defines dedicated agents for implementation/correction, Standards review, and Spec review. Their concrete model assignments are operational configuration and may change; read `.opencode/agents/*.md` and `.opencode/commands/*.md` rather than copying model names into durable project-state snapshots.
 
-```text
-implementer          -> opencode/muse-spark-1.3-contributor-free
-reviewer-standards   -> opencode/mimo-v2.5-free
-reviewer-spec        -> opencode/muse-spark-1.3-contributor-free
-```
-
-`/implement` and `/address-review` are wired to `implementer`. `/review-standards` and `/review-spec` run as subagents so both review axes have independent context and different model families.
+`/implement` and `/address-review` use the configured implementation/correction agent. `/review-standards` and `/review-spec` run as separate reviewer executions so both review axes retain independent context and responsibilities even if model assignments change.
 
 ## Working-directory and path discipline
 
@@ -54,7 +48,7 @@ A shell deny-list cannot prevent every equivalent side effect reachable through 
 
 ## Model data boundary
 
-The free models used by these agents are third-party/limited-time models provided through OpenCode Zen. Treat their execution environment as untrusted for secrets and production/customer data.
+Free/third-party models available through OpenCode Zen must be treated as untrusted for secrets and production/customer data regardless of current model assignment.
 
 - Never expose production credentials, API keys, customer data, `.env` files, or `.dev.vars` to these agents.
 - Do not rely solely on OpenCode permission rules as a secret boundary when an agent has shell access.
@@ -65,10 +59,12 @@ The free models used by these agents are third-party/limited-time models provide
 Before implementation or review, read:
 
 1. `AGENTS.md`.
-2. `CONTEXT.md`.
-3. The implementation ticket in full, including comments.
-4. Its parent spec.
-5. Relevant ADRs referenced by the ticket/spec.
+2. `docs/agents/project-state.md`.
+3. `CONTEXT.md`.
+4. The implementation ticket in full, including comments.
+5. Its parent spec.
+6. Relevant ADRs referenced by the ticket/spec.
+7. The live `.opencode/agents/*` / `.opencode/commands/*` configuration for the current agent/model assignment.
 
 A chat transcript is not stronger authority than these artifacts.
 
@@ -88,37 +84,24 @@ The PR should reference the implementation ticket and parent spec. Review findin
 
 ## Dual adversarial review gate
 
-Every implementation ticket must pass two independent read-only reviews before final acceptance:
+Every implementation ticket must pass two independent read-only review axes before final acceptance:
 
-1. **Standards — MiMo-V2.5 Free**: repository rules, architecture conventions, maintainability, and the repository-pinned code-review skill's smell baseline.
-2. **Spec — Muse Spark 1.3 Contributor Free**: missing/incorrect requirements and scope creep against the implementation ticket and parent spec.
+1. **Standards**: repository rules, architecture conventions, maintainability, and the repository-pinned code-review skill's smell baseline.
+2. **Spec**: missing/incorrect requirements and scope creep against the implementation ticket and parent spec.
 
-From the implementation branch with an open PR, run:
+Run the configured `/review-standards` and `/review-spec` commands from a branch with an open PR. The command/agent configuration is the source of truth for which model currently owns each axis.
 
-```text
-/review-standards
-/review-spec
-```
+Each reviewer resolves the PR base as its fixed point and publishes one top-level PR comment. Every report includes its axis and the exact reviewed HEAD SHA so stale reviews are visible after subsequent commits.
 
-Optionally pass a PR number or URL when reviewing something other than the current branch's PR.
+The findings remain separate; do not let one axis cancel or rerank the other. Material findings go back to the implementation/correction agent or human reviewer. After corrections, rerun both reviews from fresh contexts and publish new SHA-stamped reports.
 
-Each reviewer resolves the PR base as its fixed point and publishes one top-level PR comment through GitHub CLI. Every report includes its axis/model and the exact reviewed HEAD SHA so stale reviews are visible after subsequent commits.
-
-The findings remain separate; do not let one axis cancel or rerank the other. Material findings go back to the implementer or human reviewer. After corrections, rerun both reviews from fresh contexts and publish new SHA-stamped reports.
-
-Final acceptance can then inspect the PR diff, CI and both review comments directly from GitHub; no manual copy/paste into chat is required.
+Final acceptance inspects the PR diff, CI and both review comments directly from GitHub; no manual copy/paste into chat is required.
 
 ## Addressing review findings
 
-After final acceptance or adversarial review requests changes, run:
+After final acceptance or adversarial review requests changes, run the configured `/address-review` workflow for the PR. It reads the latest Standards, Spec, and final acceptance comments, respects later dispositions such as rejected false positives, fixes only clearly valid in-scope findings, runs quality gates, and commits the fixes locally. It does not merge or deploy.
 
-```text
-/address-review
-```
-
-Optionally pass a PR number or URL. The command resolves the current PR, reads the latest Standards, Spec, and final acceptance comments, respects later dispositions such as rejected false positives, fixes only clearly valid in-scope findings, runs the quality gates, and commits the fixes locally. It does not push or merge.
-
-After pushing that new commit, rerun the two adversarial reviewers so their reports are stamped against the new HEAD.
+After publishing a correction, rerun both adversarial reviews so their reports are stamped against the new HEAD.
 
 ## Decision boundary
 
@@ -126,26 +109,12 @@ Implementation agents may choose local details that do not alter public contract
 
 ## Unattended execution safety
 
-The implementer may commit locally on its isolated ticket branch but may not deploy, publish, merge, mutate production infrastructure, or change secrets. Publishing the implementation branch and opening a draft PR are deliberate developer/harness operations. Both review agents are otherwise read-only; their only GitHub write permission is publishing their review report as a PR comment.
+The implementation/correction agent may commit on an isolated ticket branch but may not deploy, publish, merge, mutate production infrastructure, or change secrets. Reviewer agents are read-only except for publishing review evidence to the PR.
+
+Repository-owned remote workflows may perform narrowly validated branch publication through deterministic guards. They must not expose generic push, workflow-write, merge, deploy, publish, or secret-mutation capabilities to the model process.
 
 ## Current implementation frontier
 
-The parent specification is GitHub issue #8: `Spec: Foundation and verified-email identity walking skeleton`.
+Do not hardcode a product frontier in this process document. Read `docs/agents/project-state.md` for the last verified checkpoint, then confirm it against live GitHub issue/PR state before launching work.
 
-Approved implementation tickets are #9 through #14. The current frontier contains only #9: `Serve a contract-tested Worker health endpoint`.
-
-Current sequence:
-
-```text
-/implement JonatanGarbuyo/user-service-platform#9
-# push branch + open draft PR
-/review-standards
-/review-spec
-# final acceptance reads PR + CI + both comments
-/address-review
-# push fixes
-/review-standards
-/review-spec
-```
-
-Do not start #10 until #9 is implemented, both review axes have completed, material findings are resolved, and final acceptance is complete.
+After issue #31 is accepted, GitHub-triggered `/agent-ticket` and `/agent-fix-cycle` are the default execution path. Local OpenCode remains the fallback/debug path.
