@@ -818,7 +818,7 @@ export async function runAgentTicket(
     });
     let patch: string;
     try {
-      patch = await getWorkflowPatch(execute, originHead, headAfter, workflowFiles);
+      patch = await getWorkflowPatch(execute, originHead, headAfter);
     } catch (error) {
       patch = `# workflow handoff patch unavailable: ${errorMessage(error)}\n`;
     }

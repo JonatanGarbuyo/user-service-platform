@@ -54,9 +54,12 @@ Node seam, never in model-authored logic:
 
 A blocked handoff leaves, under `.agent-ticket/`:
 
-- `workflow-handoff.patch` — the workflow-file diff for the exact range.
-- `workflow-handoff.json` — version, branch, exact base/head SHAs, touched
-  files, patch path, and the `trusted-publication-required` reason.
+- `workflow-handoff.patch` — the full correction diff for the exact range
+  (workflow files plus any accompanying scripts/tests/docs), so the trusted
+  publisher never needs to reconstruct non-workflow changes from runner logs.
+- `workflow-handoff.json` — version, branch, exact base/head SHAs, the
+  workflow files that triggered handoff, patch path, and the
+  `trusted-publication-required` reason.
 
 Remote workflows upload this bundle as run artifacts alongside
 `.review-cycle/latest.json` (and `.agent-ticket/outcome.json` for

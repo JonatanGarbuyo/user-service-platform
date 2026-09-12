@@ -75,16 +75,11 @@ describe('workflow handoff commands and evidence', () => {
     ]);
   });
 
-  it('builds a deterministic patch diff for the touched workflow files', () => {
-    expect(
-      buildWorkflowPatchArgs(base, head, ['.github/workflows/a.yml', '.github/workflows/b.yml']),
-    ).toEqual([
-      'diff',
-      `${base}...${head}`,
-      '--',
-      '.github/workflows/a.yml',
-      '.github/workflows/b.yml',
-    ]);
+  it('builds a deterministic patch diff preserving the full correction', () => {
+    // The handoff bundle must reproduce the complete correction, not just
+    // the workflow files, while the record files list still identifies the
+    // workflow files that triggered trusted handoff.
+    expect(buildWorkflowPatchArgs(base, head)).toEqual(['diff', `${base}...${head}`, '--']);
   });
 
   it('marks the handoff reason as trusted-publication-required with file names', () => {
@@ -184,8 +179,13 @@ describe('agent:ticket workflow handoff at the push stage', () => {
       if (key === `git diff --name-only ${MAIN_HEAD}...${NEXT_HEAD} -- .github/workflows/`) {
         return Promise.resolve({ stdout: `${WORKFLOW_FILE}\n`, stderr: '' });
       }
-      if (key === `git diff ${MAIN_HEAD}...${NEXT_HEAD} -- ${WORKFLOW_FILE}`) {
-        return Promise.resolve({ stdout: 'diff --git a/b b/b\n', stderr: '' });
+      if (key === `git diff ${MAIN_HEAD}...${NEXT_HEAD} --`) {
+        return Promise.resolve({
+          stdout:
+            'diff --git a/.github/workflows/agent-fix-cycle.yml b/.github/workflows/agent-fix-cycle.yml\n' +
+            'diff --git a/scripts/x.ts b/scripts/x.ts\n',
+          stderr: '',
+        });
       }
       if (key.startsWith('git push')) {
         captured.pushes.push(key);
@@ -254,7 +254,10 @@ describe('agent:ticket workflow handoff at the push stage', () => {
       head: NEXT_HEAD,
       files: [WORKFLOW_FILE],
     });
-    expect(captured.handoffs[0]?.patch).toContain('diff --git');
+    expect(captured.handoffs[0]?.patch).toContain(
+      'diff --git a/.github/workflows/agent-fix-cycle.yml',
+    );
+    expect(captured.handoffs[0]?.patch).toContain('diff --git a/scripts/x.ts');
     expect(captured.outcomes).toHaveLength(1);
     expect(captured.outcomes[0]).toMatchObject({ outcome: 'BLOCKED', stage: 'push' });
     expect(captured.outcomes[0]?.actionRequired).toMatch(/trusted/i);

@@ -66,12 +66,13 @@ export function buildWorkflowDiffArgs(base: string, head: string): readonly stri
   return ['diff', '--name-only', `${base}...${head}`, '--', WORKFLOW_DIR_ARG];
 }
 
-export function buildWorkflowPatchArgs(
-  base: string,
-  head: string,
-  files: readonly string[],
-): readonly string[] {
-  return ['diff', `${base}...${head}`, '--', ...files];
+// Deterministic full-range patch so the handoff bundle preserves the
+// complete correction (a correction may also contain scripts/tests/docs
+// alongside workflow files). The record's `files` list still identifies the
+// workflow files that triggered trusted handoff. Callers pass exact SHAs
+// they already hold (branch base and HEAD), never a moving ref.
+export function buildWorkflowPatchArgs(base: string, head: string): readonly string[] {
+  return ['diff', `${base}...${head}`, '--'];
 }
 
 // Deliberately distinct from ordinary safe-push refusal text: the terminal
@@ -89,7 +90,7 @@ export function formatHandoffReason(files: readonly string[]): string {
 export function formatHandoffAction(): string {
   return (
     'Ask a trusted human or separately authorized ChatGPT GitHub operation to publish ' +
-    'the reviewed workflow files from the handoff patch, then rerun review against ' +
+    'the reviewed correction from the handoff patch, then rerun review against ' +
     'the newly published exact HEAD. Keep ordinary automation least-privilege: ' +
     'do not widen model credentials.'
   );
@@ -144,9 +145,8 @@ export async function getWorkflowPatch(
   execute: CommandExecutor,
   base: string,
   head: string,
-  files: readonly string[],
 ): Promise<string> {
-  const { stdout } = await execute('git', buildWorkflowPatchArgs(base, head, files));
+  const { stdout } = await execute('git', buildWorkflowPatchArgs(base, head));
   return stdout;
 }
 

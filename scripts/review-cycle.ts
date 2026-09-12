@@ -320,7 +320,7 @@ async function blockOnWorkflowHandoff(
   });
   let patch: string;
   try {
-    patch = await getWorkflowPatch(runCommand, range.base, range.head, files);
+    patch = await getWorkflowPatch(runCommand, range.base, range.head);
   } catch (error) {
     patch = `# workflow handoff patch unavailable: ${errorMessage(error)}\n`;
   }
