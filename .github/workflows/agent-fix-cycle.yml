@@ -219,6 +219,83 @@ jobs:
           npm run test
           npm run test:harness
 
+      - name: Detect workflow-file corrections (trusted handoff)
+        # Ticket #36: the least-privilege credential cannot publish workflow
+        # files, so detect the change over the exact validated range before
+        # the doomed generic push. Detection fails closed: a detection error
+        # never becomes an empty CHANGED set that continues to the generic
+        # push. A blocked correction persists the full-correction patch plus
+        # exact base/head metadata and stops with an explicit
+        # trusted-publication-required failure; a trusted human or separately
+        # authorized ChatGPT GitHub operation publishes the reviewed change.
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          EXPECTED="${{ steps.guard.outputs.head }}"
+          CURRENT="$(git rev-parse HEAD)"
+          if [ "$CURRENT" = "$EXPECTED" ]; then
+            echo "No local correction commits; nothing to hand off."
+            exit 0
+          fi
+          mkdir -p .agent-ticket
+          if ! CHANGED="$(git diff --name-only "$EXPECTED...$CURRENT" -- .github/workflows/)"; then
+            REASON="trusted-publication-required: workflow-file detection failed for the correction range; cannot prove the correction is free of workflow files. Ordinary automation stops before the generic push. A trusted human or separately authorized ChatGPT GitHub operation inspects the range and publishes the reviewed change, then exact-HEAD review resumes on the published HEAD."
+            jq -n \
+              --argjson version 1 \
+              --arg branch "${{ steps.guard.outputs.branch }}" \
+              --arg base "$EXPECTED" \
+              --arg head "$CURRENT" \
+              --argjson files '[]' \
+              --arg patchPath ".agent-ticket/workflow-handoff.patch" \
+              --arg reason "$REASON" \
+              --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{version: $version, branch: $branch, base: $base, head: $head, files: $files, patchPath: $patchPath, reason: $reason, createdAt: $created}' \
+              > .agent-ticket/workflow-handoff.json
+            printf '# workflow handoff patch unavailable: detection failed\n' > .agent-ticket/workflow-handoff.patch
+            echo "BLOCKED: $REASON"
+            echo "Handoff evidence: .agent-ticket/workflow-handoff.patch .agent-ticket/workflow-handoff.json"
+            exit 1
+          fi
+          if [ -z "$CHANGED" ]; then
+            echo "Correction touches no workflow files; continuing to safe-push."
+            exit 0
+          fi
+          if ! git diff "$EXPECTED...$CURRENT" -- > .agent-ticket/workflow-handoff.patch; then
+            FILES_JSON="$(printf '%s\n' "$CHANGED" | jq -R . | jq -cs 'map(select(length > 0))')"
+            REASON="trusted-publication-required: handoff patch generation failed for the correction range; no reproducible bundle is available. Ordinary automation stops before the generic push. A trusted human or separately authorized ChatGPT GitHub operation inspects the range and publishes the reviewed change, then exact-HEAD review resumes on the published HEAD."
+            jq -n \
+              --argjson version 1 \
+              --arg branch "${{ steps.guard.outputs.branch }}" \
+              --arg base "$EXPECTED" \
+              --arg head "$CURRENT" \
+              --argjson files "$FILES_JSON" \
+              --arg patchPath ".agent-ticket/workflow-handoff.patch" \
+              --arg reason "$REASON" \
+              --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '{version: $version, branch: $branch, base: $base, head: $head, files: $files, patchPath: $patchPath, reason: $reason, createdAt: $created}' \
+              > .agent-ticket/workflow-handoff.json
+            printf '# workflow handoff patch unavailable: patch generation failed\n' > .agent-ticket/workflow-handoff.patch
+            echo "BLOCKED: $REASON"
+            echo "Handoff evidence: .agent-ticket/workflow-handoff.patch .agent-ticket/workflow-handoff.json"
+            exit 1
+          fi
+          FILES_JSON="$(printf '%s\n' "$CHANGED" | jq -R . | jq -cs 'map(select(length > 0))')"
+          REASON="trusted-publication-required: the correction touches workflow files ($(printf '%s' "$CHANGED" | paste -sd ', ' -)). Ordinary automation stops before the generic push because its credential cannot publish workflow files. A trusted human or separately authorized ChatGPT GitHub operation publishes the reviewed change, then exact-HEAD review resumes on the published HEAD."
+          jq -n \
+            --argjson version 1 \
+            --arg branch "${{ steps.guard.outputs.branch }}" \
+            --arg base "$EXPECTED" \
+            --arg head "$CURRENT" \
+            --argjson files "$FILES_JSON" \
+            --arg patchPath ".agent-ticket/workflow-handoff.patch" \
+            --arg reason "$REASON" \
+            --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{version: $version, branch: $branch, base: $base, head: $head, files: $files, patchPath: $patchPath, reason: $reason, createdAt: $created}' \
+            > .agent-ticket/workflow-handoff.json
+          echo "BLOCKED: $REASON"
+          echo "Handoff evidence: .agent-ticket/workflow-handoff.patch .agent-ticket/workflow-handoff.json"
+          exit 1
+
       - name: Push correction through safe-push
         if: steps.guard.outputs.run == 'true'
         run: |
@@ -234,11 +311,17 @@ jobs:
           npm run review:cycle
 
       - name: Upload run evidence
+        # Ticket #36: the trusted-publication handoff bundle travels with the
+        # run evidence so a blocked workflow-file correction can be published
+        # without reconstructing work from runner logs.
         if: steps.guard.outputs.run == 'true' && always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-fix-cycle-evidence-${{ github.event.issue.number }}
-          path: .review-cycle/latest.json
+          path: |
+            .review-cycle/latest.json
+            .agent-ticket/workflow-handoff.json
+            .agent-ticket/workflow-handoff.patch
           if-no-files-found: warn
 
       - name: Report terminal result
@@ -262,7 +345,19 @@ jobs:
           ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-fix-cycle."
           STARTED="(see run log)"
           WORKER="(none)"
-          if [ -f .address-review-timeout ]; then
+          # Ticket #36: a trusted-handoff block carries its own durable
+          # evidence; surface it directly so the terminal status is an
+          # explicit trusted-publication-required BLOCKED, distinct from
+          # ordinary safe-push, gate, CI, or timeout failures.
+          if [ -f .agent-ticket/workflow-handoff.json ]; then
+            OUTCOME="BLOCKED"
+            STAGE="push"
+            REASON="$(jq -r '.reason // empty' .agent-ticket/workflow-handoff.json | head -c 300)"
+            if [ -z "$REASON" ]; then
+              REASON="trusted-publication-required: workflow-file correction needs trusted publication"
+            fi
+            ACTION="Ask a trusted human or separately authorized ChatGPT GitHub operation to publish the reviewed correction from the handoff patch, then rerun /agent-fix-cycle against the newly published exact HEAD."
+          elif [ -f .address-review-timeout ]; then
             OUTCOME="TIMEOUT"
             STAGE="address-review"
             REASON="$(head -c 300 .address-review-timeout)"

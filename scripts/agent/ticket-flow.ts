@@ -2,6 +2,17 @@ import * as fs from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { qualityGatesPass, runQualityGates, type GateResult } from '../review/gates.js';
 import {
+  HANDOFF_PATCH_PATH,
+  HANDOFF_RECORD_PATH,
+  TRUSTED_PUBLICATION_MARKER,
+  buildHandoffRecord,
+  formatHandoffAction,
+  getWorkflowPatch,
+  listChangedWorkflowFiles,
+  persistWorkflowHandoffBundle,
+  type WorkflowHandoffRecord,
+} from '../review/workflow-handoff.js';
+import {
   getCurrentBranch,
   getCurrentHead,
   getPrForBranch,
@@ -401,6 +412,10 @@ export interface AgentTicketDeps {
   // entrypoint wires the repository-local outcome file read by the workflow
   // terminal step, and tests inject a captor.
   recordOutcome?: (record: AgentTicketOutcome) => Promise<void> | void;
+  // Trusted-publication handoff writer (ticket #36). Persists the
+  // patch/metadata bundle when the correction touches `.github/workflows/**`;
+  // defaults to the repository-local handoff paths, tests inject a captor.
+  writeHandoff?: (input: { record: WorkflowHandoffRecord; patch: string }) => Promise<void> | void;
 }
 
 export interface AgentTicketResult {
@@ -451,6 +466,13 @@ function failResult(
       ? { exitCode: 1, failedStage: stage, reason }
       : { exitCode: 1, failedStage: stage, reason, branch };
   return timedOut ? { ...base, timedOut: true } : base;
+}
+
+async function defaultWriteHandoff(input: {
+  record: WorkflowHandoffRecord;
+  patch: string;
+}): Promise<void> {
+  await persistWorkflowHandoffBundle(input.record, input.patch);
 }
 
 export async function runAgentTicket(
@@ -762,6 +784,62 @@ export async function runAgentTicket(
     );
   }
   completedStages.push('gates');
+
+  // Trusted-publication handoff (ticket #36): a correction touching
+  // `.github/workflows/**` must never attempt the doomed generic push with
+  // the least-privilege credential. Detection runs over the exact known range
+  // (origin/main at start through the implementation HEAD) and stops with a
+  // distinguishable BLOCKED reason while persisting the patch plus exact
+  // base/head metadata for the trusted publisher.
+  let workflowFiles: string[];
+  try {
+    workflowFiles = await listChangedWorkflowFiles(execute, originHead, headAfter);
+  } catch (error) {
+    const reason =
+      `${TRUSTED_PUBLICATION_MARKER}: cannot prove the correction is free of workflow files: ` +
+      errorMessage(error);
+    console.error(`AGENT-TICKET BLOCKED (push): ${reason}`);
+    reportDurableState({ branch });
+    return terminal(
+      failResult('push', reason, branch),
+      'push',
+      branch,
+      'BLOCKED',
+      formatHandoffAction(),
+      headAfter,
+    );
+  }
+  if (workflowFiles.length > 0) {
+    const record = buildHandoffRecord({
+      branch,
+      base: originHead,
+      head: headAfter,
+      files: workflowFiles,
+    });
+    let patch: string;
+    try {
+      patch = await getWorkflowPatch(execute, originHead, headAfter);
+    } catch (error) {
+      patch = `# workflow handoff patch unavailable: ${errorMessage(error)}\n`;
+    }
+    const writeHandoff = deps.writeHandoff ?? defaultWriteHandoff;
+    try {
+      await writeHandoff({ record, patch });
+    } catch (error) {
+      console.error(`AGENT-TICKET handoff persistence failed: ${errorMessage(error)}`);
+    }
+    console.error(`AGENT-TICKET BLOCKED (push): ${record.reason}`);
+    console.error(`Handoff evidence: ${HANDOFF_PATCH_PATH} ${HANDOFF_RECORD_PATH}`);
+    reportDurableState({ branch });
+    return terminal(
+      failResult('push', record.reason, branch),
+      'push',
+      branch,
+      'BLOCKED',
+      formatHandoffAction(),
+      headAfter,
+    );
+  }
 
   reportStage('push');
   await publishStage('push', { branch, head: headAfter });

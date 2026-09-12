@@ -143,11 +143,18 @@ jobs:
           npm run agent:ticket -- "$ISSUE_NUMBER"
 
       - name: Upload run evidence
+        # Ticket #36: the trusted-publication handoff bundle travels with the
+        # run evidence so a blocked workflow-file correction can be published
+        # without reconstructing work from runner logs.
         if: steps.guard.outputs.run == 'true' && always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-ticket-evidence-${{ github.event.issue.number }}
-          path: .review-cycle/latest.json
+          path: |
+            .review-cycle/latest.json
+            .agent-ticket/outcome.json
+            .agent-ticket/workflow-handoff.json
+            .agent-ticket/workflow-handoff.patch
           if-no-files-found: warn
 
       - name: Report terminal result

@@ -114,6 +114,16 @@ verifies the current branch is a ticket branch, the PR head matches it, the
 base is `main`, the worktree is clean, and the push cannot target `main`.
 It refuses otherwise and never merges.
 
+## Workflow-file corrections (trusted handoff)
+
+Corrections that touch `.github/workflows/**` stop at the trusted-publication
+boundary defined in `docs/agents/workflow-handoff.md` instead of widening
+model credentials. Repository-owned detection refuses the ordinary push with a
+distinguishable `trusted-publication-required` `BLOCKED` state and persists a
+patch/metadata bundle under `.agent-ticket/`; a trusted human or separately
+authorized ChatGPT GitHub operation publishes the reviewed change, after which
+review resumes against the newly published exact HEAD.
+
 ## Terminal notification and headless use
 
 Terminal states (`READY`, `NEEDS-DECISION`, and blocked/fatal stops) emit one
