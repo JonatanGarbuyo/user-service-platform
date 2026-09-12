@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { decideStartSync } from '../../scripts/review/cycle-policy.js';
-import { commitChecksPass, decideCheckPoll } from '../../scripts/review/pr-checks.js';
+import {
+  CHECK_POLL_ATTEMPTS,
+  CHECK_POLL_DELAY_MS,
+  commitChecksPass,
+  decideCheckPoll,
+  hasApprovalWaitingRuns,
+} from '../../scripts/review/pr-checks.js';
 
 // Seam under test: HEAD-sync and exact-SHA CI verification (PR #17 final
 // acceptance blocker 2). The loop must never report READY for a local HEAD
@@ -78,18 +84,44 @@ describe('check polling policy', () => {
     ).toBe('fail');
   });
 
-  it('never treats action_required as success (ticket #44)', () => {
-    // Exact-HEAD CI stays authoritative: an awaiting-approval run must block
-    // READY, never pass.
+  it('never treats action_required as success (tickets #44/#47)', () => {
+    // Exact-HEAD CI stays authoritative: an awaiting-approval run must wait
+    // for trusted approval (pending), never pass and never fail fast.
     expect(
       decideCheckPoll([
         { name: 'quality gates', status: 'completed', conclusion: 'action_required' },
       ]),
-    ).toBe('fail');
+    ).toBe('pending');
     expect(
       commitChecksPass([
         { name: 'quality gates', status: 'completed', conclusion: 'action_required' },
       ]),
     ).toBe(false);
+    expect(
+      hasApprovalWaitingRuns([
+        { name: 'quality gates', status: 'completed', conclusion: 'action_required' },
+      ]),
+    ).toBe(true);
+    expect(
+      hasApprovalWaitingRuns([
+        { name: 'quality gates', status: 'completed', conclusion: 'success' },
+      ]),
+    ).toBe(false);
+  });
+
+  it('still fails fast on real failures even when approval is also waiting', () => {
+    expect(
+      decideCheckPoll([
+        { name: 'quality gates', status: 'completed', conclusion: 'action_required' },
+        { name: 'other', status: 'completed', conclusion: 'failure' },
+      ]),
+    ).toBe('fail');
+  });
+
+  it('waits with margin beyond the 5-minute schedule interval (ticket #47)', () => {
+    // The approver poll runs at most every 5 minutes; the review-cycle wait
+    // must leave margin for the next tick plus queue/startup/approval.
+    expect(CHECK_POLL_DELAY_MS).toBe(10000);
+    expect(CHECK_POLL_ATTEMPTS * CHECK_POLL_DELAY_MS).toBeGreaterThanOrEqual(12 * 60 * 1000);
   });
 });

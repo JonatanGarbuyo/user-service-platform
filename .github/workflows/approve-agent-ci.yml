@@ -4,22 +4,30 @@ on:
   workflow_run:
     workflows: ['ci']
     types: [completed]
+  # Ticket #47 fallback: GitHub emits no `workflow_run` event for the
+  # `action_required` CI run observed on PR #46, so the event-driven job never
+  # runs for exactly the case it must handle. The scheduled poll discovers the
+  # narrow awaiting set instead. `pull_request_target` is not a fallback: runs
+  # created or updated by the repository `GITHUB_TOKEN` do not trigger
+  # workflows except for the documented `pull_request` opened/synchronize/
+  # reopened exception.
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
 
-# Default-deny; the approve job grants only what it needs to inspect
-# provenance and approve the narrowly defined trusted run.
+# Default-deny; each trusted job grants only what it needs to inspect
+# provenance and approve the narrowly defined trusted runs.
 permissions: {}
-
-# One approval attempt per triggering run; queued, never cancelled.
-concurrency:
-  group: approve-agent-ci-run-${{ github.event.workflow_run.id }}
-  cancel-in-progress: false
 
 jobs:
   approve:
     # Only runs GitHub reports as awaiting approval are considered. The
     # deterministic evaluator still proves every other guard and fails closed.
-    if: ${{ github.event.workflow_run.conclusion == 'action_required' }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'action_required' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: approve-agent-ci-run-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
     # Least-privilege for this trusted approver only. `actions: write`
     # approves the awaiting `ci` run; nothing here checks out or executes PR
     # code, and no model/provider/production secret is available.
@@ -66,3 +74,78 @@ jobs:
             --conclusion "$CONCLUSION" \
             --head-sha "$HEAD_SHA" \
             $PR_ARGS
+
+  poll:
+    # Scheduled fallback for GITHUB_TOKEN-created PRs whose `action_required`
+    # CI run emits no `workflow_run` event. Each candidate is still proven by
+    # the same deterministic evaluator; refusals fail closed per run.
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: approve-agent-ci-poll
+      cancel-in-progress: false
+    # Same least-privilege as the event-driven approver; nothing here checks
+    # out or executes PR code, and no model/provider/production secret is
+    # available.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out trusted main (never PR code)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Poll awaiting CI runs and approve trusted agent runs
+        run: |
+          set -euo pipefail
+          # Narrow awaiting set for the `ci` workflow only. `--paginate` pages
+          # concatenate safely because `--jq` emits one line per run against
+          # the documented `{ total_count, workflow_runs: [...] }` shape.
+          CANDIDATES="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?status=action_required&per_page=50" --paginate --jq '.workflow_runs[] | "\(.id) \(.head_sha) \(.name) \(([.pull_requests[].number] | map(tostring) | join(",")))"' || true)"
+          if [ -z "$CANDIDATES" ]; then
+            echo "No action_required ci runs awaiting approval."
+            exit 0
+          fi
+          printf '%s\n' "$CANDIDATES" | while IFS= read -r LINE; do
+            if [ -z "$LINE" ]; then
+              continue
+            fi
+            RUN_ID="$(printf '%s' "$LINE" | cut -d' ' -f1)"
+            HEAD_SHA="$(printf '%s' "$LINE" | cut -d' ' -f2)"
+            WORKFLOW_NAME="$(printf '%s' "$LINE" | cut -d' ' -f3)"
+            PR_CSV="$(printf '%s' "$LINE" | cut -d' ' -f4)"
+            PR_ARGS=""
+            if [ -n "$PR_CSV" ]; then
+              OLDIFS="$IFS"
+              IFS=','
+              for PR in $PR_CSV; do
+                if [ -n "$PR" ]; then
+                  PR_ARGS="$PR_ARGS --pr $PR"
+                fi
+              done
+              IFS="$OLDIFS"
+            fi
+            # shellcheck disable=SC2086
+            npx tsx scripts/approve-agent-ci.ts \
+              --repo "$GITHUB_REPOSITORY" \
+              --run-id "$RUN_ID" \
+              --workflow "$WORKFLOW_NAME" \
+              --conclusion "action_required" \
+              --head-sha "$HEAD_SHA" \
+              $PR_ARGS || true
+          done
