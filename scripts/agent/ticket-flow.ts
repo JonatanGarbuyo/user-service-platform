@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { qualityGatesPass, runQualityGates, type GateResult } from '../review/gates.js';
 import {
   getCurrentBranch,
@@ -10,11 +12,7 @@ import {
 import { checkSafePush, type SafePushCheck } from '../review/safe-push.js';
 import { runWorkerStream } from '../review/worker-stream.js';
 import { isWorkerTimeout, timeoutForWorker } from '../review/worker-timeout.js';
-import {
-  formatRunStatusBody,
-  publishStatusUpdate,
-  type RunStatusOutcome,
-} from '../review/run-status.js';
+import { publishStageStatus, type RunStatusOutcome } from '../review/run-status.js';
 
 // Explicit stage names for the durable run-status surface (ticket #31).
 // One status comment per agent run is updated as these stages advance so the
@@ -31,6 +29,102 @@ export const TICKET_STAGE_NAMES = [
 ] as const;
 
 export type TicketStageName = (typeof TICKET_STAGE_NAMES)[number];
+
+// Terminal outcome record (ticket #31). Every terminal state — including
+// pre-review failures where `review:cycle` never ran and no
+// `.review-cycle/latest.json` exists — records its outcome, stage, and
+// reason at this path so the workflow terminal step can distinguish TIMEOUT
+// from generic BLOCKED without log polling. Deterministic
+// repository-owned metadata only, never transcripts or secrets.
+export const AGENT_TICKET_OUTCOME_PATH = '.agent-ticket/outcome.json';
+
+export type AgentTicketStatusOutcome = 'READY' | 'BLOCKED' | 'NEEDS-DECISION' | 'TIMEOUT';
+
+export interface AgentTicketOutcome {
+  outcome: AgentTicketStatusOutcome;
+  stage: string;
+  reason: string;
+  startedAt: string;
+  actionRequired?: string;
+}
+
+export interface AgentTicketTerminal {
+  exitCode: number;
+  failedStage?: string;
+  timedOut?: boolean;
+}
+
+function stageForFailedStage(failedStage: string | undefined): string {
+  if (failedStage === 'implement') {
+    return 'implementation';
+  }
+  if (failedStage === 'gates') {
+    return 'gates';
+  }
+  if (failedStage === 'push') {
+    return 'push';
+  }
+  if (failedStage === 'pr') {
+    return 'PR creation';
+  }
+  if (failedStage === 'review-cycle') {
+    return 'review';
+  }
+  if (
+    failedStage === 'validate' ||
+    failedStage === 'start-state' ||
+    failedStage === 'ticket' ||
+    failedStage === 'branch'
+  ) {
+    return 'validation';
+  }
+  return 'run';
+}
+
+export function terminalOutcomeFor(result: AgentTicketTerminal): {
+  outcome: AgentTicketStatusOutcome;
+  stage: string;
+} {
+  if (result.exitCode === 0) {
+    return { outcome: 'READY', stage: 'final acceptance-ready' };
+  }
+  if (result.exitCode === 2) {
+    return { outcome: 'NEEDS-DECISION', stage: stageForFailedStage(result.failedStage) };
+  }
+  if (result.timedOut === true) {
+    return { outcome: 'TIMEOUT', stage: stageForFailedStage(result.failedStage) };
+  }
+  return { outcome: 'BLOCKED', stage: stageForFailedStage(result.failedStage) };
+}
+
+export interface OutcomePersistDeps {
+  mkdir?: (dir: string, options: { recursive: boolean }) => Promise<unknown>;
+  writeFile?: (path: string, contents: string) => Promise<unknown>;
+  path?: string;
+}
+
+export async function writeAgentTicketOutcome(
+  input: Omit<AgentTicketOutcome, 'startedAt'> & { startedAt?: string },
+  deps: OutcomePersistDeps = {},
+): Promise<string> {
+  const path = deps.path ?? AGENT_TICKET_OUTCOME_PATH;
+  const mkdir =
+    deps.mkdir ?? ((dir: string, options: { recursive: boolean }) => fs.mkdir(dir, options));
+  const writeFile =
+    deps.writeFile ?? ((file: string, contents: string) => fs.writeFile(file, contents, 'utf8'));
+  const record: AgentTicketOutcome = {
+    outcome: input.outcome,
+    stage: input.stage,
+    reason: input.reason,
+    startedAt: input.startedAt ?? new Date().toISOString(),
+  };
+  if (input.actionRequired !== undefined) {
+    record.actionRequired = input.actionRequired;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(record, null, 2)}\n`);
+  return path;
+}
 
 // Deterministic ticket orchestration for `npm run agent:ticket -- <issue>`
 // (ticket #23). One repository-owned command drives a clean `main` worktree
@@ -303,6 +397,10 @@ export interface AgentTicketDeps {
   // comment; when absent, status stays silent. Publication is best-effort and
   // never changes the orchestration outcome.
   status?: AgentTicketStatus;
+  // Terminal outcome recording (ticket #31). Defaults to silence; the CLI
+  // entrypoint wires the repository-local outcome file read by the workflow
+  // terminal step, and tests inject a captor.
+  recordOutcome?: (record: AgentTicketOutcome) => Promise<void> | void;
 }
 
 export interface AgentTicketResult {
@@ -394,7 +492,7 @@ export async function runAgentTicket(
       actionRequired?: string;
     },
   ): Promise<void> {
-    if (statusTarget === undefined) {
+    if (statusTarget === undefined || ticketNumber === undefined) {
       return;
     }
     let head = options.head;
@@ -406,21 +504,38 @@ export async function runAgentTicket(
       }
     }
     const worker = workerForStage(stage);
-    const body = formatRunStatusBody({
-      target: `issue #${String(ticket)}`,
-      runUrl: statusTarget.runUrl,
+    await publishStageStatus(execute, statusTarget, {
+      target: `issue #${String(ticketNumber)}`,
       branch: options.branch,
       head,
       currentStage: stage,
       completedStages: [...completedStages],
       startedAt: startedAtIso,
-      updatedAt: new Date().toISOString(),
       ...(worker === undefined ? {} : { worker }),
       ...(options.outcome === undefined ? {} : { outcome: options.outcome }),
       ...(options.reason === undefined ? {} : { reason: options.reason }),
       ...(options.actionRequired === undefined ? {} : { actionRequired: options.actionRequired }),
     });
-    await publishStatusUpdate(execute, statusTarget, body);
+  }
+
+  // Terminal outcome recording (ticket #31): every terminal state is recorded
+  // best-effort through the injected recorder so the workflow terminal step
+  // can report the exact outcome even when `review:cycle` never ran. The CLI
+  // entrypoint wires the repository-local outcome file; tests inject a captor
+  // or stay silent. Recording never changes the result itself.
+  async function recordTerminal(result: AgentTicketResult, actionRequired?: string): Promise<void> {
+    try {
+      const mapped = terminalOutcomeFor(result);
+      await deps.recordOutcome?.({
+        outcome: mapped.outcome,
+        stage: mapped.stage,
+        reason: result.reason ?? 'terminal state',
+        startedAt: startedAtIso,
+        ...(actionRequired === undefined ? {} : { actionRequired }),
+      });
+    } catch {
+      // Best-effort: recording never changes the terminal outcome.
+    }
   }
 
   // Terminal publication always carries an attention outcome except READY:
@@ -437,19 +552,33 @@ export async function runAgentTicket(
     if (result.reason !== undefined) {
       await publishStage(stage, { branch, head, outcome, reason: result.reason, actionRequired });
     }
+    await recordTerminal(result, actionRequired);
     return result;
   }
 
   reportStage('validation');
   let ticket: number;
+  let ticketNumber: number | undefined;
   try {
     ticket = parseTicketArg(rawTicket);
+    ticketNumber = ticket;
   } catch (error) {
     const reason = errorMessage(error);
     console.error(`AGENT-TICKET BLOCKED (validate): ${reason}`);
     console.error('usage: agent-ticket <issue-number>');
-    return failResult('validate', reason);
+    const result = failResult('validate', reason);
+    await recordTerminal(
+      result,
+      'Provide a single positive integer issue number: npm run agent:ticket -- <issue>.',
+    );
+    return result;
   }
+
+  const earlyTerminal = async (
+    result: AgentTicketResult,
+    actionRequired: string,
+  ): Promise<AgentTicketResult> =>
+    terminal(result, 'validation', '(starting)', 'BLOCKED', actionRequired, '(starting)');
 
   let start: StartState;
   try {
@@ -460,12 +589,18 @@ export async function runAgentTicket(
   } catch (error) {
     const reason = `cannot validate the starting worktree: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (start-state): ${reason}`);
-    return failResult('start-state', reason);
+    return earlyTerminal(
+      failResult('start-state', reason),
+      'Start from a clean, current main worktree, then rerun /agent-ticket.',
+    );
   }
   const startCheck = checkStartState(start);
   if (!startCheck.ok) {
     console.error(`AGENT-TICKET BLOCKED (start-state): ${startCheck.reason}`);
-    return failResult('start-state', startCheck.reason);
+    return earlyTerminal(
+      failResult('start-state', startCheck.reason),
+      'Start from a clean, current main worktree, then rerun /agent-ticket.',
+    );
   }
 
   let mainHead: string;
@@ -478,12 +613,18 @@ export async function runAgentTicket(
       `cannot prove local main is current with origin/main: ${errorMessage(error)}; ` +
       'refusing to start from an unverifiable base';
     console.error(`AGENT-TICKET BLOCKED (start-state): ${reason}`);
-    return failResult('start-state', reason);
+    return earlyTerminal(
+      failResult('start-state', reason),
+      'Start from a clean, current main worktree, then rerun /agent-ticket.',
+    );
   }
   const currencyCheck = checkMainCurrency({ localHead: mainHead, remoteHead: originHead });
   if (!currencyCheck.ok) {
     console.error(`AGENT-TICKET BLOCKED (start-state): ${currencyCheck.reason}`);
-    return failResult('start-state', currencyCheck.reason);
+    return earlyTerminal(
+      failResult('start-state', currencyCheck.reason),
+      'Start from a clean, current main worktree, then rerun /agent-ticket.',
+    );
   }
 
   let issue: TicketIssue;
@@ -499,17 +640,26 @@ export async function runAgentTicket(
   } catch (error) {
     const reason = `cannot read ticket #${String(ticket)}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (ticket): ${reason}`);
-    return failResult('ticket', reason);
+    return earlyTerminal(
+      failResult('ticket', reason),
+      'Use an OPEN ready-for-agent ticket, then rerun /agent-ticket.',
+    );
   }
   if (issue.number !== ticket) {
     const reason = `ticket mismatch: requested #${String(ticket)} but gh returned #${String(issue.number)}`;
     console.error(`AGENT-TICKET BLOCKED (ticket): ${reason}`);
-    return failResult('ticket', reason);
+    return earlyTerminal(
+      failResult('ticket', reason),
+      'Use an OPEN ready-for-agent ticket, then rerun /agent-ticket.',
+    );
   }
   const issueCheck = checkTicketIssue(issue);
   if (!issueCheck.ok) {
     console.error(`AGENT-TICKET BLOCKED (ticket): ${issueCheck.reason}`);
-    return failResult('ticket', issueCheck.reason);
+    return earlyTerminal(
+      failResult('ticket', issueCheck.reason),
+      'Use an OPEN ready-for-agent ticket, then rerun /agent-ticket.',
+    );
   }
 
   const branch = ticketBranchName(ticket, issue.title);
@@ -517,7 +667,10 @@ export async function runAgentTicket(
     await execute('git', ['show-ref', '--verify', `refs/heads/${branch}`]);
     const reason = `${branch} already exists; refusing to reuse or repair an existing branch`;
     console.error(`AGENT-TICKET BLOCKED (branch): ${reason}`);
-    return failResult('branch', reason, branch);
+    return await earlyTerminal(
+      failResult('branch', reason, branch),
+      'Remove or rename the conflicting branch, then rerun /agent-ticket.',
+    );
   } catch {
     // Absent locally: the expected case, continue.
   }
@@ -526,7 +679,10 @@ export async function runAgentTicket(
   } catch (error) {
     const reason = `cannot create ticket branch ${branch}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (branch): ${reason}`);
-    return failResult('branch', reason, branch);
+    return earlyTerminal(
+      failResult('branch', reason, branch),
+      'Remove or rename the conflicting branch, then rerun /agent-ticket.',
+    );
   }
   console.log(`Created ticket branch ${branch} from main.`);
 
@@ -734,5 +890,7 @@ export async function runAgentTicket(
   console.log('');
   console.log(`READY FOR FINAL ACCEPTANCE\nBranch: ${branch}\nPR: #${String(prNumber)}`);
   console.log(`Run summary: ${summaryPath}`);
-  return { exitCode: 0, branch, prNumber, prUrl, summaryPath };
+  const success: AgentTicketResult = { exitCode: 0, branch, prNumber, prUrl, summaryPath };
+  await recordTerminal(success);
+  return success;
 }

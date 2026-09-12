@@ -177,15 +177,26 @@ jobs:
       - name: Run address-review correction
         # Bounded like the repository-owned address-review worker (ticket #31):
         # `timeout` terminates a hung correction run instead of leaving the
-        # workflow at `still running` indefinitely. Exit 124 maps to TIMEOUT in
-        # the terminal step below.
+        # workflow at `still running` indefinitely. Exit 124 leaves a sentinel
+        # that the terminal step maps to TIMEOUT (distinct from model, gate,
+        # CI, or cancellation failures).
         if: steps.guard.outputs.run == 'true'
         env:
           OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
         run: |
           set -euo pipefail
           PR_NUMBER="${{ steps.guard.outputs.pr }}"
-          timeout --signal=TERM --kill-after=60s 20m opencode run --auto --command address-review "$PR_NUMBER"
+          if timeout --signal=TERM --kill-after=60s 20m opencode run --auto --command address-review "$PR_NUMBER"; then
+            echo "address-review completed within its bound."
+          else
+            CODE=$?
+            if [ "$CODE" -eq 124 ]; then
+              echo "address-review exceeded its 20m bound (TIMEOUT)."
+              printf 'address-review timed out after 20m' > .address-review-timeout
+              exit 1
+            fi
+            exit "$CODE"
+          fi
 
       - name: Require clean correction or explicit no-code outcome
         if: steps.guard.outputs.run == 'true'
@@ -249,12 +260,28 @@ jobs:
           STAGE="run"
           REASON="workflow did not reach READY"
           ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-fix-cycle."
-          if [ -f .review-cycle/latest.json ]; then
+          STARTED="(see run log)"
+          WORKER="(none)"
+          if [ -f .address-review-timeout ]; then
+            OUTCOME="TIMEOUT"
+            STAGE="address-review"
+            REASON="$(head -c 300 .address-review-timeout)"
+            WORKER="address-review"
+            ACTION="The address-review worker exceeded its bound; rerun once the runner is free."
+          elif [ -f .review-cycle/latest.json ]; then
             SUMMARY_OUTCOME="$(jq -r '.outcome // empty' .review-cycle/latest.json)"
             SUMMARY_DETAIL="$(jq -r '.detail // empty' .review-cycle/latest.json | head -c 300)"
             SUMMARY_STAGE="$(jq -r '.stage // empty' .review-cycle/latest.json)"
+            SUMMARY_STARTED="$(jq -r '.startedAt // empty' .review-cycle/latest.json)"
+            SUMMARY_WORKER="$(jq -r '.timeout.worker // empty' .review-cycle/latest.json)"
             if [ -n "$SUMMARY_STAGE" ]; then
               STAGE="$SUMMARY_STAGE"
+            fi
+            if [ -n "$SUMMARY_STARTED" ]; then
+              STARTED="$SUMMARY_STARTED"
+            fi
+            if [ -n "$SUMMARY_WORKER" ]; then
+              WORKER="$SUMMARY_WORKER"
             fi
             case "$SUMMARY_OUTCOME" in
               READY)
@@ -289,13 +316,28 @@ jobs:
             REASON="workflow cancelled"
             ACTION="Inspect the workflow state, then rerun /agent-fix-cycle."
           fi
+          if [ ! -f .review-cycle/latest.json ]; then
+            mkdir -p .review-cycle
+            jq -n \
+              --arg started "$STARTED" \
+              --arg ended "$UPDATED" \
+              --arg head "$HEAD" \
+              --arg outcome "$OUTCOME" \
+              --arg stage "$STAGE" \
+              --arg reason "$REASON" \
+              '{version: 1, command: "review:cycle", startedAt: (if $started == "(see run log)" then $ended else $started end), endedAt: $ended, durationMs: 0, reviewedHead: $head, stage: $stage, correctionCycles: 0, markerRetries: {standards: 0, spec: 0}, standardsAttempts: [], specAttempts: [], addressReviewAttempts: [], qualityGates: [], ci: {decision: "unknown", runs: []}, outcome: $outcome, detail: $reason}' \
+              > .review-cycle/latest.json || true
+          fi
           STATUS_BODY="<!-- agent-run-status -->
           Target: PR #$PR_NUMBER
           Run: $RUN_URL
           Branch: $BRANCH
           HEAD: $HEAD
           Stage: $STAGE
+          Completed: (see run log)
+          Started: $STARTED
           Updated: $UPDATED
+          Worker: $WORKER
           Outcome: $OUTCOME — $REASON"
           COMMENT_ID="${{ steps.status.outputs.comment-id }}"
           if [ -n "$COMMENT_ID" ]; then

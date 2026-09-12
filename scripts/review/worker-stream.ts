@@ -65,7 +65,8 @@ export function runWorkerStream(
   command: string,
   args: readonly string[],
   options: WorkerStreamOptions,
-  spawnFn: SpawnFn = (cmd, argv) => spawn(cmd, [...argv], { stdio: ['ignore', 'pipe', 'pipe'] }),
+  spawnFn: SpawnFn = (cmd, argv) =>
+    spawn(cmd, [...argv], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] }),
   handlers: StreamHandlers = {},
 ): Promise<WorkerStreamResult> {
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
@@ -96,11 +97,22 @@ export function runWorkerStream(
       (heartbeat as unknown as { unref: () => void }).unref();
     }
 
+    // The worker runs detached in its own process group so the watchdog can
+    // terminate the whole tree: `child.kill()` alone only signals the direct
+    // child, leaving `opencode` grandchildren orphaned (ticket #31 context).
     const killTree = (signal: number | NodeJS.Signals): void => {
       try {
         child.kill?.(signal);
       } catch {
         // Best-effort: termination must never mask the timeout itself.
+      }
+      const pid = child.pid;
+      if (pid !== undefined && Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(-pid, signal);
+        } catch {
+          // Best-effort: the group may already be gone.
+        }
       }
     };
 

@@ -157,6 +157,9 @@ jobs:
         # concise terminal comment is posted so normal GitHub routing notifies
         # (PATCH edits alone do not notify). BLOCKED/NEEDS-DECISION/TIMEOUT
         # mention the owner so GitHub Mobile pushes; READY stays silent.
+        # Outcome precedence keeps the worker-timeout distinction: the ticket
+        # outcome record first (covers pre-review failures where review:cycle
+        # never ran), then the review-cycle summary, then the job status.
         if: steps.guard.outputs.run == 'true' && always()
         run: |
           set -euo pipefail
@@ -169,12 +172,33 @@ jobs:
           STAGE="run"
           REASON="workflow did not reach READY"
           ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-ticket."
-          if [ -f .review-cycle/latest.json ]; then
+          STARTED="(see run log)"
+          WORKER="(none)"
+          if [ -f .agent-ticket/outcome.json ]; then
+            OUTCOME="$(jq -r '.outcome // empty' .agent-ticket/outcome.json)"
+            STAGE="$(jq -r '.stage // empty' .agent-ticket/outcome.json)"
+            REASON="$(jq -r '.reason // empty' .agent-ticket/outcome.json | head -c 300)"
+            STARTED="$(jq -r '.startedAt // empty' .agent-ticket/outcome.json)"
+            REC_ACTION="$(jq -r '.actionRequired // empty' .agent-ticket/outcome.json)"
+            if [ -z "$OUTCOME" ]; then OUTCOME="BLOCKED"; fi
+            if [ -z "$STAGE" ]; then STAGE="run"; fi
+            if [ -z "$REASON" ]; then REASON="workflow did not reach READY"; fi
+            if [ -z "$STARTED" ]; then STARTED="(see run log)"; fi
+            if [ -n "$REC_ACTION" ]; then ACTION="$REC_ACTION"; fi
+          elif [ -f .review-cycle/latest.json ]; then
             SUMMARY_OUTCOME="$(jq -r '.outcome // empty' .review-cycle/latest.json)"
             SUMMARY_DETAIL="$(jq -r '.detail // empty' .review-cycle/latest.json | head -c 300)"
             SUMMARY_STAGE="$(jq -r '.stage // empty' .review-cycle/latest.json)"
+            SUMMARY_STARTED="$(jq -r '.startedAt // empty' .review-cycle/latest.json)"
+            SUMMARY_WORKER="$(jq -r '.timeout.worker // empty' .review-cycle/latest.json)"
             if [ -n "$SUMMARY_STAGE" ]; then
               STAGE="$SUMMARY_STAGE"
+            fi
+            if [ -n "$SUMMARY_STARTED" ]; then
+              STARTED="$SUMMARY_STARTED"
+            fi
+            if [ -n "$SUMMARY_WORKER" ]; then
+              WORKER="$SUMMARY_WORKER"
             fi
             case "$SUMMARY_OUTCOME" in
               READY)
@@ -209,13 +233,28 @@ jobs:
             REASON="workflow cancelled"
             ACTION="Inspect the workflow state, then rerun /agent-ticket."
           fi
+          if [ ! -f .review-cycle/latest.json ]; then
+            mkdir -p .review-cycle
+            jq -n \
+              --arg started "$STARTED" \
+              --arg ended "$UPDATED" \
+              --arg head "$HEAD" \
+              --arg outcome "$OUTCOME" \
+              --arg stage "$STAGE" \
+              --arg reason "$REASON" \
+              '{version: 1, command: "review:cycle", startedAt: (if $started == "(see run log)" then $ended else $started end), endedAt: $ended, durationMs: 0, reviewedHead: $head, stage: $stage, correctionCycles: 0, markerRetries: {standards: 0, spec: 0}, standardsAttempts: [], specAttempts: [], addressReviewAttempts: [], qualityGates: [], ci: {decision: "unknown", runs: []}, outcome: $outcome, detail: $reason}' \
+              > .review-cycle/latest.json || true
+          fi
           STATUS_BODY="<!-- agent-run-status -->
           Target: issue #$ISSUE_NUMBER
           Run: $RUN_URL
           Branch: $BRANCH
           HEAD: $HEAD
           Stage: $STAGE
+          Completed: (see run log)
+          Started: $STARTED
           Updated: $UPDATED
+          Worker: $WORKER
           Outcome: $OUTCOME — $REASON"
           COMMENT_ID="${{ steps.status.outputs.comment-id }}"
           if [ -n "$COMMENT_ID" ]; then

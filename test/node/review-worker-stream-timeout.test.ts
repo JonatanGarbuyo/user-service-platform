@@ -66,6 +66,31 @@ describe('worker stream timeout', () => {
     }
   });
 
+  it('kills the whole process group so grandchildren cannot survive', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 424242;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        { label: 'standards', timeoutMs: 500 },
+        () => child,
+      );
+      const assertion = expect(pending).rejects.toSatisfy(isWorkerTimeout);
+      await vi.advanceTimersByTimeAsync(600);
+      await assertion;
+      expect(child.kill).toHaveBeenCalled();
+      expect(killSpy).toHaveBeenCalledWith(-424242, 'SIGTERM');
+    } finally {
+      logSpy.mockRestore();
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('resolves normally when the worker finishes before its bound', async () => {
     const { child, stdout } = createKillableChild();
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);

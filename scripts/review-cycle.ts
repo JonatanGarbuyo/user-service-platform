@@ -40,13 +40,8 @@ import {
   type WorkerAttemptResult,
 } from './review/run-summary.js';
 import { safePushBranch } from './review/safe-push.js';
-import {
-  formatRunStatusBody,
-  publishStatusUpdate,
-  readStatusEnv,
-  type RunStatusOutcome,
-} from './review/run-status.js';
-import { isWorkerTimeout, timeoutForWorker } from './review/worker-timeout.js';
+import { publishStageStatus, readStatusEnv, type RunStatusOutcome } from './review/run-status.js';
+import { isWorkerTimeout, timeoutDetails, timeoutForWorker } from './review/worker-timeout.js';
 import { runWorkerStream } from './review/worker-stream.js';
 
 interface CycleOptions {
@@ -223,15 +218,13 @@ async function publishCycleStatus(
     const outcome = terminal === undefined ? undefined : statusOutcomeFor(terminal.outcome);
     const worker = workerForCycleStage(stage);
     const actionRequired = outcome === undefined ? undefined : actionForCycleOutcome(outcome);
-    const body = formatRunStatusBody({
+    await publishStageStatus(runCommand, status, {
       target: `PR #${String(snap.pr.number)}`,
-      runUrl: status.runUrl,
       branch: snap.branch ?? '(unknown)',
       head: snap.reviewedHead === '' ? '(unknown)' : snap.reviewedHead,
       currentStage: stage,
       completedStages: [],
       startedAt: snap.startedAt,
-      updatedAt: new Date().toISOString(),
       ...(worker === undefined ? {} : { worker }),
       ...(outcome === undefined ? {} : { outcome }),
       ...(terminal?.detail === undefined || terminal.detail === ''
@@ -239,7 +232,6 @@ async function publishCycleStatus(
         : { reason: terminal.detail }),
       ...(actionRequired === undefined ? {} : { actionRequired }),
     });
-    await publishStatusUpdate(runCommand, status, body);
   } catch {
     // Best-effort: status publication never changes the terminal outcome.
   }
@@ -285,9 +277,9 @@ async function main(): Promise<void> {
     // non-zero so local runs cannot sit at `still running` indefinitely.
     // Persistence itself is best-effort inside concludeWithSummary.
     if (isWorkerTimeout(error)) {
-      const timedOut = error as { workerLabel?: unknown; timeoutMs?: unknown };
-      if (typeof timedOut.workerLabel === 'string' && typeof timedOut.timeoutMs === 'number') {
-        recorder.recordTimeout(timedOut.workerLabel, timedOut.timeoutMs);
+      const details = timeoutDetails(error);
+      if (details !== undefined) {
+        recorder.recordTimeout(details.workerLabel, details.timeoutMs);
       }
       await concludeWithSummary(recorder, 'TIMEOUT', fatalDetail(error));
     } else {

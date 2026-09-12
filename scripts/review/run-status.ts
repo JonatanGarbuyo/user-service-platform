@@ -12,7 +12,6 @@ import type { CommandExecutor } from './runner.js';
 // mention the owner so GitHub Mobile pushes in addition to inbox/email.
 export const ATTENTION_MENTION = '@JonatanGarbuyo';
 export const RUN_STATUS_MARKER = '<!-- agent-run-status -->';
-export const OWNER_LOGIN = 'JonatanGarbuyo';
 
 export type RunStatusOutcome = 'READY' | 'BLOCKED' | 'NEEDS-DECISION' | 'TIMEOUT' | 'FATAL';
 
@@ -139,40 +138,43 @@ export async function publishStatusUpdate(
   }
 }
 
-function parseCommentId(stdout: string): number | undefined {
-  const match = /#issuecomment-(\d+)/.exec(stdout) ?? /\/issues\/comments\/(\d+)/.exec(stdout);
-  if (match === null) {
-    return undefined;
-  }
-  const id = Number.parseInt(match[1] ?? '', 10);
-  return Number.isInteger(id) ? id : undefined;
+export interface StageStatusParams {
+  target: string;
+  branch: string;
+  head: string;
+  currentStage: string;
+  completedStages: readonly string[];
+  startedAt: string;
+  worker?: string;
+  outcome?: RunStatusOutcome;
+  reason?: string;
+  actionRequired?: string;
 }
 
-// GitHub-backed publisher through the injected executor seam so tests observe
-// exact invocations without real `gh` subprocesses. Creation and updates use
-// the same deterministic body; callers keep the comment id for the run.
-export function createGhStatusPublisher(
+// Shared stage-body assembly (ticket #31): both `agent:ticket` and
+// `review:cycle` publish through this helper so the status-body shape cannot
+// drift between the two orchestrators.
+export function buildStageStatusBody(status: StatusEnv, params: StageStatusParams): string {
+  return formatRunStatusBody({
+    target: params.target,
+    runUrl: status.runUrl,
+    branch: params.branch,
+    head: params.head,
+    currentStage: params.currentStage,
+    completedStages: params.completedStages,
+    startedAt: params.startedAt,
+    updatedAt: new Date().toISOString(),
+    ...(params.worker === undefined ? {} : { worker: params.worker }),
+    ...(params.outcome === undefined ? {} : { outcome: params.outcome }),
+    ...(params.reason === undefined ? {} : { reason: params.reason }),
+    ...(params.actionRequired === undefined ? {} : { actionRequired: params.actionRequired }),
+  });
+}
+
+export async function publishStageStatus(
   execute: CommandExecutor,
-  options: { issue?: number; pr?: number },
-): RunStatusPublisher {
-  const targetArgs = (body: string): readonly string[] => {
-    if (options.issue !== undefined) {
-      return ['issue', 'comment', String(options.issue), '--body', body];
-    }
-    return ['pr', 'comment', String(options.pr ?? 0), '--body', body];
-  };
-  return {
-    async createStatusComment(body: string): Promise<StatusCommentRef> {
-      const { stdout } = await execute('gh', targetArgs(body));
-      const id = parseCommentId(stdout);
-      return id === undefined ? {} : { id };
-    },
-    async updateStatusComment(id: number, body: string): Promise<void> {
-      const slug = process.env.GITHUB_REPOSITORY ?? '';
-      await execute(
-        'gh',
-        buildStatusUpdateArgs({ commentId: id, repoSlug: slug, runUrl: '' }, body),
-      );
-    },
-  };
+  status: StatusEnv,
+  params: StageStatusParams,
+): Promise<boolean> {
+  return publishStatusUpdate(execute, status, buildStageStatusBody(status, params));
 }

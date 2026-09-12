@@ -37,6 +37,28 @@ export function isWorkerTimeout(error: unknown): error is WorkerTimeoutError {
   );
 }
 
+export interface WorkerTimeoutDetails {
+  workerLabel: string;
+  timeoutMs: number;
+}
+
+// Typed timeout detail extraction so callers never probe error internals with
+// ad-hoc casts: a timeout carries which worker exceeded which bound, anything
+// else yields `undefined` (model, gate, CI, human-decision, stale-HEAD, and
+// cancellation failures are not timeouts).
+export function timeoutDetails(error: unknown): WorkerTimeoutDetails | undefined {
+  if (error instanceof WorkerTimeoutError) {
+    return { workerLabel: error.workerLabel, timeoutMs: error.timeoutMs };
+  }
+  if (typeof error === 'object' && error !== null) {
+    const record = error as { workerLabel?: unknown; timeoutMs?: unknown };
+    if (typeof record.workerLabel === 'string' && typeof record.timeoutMs === 'number') {
+      return { workerLabel: record.workerLabel, timeoutMs: record.timeoutMs };
+    }
+  }
+  return undefined;
+}
+
 // Single mapping from worker label to its bound so local orchestration
 // (`review:cycle`, `address-review` invocation from wrappers, `agent:ticket`
 // implement/review workers) shares the same bounded semantics.
