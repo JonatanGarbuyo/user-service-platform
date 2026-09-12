@@ -43,6 +43,15 @@ import {
 import { safePushBranch } from './review/safe-push.js';
 import { publishStageStatus, readStatusEnv, type RunStatusOutcome } from './review/run-status.js';
 import {
+  HANDOFF_PATCH_PATH,
+  HANDOFF_RECORD_PATH,
+  TRUSTED_PUBLICATION_MARKER,
+  buildHandoffRecord,
+  getWorkflowPatch,
+  listChangedWorkflowFiles,
+  persistWorkflowHandoffBundle,
+} from './review/workflow-handoff.js';
+import {
   isWorkerTimeout,
   timeoutDetails,
   timeoutForWorker,
@@ -272,6 +281,60 @@ function fatalDetail(error: unknown): string {
   return message.slice(0, 300);
 }
 
+// Trusted-publication handoff (ticket #36): corrections touching
+// `.github/workflows/**` must never attempt the doomed generic push with the
+// least-privilege credential. Detection runs over the exact known range and
+// stops with a distinguishable BLOCKED reason while persisting the patch plus
+// exact base/head metadata for the trusted publisher. Returns true when the
+// caller must stop instead of pushing.
+async function blockOnWorkflowHandoff(
+  recorder: RunSummaryRecorder,
+  noBell: boolean,
+  range: { branch: string; base: string; head: string },
+): Promise<boolean> {
+  let files: string[];
+  try {
+    files = await listChangedWorkflowFiles(runCommand, range.base, range.head);
+  } catch (error) {
+    const reason =
+      `${TRUSTED_PUBLICATION_MARKER}: cannot prove the correction is free of workflow files: ` +
+      (error instanceof Error ? error.message : String(error));
+    console.error(`REVIEW-CYCLE BLOCKED: ${reason}`);
+    process.exitCode = 1;
+    await concludeWithSummary(recorder, 'BLOCKED', reason);
+    notifyTerminalBell(noBell);
+    return true;
+  }
+  if (files.length === 0) {
+    return false;
+  }
+  const record = buildHandoffRecord({
+    branch: range.branch,
+    base: range.base,
+    head: range.head,
+    files,
+  });
+  let patch: string;
+  try {
+    patch = await getWorkflowPatch(runCommand, range.base, range.head, files);
+  } catch (error) {
+    patch = `# workflow handoff patch unavailable: ${error instanceof Error ? error.message : String(error)}\n`;
+  }
+  try {
+    await persistWorkflowHandoffBundle(record, patch);
+  } catch (error) {
+    console.error(
+      `Handoff persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  console.error(`REVIEW-CYCLE BLOCKED: ${record.reason}`);
+  console.error(`Handoff evidence: ${HANDOFF_PATCH_PATH} ${HANDOFF_RECORD_PATH}`);
+  process.exitCode = 1;
+  await concludeWithSummary(recorder, 'BLOCKED', record.reason);
+  notifyTerminalBell(noBell);
+  return true;
+}
+
 // Repository-owned deterministic orchestration for the dual review loop
 // (ticket #16). This command is not an LLM agent: it invokes the existing
 // OpenCode review commands as workers, reads only machine-readable markers,
@@ -362,6 +425,14 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
   }
   if (startSync.kind === 'push-and-refresh') {
     console.log(`Local HEAD ${head} is ahead of the PR; pushing via safe-push.`);
+    const handoffBlocked = await blockOnWorkflowHandoff(recorder, options.noBell, {
+      branch: pr.headRefName,
+      base: pr.headRefOid,
+      head,
+    });
+    if (handoffBlocked) {
+      return;
+    }
     const pushed = await safePushBranch(options.prArg);
     if (!pushed.ok) {
       console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);
@@ -656,11 +727,20 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       return;
     }
     recorder.recordAddressReviewAttempt('advanced', addressStartedAt, addressEndedAt);
+    const previousHead = head;
     head = newHead;
     recorder.setReviewedHead(head);
     markerRetries = { standards: 0, spec: 0 };
 
     if (options.push) {
+      const handoffBlocked = await blockOnWorkflowHandoff(recorder, options.noBell, {
+        branch: pr.headRefName,
+        base: previousHead,
+        head,
+      });
+      if (handoffBlocked) {
+        return;
+      }
       const pushed = await safePushBranch(options.prArg);
       if (!pushed.ok) {
         console.error(`REVIEW-CYCLE PUSH REFUSED: ${pushed.reason}`);

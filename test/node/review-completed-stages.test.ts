@@ -141,6 +141,7 @@ function successFixture(): CommandExecutor {
     'npm run openapi:check': '',
     'npm run test': '',
     'npm run test:harness': '',
+    [`git diff --name-only ${MAIN_HEAD}...${NEXT_HEAD} -- .github/workflows/`]: '',
     'git push -u origin ticket/10-register-and-verify-an-email-identity': '',
     'gh pr create --base main --head ticket/10-register-and-verify-an-email-identity --draft --title Register and verify an email identity (#10) --body Automated implementation of #10 via `npm run agent:ticket`.':
       'https://github.com/o/r/pull/42\n',
