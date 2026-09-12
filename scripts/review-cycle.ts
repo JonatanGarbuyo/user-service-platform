@@ -16,6 +16,7 @@ import {
   decideCheckPoll,
   fetchCommitCheckRuns,
   getRepoSlug,
+  hasApprovalWaitingRuns,
   type CheckPollDecision,
   type CommitCheckRun,
 } from './review/pr-checks.js';
@@ -618,8 +619,17 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       await setCycleStage(recorder, 'exact-HEAD CI');
       let checkDecision: CheckPollDecision = 'pending';
       let lastRuns: CommitCheckRun[] = [];
+      let ciFetchError: string | undefined;
       for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
-        const runs = await fetchCommitCheckRuns(repoSlug, head);
+        let runs: CommitCheckRun[];
+        try {
+          runs = await fetchCommitCheckRuns(repoSlug, head);
+        } catch (error) {
+          // Ticket #47: a transient check-read failure is a recoverable
+          // BLOCKED wait, never an unhandled FATAL.
+          ciFetchError = errorMessage(error);
+          break;
+        }
         lastRuns = runs;
         for (const run of runs) {
           console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
@@ -628,8 +638,14 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
         if (checkDecision !== 'pending') {
           break;
         }
-        if (attempt < CHECK_POLL_ATTEMPTS - 1) {
+        if (hasApprovalWaitingRuns(runs)) {
+          console.log(
+            `CI checks for ${head} are awaiting trusted approval (action_required); waiting for the approver before rechecking.`,
+          );
+        } else if (attempt < CHECK_POLL_ATTEMPTS - 1) {
           console.log(`CI checks for ${head} are pending; waiting before rechecking.`);
+        }
+        if (attempt < CHECK_POLL_ATTEMPTS - 1) {
           await sleep(CHECK_POLL_DELAY_MS);
         }
       }
@@ -639,16 +655,28 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
         ciDecision,
         lastRuns.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion })),
       );
-      if (checkDecision !== 'pass') {
+      if (ciFetchError !== undefined) {
         console.error(
-          'REVIEW-CYCLE BLOCKED: CI checks for the exact reviewed HEAD are not all successful.',
+          `REVIEW-CYCLE BLOCKED: cannot prove CI checks for the exact reviewed HEAD: ${ciFetchError}`,
         );
         process.exitCode = 1;
         await concludeWithSummary(
           recorder,
           'BLOCKED',
-          'CI checks for the reviewed HEAD are not successful',
+          'cannot prove CI checks for the reviewed HEAD',
         );
+        notifyTerminalBell(options.noBell);
+        return;
+      }
+      if (checkDecision !== 'pass') {
+        // Ticket #47: an approval-waiting HEAD stays a specific recoverable
+        // BLOCKED condition so `agent-ticket` waits instead of reporting FATAL.
+        const detail = hasApprovalWaitingRuns(lastRuns)
+          ? 'CI checks for the reviewed HEAD are awaiting trusted approval (action_required)'
+          : 'CI checks for the reviewed HEAD are not successful';
+        console.error(`REVIEW-CYCLE BLOCKED: ${detail}.`);
+        process.exitCode = 1;
+        await concludeWithSummary(recorder, 'BLOCKED', detail);
         notifyTerminalBell(options.noBell);
         return;
       }

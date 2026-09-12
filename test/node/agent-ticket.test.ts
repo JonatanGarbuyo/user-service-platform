@@ -564,6 +564,45 @@ describe('agent:ticket failure and escalation paths', () => {
     expect(result.prUrl).toBe('https://github.com/o/r/pull/42');
   });
 
+  it('treats an approval-waiting review:cycle as recoverable BLOCKED, not FATAL (ticket #47)', async () => {
+    const script = successScript();
+    const approvalWaiting = new Error(
+      'npm run review:cycle failed (exit 1): REVIEW-CYCLE BLOCKED: CI checks for the reviewed HEAD are awaiting trusted approval (action_required)',
+    );
+    script['worker npm run review:cycle'] = approvalWaiting;
+    let headCalls = 0;
+    const fixture = scriptedDeps(script);
+    const execute: CommandExecutor = (command, args) => {
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
+        headCalls += 1;
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
+      }
+      return fixture.execute(command, args);
+    };
+    const runWorker: NonNullable<AgentTicketDeps['runWorker']> = (command, args, label) => {
+      if (command === 'npm') {
+        return Promise.reject(approvalWaiting);
+      }
+      return fixture.runWorker(command, args, label);
+    };
+    const outcomes: string[] = [];
+    const result = await runAgentTicket('10', {
+      execute,
+      runWorker,
+      recordOutcome: (record) => {
+        outcomes.push(record.outcome);
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.failedStage).toBe('review-cycle');
+    expect(result.timedOut).toBeUndefined();
+    expect(outcomes).toEqual(['BLOCKED']);
+  });
+
   it('uses an injectable worker seam so tests never spawn subprocesses', async () => {
     const runWorker = vi.fn(() => Promise.resolve({ stdout: '', stderr: '' }));
     const fixture = scriptedDeps(successScript());
