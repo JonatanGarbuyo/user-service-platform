@@ -11,8 +11,8 @@ import {
 } from '../review/runner.js';
 import { checkSafePush, type SafePushCheck } from '../review/safe-push.js';
 import { runWorkerStream } from '../review/worker-stream.js';
-import { isWorkerTimeout, timeoutForWorker } from '../review/worker-timeout.js';
-import { publishStageStatus, type RunStatusOutcome } from '../review/run-status.js';
+import { isWorkerTimeout, timeoutForWorker, type WorkerLabel } from '../review/worker-timeout.js';
+import { publishStageStatus, type RunStatusOutcome, type StatusEnv } from '../review/run-status.js';
 
 // Explicit stage names for the durable run-status surface (ticket #31).
 // One status comment per agent run is updated as these stages advance so the
@@ -371,18 +371,12 @@ export type WorkerRunner = (
 function defaultWorkerRunner(
   command: string,
   args: readonly string[],
-  label: string,
+  label: WorkerLabel,
 ): Promise<WorkerOutput> {
   // Bounded execution (ticket #31): implement and review-cycle workers share
   // the same timeout semantics as local orchestration so a hung worker is
   // terminated with a distinguishable TIMEOUT instead of hanging the runner.
   return runWorkerStream(command, args, { label, timeoutMs: timeoutForWorker(label) });
-}
-
-export interface AgentTicketStatus {
-  commentId: number;
-  repoSlug: string;
-  runUrl: string;
 }
 
 export interface AgentTicketDeps {
@@ -397,7 +391,7 @@ export interface AgentTicketDeps {
   // present, each reached stage and the terminal outcome PATCH that single
   // comment; when absent, status stays silent. Publication is best-effort and
   // never changes the orchestration outcome.
-  status?: AgentTicketStatus;
+  status?: StatusEnv;
   // Terminal outcome recording (ticket #31). Defaults to silence; the CLI
   // entrypoint wires the repository-local outcome file read by the workflow
   // terminal step, and tests inject a captor.

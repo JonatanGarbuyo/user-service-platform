@@ -15,7 +15,8 @@ export const REVIEW_CYCLE_TIMEOUT_MS = 60 * 60 * 1000;
 export const GATE_TIMEOUT_MS = 15 * 60 * 1000;
 export const WORKER_KILL_GRACE_MS = 5_000;
 
-export type WorkerLabel = 'standards' | 'spec' | 'implement' | 'address-review' | 'review-cycle';
+export type WorkerLabel =
+  'standards' | 'spec' | 'implement' | 'address-review' | 'review-cycle' | 'gates';
 
 export class WorkerTimeoutError extends Error {
   readonly code = 'WORKER_TIMEOUT';
@@ -66,7 +67,7 @@ export function timeoutDetails(error: unknown): WorkerTimeoutDetails | undefined
 // Single mapping from worker label to its bound so local orchestration
 // (`review:cycle`, `address-review` invocation from wrappers, `agent:ticket`
 // implement/review workers, quality gates) shares the same bounded semantics.
-export function timeoutForWorker(label: string): number {
+export function timeoutForWorker(label: WorkerLabel): number {
   if (label === 'implement') {
     return IMPLEMENT_TIMEOUT_MS;
   }

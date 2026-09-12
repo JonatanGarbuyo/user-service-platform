@@ -42,7 +42,12 @@ import {
 } from './review/run-summary.js';
 import { safePushBranch } from './review/safe-push.js';
 import { publishStageStatus, readStatusEnv, type RunStatusOutcome } from './review/run-status.js';
-import { isWorkerTimeout, timeoutDetails, timeoutForWorker } from './review/worker-timeout.js';
+import {
+  isWorkerTimeout,
+  timeoutDetails,
+  timeoutForWorker,
+  type WorkerLabel,
+} from './review/worker-timeout.js';
 import { runWorkerStream } from './review/worker-stream.js';
 
 interface CycleOptions {
@@ -86,7 +91,7 @@ async function refreshPrUntilHead(
 // Every worker runs under its bounded timeout (ticket #31): a hung reviewer
 // or address-review is terminated with a distinguishable TIMEOUT instead of
 // printing heartbeats indefinitely.
-function streamingWorkerExecutor(label: string): CommandExecutor {
+function streamingWorkerExecutor(label: WorkerLabel): CommandExecutor {
   return (command, args) =>
     runWorkerStream(command, args, { label, timeoutMs: timeoutForWorker(label) });
 }
