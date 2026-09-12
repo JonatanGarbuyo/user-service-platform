@@ -47,4 +47,4 @@ The preferred migration path, if triggered, is external PostgreSQL accessed from
 
 ## Decision record
 
-Wayfinder decision: https://github.com/JonatanGarbuyo/hisense-lab/issues/2
+Wayfinder decision: https://github.com/JonatanGarbuyo/user-service-platform/issues/2
