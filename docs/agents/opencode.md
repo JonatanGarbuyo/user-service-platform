@@ -65,12 +65,13 @@ The free models used by these agents are third-party/limited-time models provide
 Before implementation or review, read:
 
 1. `AGENTS.md`.
-2. `CONTEXT.md`.
-3. The implementation ticket in full, including comments.
-4. Its parent spec.
-5. Relevant ADRs referenced by the ticket/spec.
+2. `docs/agents/project-state.md` for the current operational checkpoint/frontier.
+3. `CONTEXT.md`.
+4. The implementation ticket in full, including comments.
+5. Its parent spec.
+6. Relevant ADRs referenced by the ticket/spec.
 
-A chat transcript is not stronger authority than these artifacts.
+`project-state.md` is a snapshot/index and must not override a newer accepted ADR, current ticket/PR, repository HEAD, or live GitHub state. A chat transcript is not stronger authority than these artifacts.
 
 ## Ticket execution
 
@@ -130,22 +131,6 @@ The implementer may commit locally on its isolated ticket branch but may not dep
 
 ## Current implementation frontier
 
-The parent specification is GitHub issue #8: `Spec: Foundation and verified-email identity walking skeleton`.
+Do not hardcode the live frontier in this process document. Read `docs/agents/project-state.md` and verify it against current GitHub issue/PR state before launching a ticket.
 
-Approved implementation tickets are #9 through #14. The current frontier contains only #9: `Serve a contract-tested Worker health endpoint`.
-
-Current sequence:
-
-```text
-/implement JonatanGarbuyo/user-service-platform#9
-# push branch + open draft PR
-/review-standards
-/review-spec
-# final acceptance reads PR + CI + both comments
-/address-review
-# push fixes
-/review-standards
-/review-spec
-```
-
-Do not start #10 until #9 is implemented, both review axes have completed, material findings are resolved, and final acceptance is complete.
+The parent walking-skeleton specification remains GitHub issue #8. The dependency frontier changes as tickets are accepted, so the current next ticket and any temporary tooling blockers belong in the maintained project-state checkpoint rather than here.
