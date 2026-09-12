@@ -2,7 +2,7 @@
 
 ## Question
 
-What operational baseline should this single-client Cloudflare Workers service adopt for local development, staging, production, releases, migrations, recovery, and observability?
+What operational baseline should this single-client Cloudflare Workers service adopt for local development, sandbox, production, releases, migrations, recovery, and observability?
 
 ## Primary sources
 
@@ -22,7 +22,7 @@ What operational baseline should this single-client Cloudflare Workers service a
 
 ### Environments are independent deployed Workers
 
-Wrangler environments create separately configured Workers, conventionally named from the base Worker plus the environment name. Environment-specific bindings and variables that are not inheritable must be declared explicitly. This supports a staging/production split without adding another runtime platform.
+Wrangler environments create separately configured Workers, conventionally named from the base Worker plus the environment name. Environment-specific bindings and variables that are not inheritable must be declared explicitly. This supports a sandbox/production split without adding another runtime platform.
 
 ### Storage state is not part of a Worker version
 
@@ -47,10 +47,10 @@ Workers can export logs and traces through OpenTelemetry/OTLP if external retent
 Use three operational contexts:
 
 1. **local** — Wrangler/local Worker runtime and local D1 state for development/tests;
-2. **staging** — deployed Cloudflare Worker with staging-only D1, R2, secrets, domains/routes, and configuration;
+2. **sandbox** — deployed Cloudflare Worker with sandbox-only D1, R2, secrets, domains/routes, and configuration;
 3. **production** — deployed Cloudflare Worker with production-only D1, R2, secrets, domains/routes, and configuration.
 
-Staging and production must never share mutable D1 databases, R2 buckets, credentials, or auth/email secrets.
+Sandbox and production must never share mutable D1 databases, R2 buckets, credentials, or auth/email secrets.
 
 Do not create ephemeral per-PR Cloudflare infrastructure in the initial version. Pull requests run static checks/tests. This can be revisited if integration testing against deployed Workers becomes materially valuable.
 
@@ -58,10 +58,10 @@ Do not create ephemeral per-PR Cloudflare infrastructure in the initial version.
 
 - All database schema changes are version-controlled migrations.
 - CI validates migrations against a disposable/local D1 database before merge.
-- Merging to `main` is eligible to deploy to staging automatically once deployment automation exists.
+- Merging to `main` is eligible to deploy to sandbox automatically once deployment automation exists.
 - Production deployment is an explicit promotion/release step, not an automatic consequence of every merge to `main`.
 - Production release records the source commit and resulting Worker version/deployment identifier.
-- Smoke tests run after staging and production deployment.
+- Smoke tests run after sandbox and production deployment.
 
 Schema evolution follows **expand -> deploy -> contract** when compatibility matters:
 
