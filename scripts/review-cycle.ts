@@ -26,6 +26,7 @@ import {
   listPrComments,
   reviewAxisWorker,
   runAddressReview,
+  runCommand,
   runReviewAxis,
   type CommandExecutor,
 } from './review/runner.js';
@@ -39,6 +40,13 @@ import {
   type WorkerAttemptResult,
 } from './review/run-summary.js';
 import { safePushBranch } from './review/safe-push.js';
+import {
+  formatRunStatusBody,
+  publishStatusUpdate,
+  readStatusEnv,
+  type RunStatusOutcome,
+} from './review/run-status.js';
+import { isWorkerTimeout, timeoutForWorker } from './review/worker-timeout.js';
 import { runWorkerStream } from './review/worker-stream.js';
 
 interface CycleOptions {
@@ -79,8 +87,12 @@ async function refreshPrUntilHead(
 // the single long-running command shows liveness. Short git/gh/npm commands
 // stay on the buffered path. The injected `CommandExecutor` seam is unchanged,
 // so tests still observe exact invocations without real subprocesses.
+// Every worker runs under its bounded timeout (ticket #31): a hung reviewer
+// or address-review is terminated with a distinguishable TIMEOUT instead of
+// printing heartbeats indefinitely.
 function streamingWorkerExecutor(label: string): CommandExecutor {
-  return (command, args) => runWorkerStream(command, args, { label });
+  return (command, args) =>
+    runWorkerStream(command, args, { label, timeoutMs: timeoutForWorker(label) });
 }
 
 function parseArgs(argv: readonly string[]): CycleOptions {
@@ -157,6 +169,96 @@ async function concludeWithSummary(
       `Run summary persistence failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // Durable status publication (ticket #31) is best-effort like persistence:
+  // the single status comment owned by the calling workflow always receives
+  // the terminal state when routing is configured (remote runs), and local
+  // runs stay silent.
+  await publishTerminalStatus(recorder, outcome, detail);
+}
+
+function statusOutcomeFor(outcome: TerminalOutcome): RunStatusOutcome {
+  if (outcome === 'STOPPED') {
+    return 'BLOCKED';
+  }
+  return outcome;
+}
+
+function workerForCycleStage(stage: string): string | undefined {
+  if (stage === 'Standards review') {
+    return 'standards';
+  }
+  if (stage === 'Spec review') {
+    return 'spec';
+  }
+  if (stage === 'address-review') {
+    return 'address-review';
+  }
+  return undefined;
+}
+
+function actionForCycleOutcome(outcome: RunStatusOutcome): string | undefined {
+  if (outcome === 'NEEDS-DECISION') {
+    return 'A product, architecture, or contract decision is required before automation can continue.';
+  }
+  if (outcome === 'TIMEOUT') {
+    return 'A review worker exceeded its bound; rerun review:cycle once the runner is free.';
+  }
+  if (outcome === 'BLOCKED' || outcome === 'FATAL') {
+    return 'Inspect the review-cycle output and .review-cycle/latest.json, then rerun review:cycle.';
+  }
+  return undefined;
+}
+
+async function publishCycleStatus(
+  recorder: RunSummaryRecorder,
+  stage: string,
+  terminal?: { outcome: TerminalOutcome; detail?: string },
+): Promise<void> {
+  try {
+    const status = readStatusEnv();
+    const snap = recorder.snapshot();
+    if (status === undefined || snap.pr === undefined) {
+      return;
+    }
+    const outcome = terminal === undefined ? undefined : statusOutcomeFor(terminal.outcome);
+    const worker = workerForCycleStage(stage);
+    const actionRequired = outcome === undefined ? undefined : actionForCycleOutcome(outcome);
+    const body = formatRunStatusBody({
+      target: `PR #${String(snap.pr.number)}`,
+      runUrl: status.runUrl,
+      branch: snap.branch ?? '(unknown)',
+      head: snap.reviewedHead === '' ? '(unknown)' : snap.reviewedHead,
+      currentStage: stage,
+      completedStages: [],
+      startedAt: snap.startedAt,
+      updatedAt: new Date().toISOString(),
+      ...(worker === undefined ? {} : { worker }),
+      ...(outcome === undefined ? {} : { outcome }),
+      ...(terminal?.detail === undefined || terminal.detail === ''
+        ? {}
+        : { reason: terminal.detail }),
+      ...(actionRequired === undefined ? {} : { actionRequired }),
+    });
+    await publishStatusUpdate(runCommand, status, body);
+  } catch {
+    // Best-effort: status publication never changes the terminal outcome.
+  }
+}
+
+async function publishTerminalStatus(
+  recorder: RunSummaryRecorder,
+  outcome: TerminalOutcome,
+  detail?: string,
+): Promise<void> {
+  const snap = recorder.snapshot();
+  await publishCycleStatus(recorder, snap.stage ?? '(unknown)', { outcome, detail });
+}
+
+// Stage changes update the durable status surface (ticket #31) alongside the
+// structured summary so GitHub shows the current stage without log polling.
+async function setCycleStage(recorder: RunSummaryRecorder, stage: string): Promise<void> {
+  recorder.setStage(stage);
+  await publishCycleStatus(recorder, stage);
 }
 
 function fatalDetail(error: unknown): string {
@@ -177,10 +279,20 @@ async function main(): Promise<void> {
     await runCycle(recorder);
   } catch (error) {
     // Unhandled rejection/exception (e.g. a failed OpenCode worker): persist
-    // a FATAL summary with the final known state, then rethrow so the
-    // fatal-error boundary still reports REVIEW-CYCLE FATAL and rings once.
+    // a summary with the final known state, then rethrow so the fatal-error
+    // boundary still reports and rings once. A bounded worker timeout is a
+    // TIMEOUT with stage/timeout evidence — never a FATAL — and exits
+    // non-zero so local runs cannot sit at `still running` indefinitely.
     // Persistence itself is best-effort inside concludeWithSummary.
-    await concludeWithSummary(recorder, 'FATAL', fatalDetail(error));
+    if (isWorkerTimeout(error)) {
+      const timedOut = error as { workerLabel?: unknown; timeoutMs?: unknown };
+      if (typeof timedOut.workerLabel === 'string' && typeof timedOut.timeoutMs === 'number') {
+        recorder.recordTimeout(timedOut.workerLabel, timedOut.timeoutMs);
+      }
+      await concludeWithSummary(recorder, 'TIMEOUT', fatalDetail(error));
+    } else {
+      await concludeWithSummary(recorder, 'FATAL', fatalDetail(error));
+    }
     throw error;
   }
 }
@@ -280,6 +392,14 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
     const justRan: ('standards' | 'spec')[] =
       pendingAxes === null ? ['standards', 'spec'] : [...pendingAxes];
     const timings = new Map<'standards' | 'spec', { start: number; end: number }>();
+    await setCycleStage(
+      recorder,
+      pendingAxes === null
+        ? 'Standards review'
+        : pendingAxes
+            .map((axis) => (axis === 'standards' ? 'Standards review' : 'Spec review'))
+            .join(', '),
+    );
     try {
       if (pendingAxes === null) {
         let standardsStart = 0;
@@ -362,6 +482,7 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
     });
 
     if (decision.kind === 'ready-for-acceptance') {
+      await setCycleStage(recorder, 'gates');
       const gates = await runQualityGates();
       recorder.setQualityGates(gates.map((gate) => ({ name: gate.name, ok: gate.ok })));
       const pass = qualityGatesPass(gates);
@@ -388,6 +509,7 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
         return;
       }
       const repoSlug = await getRepoSlug();
+      await setCycleStage(recorder, 'exact-HEAD CI');
       let checkDecision: CheckPollDecision = 'pending';
       let lastRuns: CommitCheckRun[] = [];
       for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
@@ -426,6 +548,7 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       }
       console.log('');
       console.log(formatReadySummary({ head, cycles, gates: 'PASS' }));
+      await setCycleStage(recorder, 'final acceptance-ready');
       await concludeWithSummary(recorder, 'READY', 'ready for final acceptance');
       notifyTerminalBell(options.noBell);
       return;
@@ -487,6 +610,7 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
 
     // decision.kind === 'address-review'
     cycles += 1;
+    await setCycleStage(recorder, 'address-review');
     console.log(
       `Blocking findings for ${head}: invoking /address-review (correction cycle ${String(cycles)}).`,
     );

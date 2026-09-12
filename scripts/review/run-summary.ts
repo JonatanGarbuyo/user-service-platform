@@ -11,7 +11,8 @@ import { expectedModelForAxis, type ReviewAxis, type ReviewResult } from './resu
 export const RUN_SUMMARY_DIR = '.review-cycle';
 export const RUN_SUMMARY_LATEST = 'latest.json';
 
-export type TerminalOutcome = 'READY' | 'NEEDS-DECISION' | 'BLOCKED' | 'STOPPED' | 'FATAL';
+export type TerminalOutcome =
+  'READY' | 'NEEDS-DECISION' | 'BLOCKED' | 'STOPPED' | 'FATAL' | 'TIMEOUT';
 
 export type WorkerAttemptResult = ReviewResult | 'MISSING' | 'ERROR';
 
@@ -48,6 +49,11 @@ export interface CheckRunSummary {
 
 export type CiDecision = 'pass' | 'fail' | 'pending' | 'unknown';
 
+export interface TimeoutSummary {
+  worker: string;
+  timeoutMs: number;
+}
+
 export interface PrSummary {
   number: number;
   url?: string;
@@ -75,6 +81,13 @@ export interface RunSummary {
   ci: { decision: CiDecision; runs: CheckRunSummary[] };
   outcome: TerminalOutcome;
   detail?: string;
+  // Last known orchestration stage (ticket #31 stage vocabulary such as
+  // validation, Standards review, exact-HEAD CI) so terminal, fatal,
+  // cancelled, and timed-out runs keep stage evidence without scrollback.
+  stage?: string;
+  // Worker timeout evidence where relevant: which worker exceeded which
+  // bound. Absent when no timeout occurred.
+  timeout?: TimeoutSummary;
 }
 
 export interface RecorderOptions {
@@ -118,9 +131,21 @@ export interface RunSummaryRecorder {
   setBranch(branch: string, base: string): void;
   setReviewedHead(head: string): void;
   setInitialHead(head: string): void;
+  setStage(stage: string): void;
+  recordTimeout(worker: string, timeoutMs: number): void;
   setMarkerRetries(retries: Record<ReviewAxis, number>): void;
   setQualityGates(gates: GateSummary[]): void;
   setCi(decision: CiDecision, runs?: CheckRunSummary[]): void;
+  // Durable status snapshot (ticket #31): terminal publication reads the last
+  // known PR/branch/HEAD/stage without exposing the mutable recorder.
+  snapshot(): {
+    pr?: PrSummary;
+    branch?: string;
+    base?: string;
+    reviewedHead: string;
+    stage?: string;
+    startedAt: string;
+  };
   finish(outcome: TerminalOutcome, detail?: string): RunSummary;
 }
 
@@ -138,6 +163,8 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
   let markerRetries: Record<ReviewAxis, number> = { standards: 0, spec: 0 };
   let qualityGates: GateSummary[] = [];
   let ci: { decision: CiDecision; runs: CheckRunSummary[] } = { decision: 'unknown', runs: [] };
+  let stage: string | undefined;
+  let timeout: TimeoutSummary | undefined;
 
   function build(outcome: TerminalOutcome, detail: string | undefined): RunSummary {
     const endedAtMs = now();
@@ -171,6 +198,12 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
     }
     if (detail !== undefined && detail !== '') {
       summary.detail = detail;
+    }
+    if (stage !== undefined) {
+      summary.stage = stage;
+    }
+    if (timeout !== undefined) {
+      summary.timeout = { ...timeout };
     }
     return summary;
   }
@@ -210,6 +243,12 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
     setInitialHead(head: string) {
       initialHead = head;
     },
+    setStage(next: string) {
+      stage = next;
+    },
+    recordTimeout(worker: string, timeoutMs: number) {
+      timeout = { worker, timeoutMs };
+    },
     setMarkerRetries(retries: Record<ReviewAxis, number>) {
       markerRetries = { ...retries };
     },
@@ -224,6 +263,16 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
           status: run.status,
           conclusion: run.conclusion,
         })),
+      };
+    },
+    snapshot() {
+      return {
+        ...(pr === undefined ? {} : { pr: { ...pr } }),
+        ...(branch === undefined ? {} : { branch }),
+        ...(base === undefined ? {} : { base }),
+        reviewedHead,
+        ...(stage === undefined ? {} : { stage }),
+        startedAt: toIso(runStartedAtMs),
       };
     },
     finish(outcome: TerminalOutcome, detail?: string) {

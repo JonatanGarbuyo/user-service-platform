@@ -9,6 +9,28 @@ import {
 } from '../review/runner.js';
 import { checkSafePush, type SafePushCheck } from '../review/safe-push.js';
 import { runWorkerStream } from '../review/worker-stream.js';
+import { isWorkerTimeout, timeoutForWorker } from '../review/worker-timeout.js';
+import {
+  formatRunStatusBody,
+  publishStatusUpdate,
+  type RunStatusOutcome,
+} from '../review/run-status.js';
+
+// Explicit stage names for the durable run-status surface (ticket #31).
+// One status comment per agent run is updated as these stages advance so the
+// current stage and terminal outcome are visible from GitHub mobile/web
+// without terminal polling.
+export const TICKET_STAGE_NAMES = [
+  'validation',
+  'implementation',
+  'gates',
+  'push',
+  'PR creation',
+  'review',
+  'final acceptance-ready',
+] as const;
+
+export type TicketStageName = (typeof TICKET_STAGE_NAMES)[number];
 
 // Deterministic ticket orchestration for `npm run agent:ticket -- <issue>`
 // (ticket #23). One repository-owned command drives a clean `main` worktree
@@ -256,13 +278,31 @@ function defaultWorkerRunner(
   args: readonly string[],
   label: string,
 ): Promise<WorkerOutput> {
-  return runWorkerStream(command, args, { label });
+  // Bounded execution (ticket #31): implement and review-cycle workers share
+  // the same timeout semantics as local orchestration so a hung worker is
+  // terminated with a distinguishable TIMEOUT instead of hanging the runner.
+  return runWorkerStream(command, args, { label, timeoutMs: timeoutForWorker(label) });
+}
+
+export interface AgentTicketStatus {
+  commentId: number;
+  repoSlug: string;
+  runUrl: string;
 }
 
 export interface AgentTicketDeps {
   execute?: CommandExecutor;
   runWorker?: WorkerRunner;
   runGates?: (execute: CommandExecutor) => Promise<GateResult[]>;
+  // Stage reporter for the durable run-status surface (ticket #31). Called
+  // once per reached stage, in order; defaults to silence so local runs stay
+  // quiet and existing callers are unaffected.
+  onStage?: (stage: TicketStageName) => void;
+  // Durable status comment owned by the calling workflow (ticket #31). When
+  // present, each reached stage and the terminal outcome PATCH that single
+  // comment; when absent, status stays silent. Publication is best-effort and
+  // never changes the orchestration outcome.
+  status?: AgentTicketStatus;
 }
 
 export interface AgentTicketResult {
@@ -273,6 +313,9 @@ export interface AgentTicketResult {
   summaryPath?: string;
   failedStage?: string;
   reason?: string;
+  // True when the failure was a bounded worker timeout, distinct from model,
+  // gate, CI, human-decision, stale-HEAD, or cancellation failures.
+  timedOut?: boolean;
 }
 
 function errorMessage(error: unknown): string {
@@ -299,10 +342,17 @@ function reportDurableState(partial: { branch?: string; prNumber?: number; prUrl
   console.error(`Durable state: ${parts.join(' ')}`);
 }
 
-function failResult(stage: string, reason: string, branch?: string): AgentTicketResult {
-  return branch === undefined
-    ? { exitCode: 1, failedStage: stage, reason }
-    : { exitCode: 1, failedStage: stage, reason, branch };
+function failResult(
+  stage: string,
+  reason: string,
+  branch?: string,
+  timedOut?: boolean,
+): AgentTicketResult {
+  const base =
+    branch === undefined
+      ? { exitCode: 1, failedStage: stage, reason }
+      : { exitCode: 1, failedStage: stage, reason, branch };
+  return timedOut ? { ...base, timedOut: true } : base;
 }
 
 export async function runAgentTicket(
@@ -312,7 +362,85 @@ export async function runAgentTicket(
   const execute = deps.execute ?? runCommand;
   const runWorker = deps.runWorker ?? defaultWorkerRunner;
   const runGates = deps.runGates ?? runQualityGates;
+  const reportStage = (stage: TicketStageName): void => {
+    deps.onStage?.(stage);
+  };
 
+  // Durable status publication (ticket #31): the calling workflow owns one
+  // status comment per run and passes its routing here. Each reached stage
+  // and the terminal outcome PATCH that same comment with deterministic
+  // repository-owned metadata. Absent routing means a local run: silent.
+  const startedAtIso = new Date().toISOString();
+  const completedStages: string[] = [];
+  const statusTarget = deps.status;
+
+  function workerForStage(stage: TicketStageName): string | undefined {
+    if (stage === 'implementation') {
+      return 'implement';
+    }
+    if (stage === 'review') {
+      return 'review-cycle';
+    }
+    return undefined;
+  }
+
+  async function publishStage(
+    stage: TicketStageName,
+    options: {
+      branch: string;
+      head?: string;
+      outcome?: RunStatusOutcome;
+      reason?: string;
+      actionRequired?: string;
+    },
+  ): Promise<void> {
+    if (statusTarget === undefined) {
+      return;
+    }
+    let head = options.head;
+    if (head === undefined) {
+      try {
+        head = await getCurrentHead(execute);
+      } catch {
+        head = '(unknown)';
+      }
+    }
+    const worker = workerForStage(stage);
+    const body = formatRunStatusBody({
+      target: `issue #${String(ticket)}`,
+      runUrl: statusTarget.runUrl,
+      branch: options.branch,
+      head,
+      currentStage: stage,
+      completedStages: [...completedStages],
+      startedAt: startedAtIso,
+      updatedAt: new Date().toISOString(),
+      ...(worker === undefined ? {} : { worker }),
+      ...(options.outcome === undefined ? {} : { outcome: options.outcome }),
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
+      ...(options.actionRequired === undefined ? {} : { actionRequired: options.actionRequired }),
+    });
+    await publishStatusUpdate(execute, statusTarget, body);
+  }
+
+  // Terminal publication always carries an attention outcome except READY:
+  // BLOCKED, NEEDS-DECISION, and TIMEOUT mention the owner with stage, reason,
+  // and the exact action required so GitHub Mobile pushes.
+  async function terminal(
+    result: AgentTicketResult,
+    stage: TicketStageName,
+    branch: string,
+    outcome: RunStatusOutcome,
+    actionRequired: string,
+    head?: string,
+  ): Promise<AgentTicketResult> {
+    if (result.reason !== undefined) {
+      await publishStage(stage, { branch, head, outcome, reason: result.reason, actionRequired });
+    }
+    return result;
+  }
+
+  reportStage('validation');
   let ticket: number;
   try {
     ticket = parseTicketArg(rawTicket);
@@ -405,29 +533,60 @@ export async function runAgentTicket(
   // `git checkout -b` does not move HEAD, so the pre-checkout main tip is the
   // baseline the implementation must advance.
   const headBefore = mainHead;
+  reportStage('implementation');
+  await publishStage('implementation', { branch, head: headBefore });
   try {
     await runWorker('opencode', buildImplementArgs(ticket), 'implement');
   } catch (error) {
-    const reason = `/implement failed for ticket #${String(ticket)}: ${errorMessage(error)}`;
-    console.error(`AGENT-TICKET FAILED (implement): ${reason}`);
+    const timedOut = isWorkerTimeout(error);
+    const reason = timedOut
+      ? `/implement timed out for ticket #${String(ticket)}: ${errorMessage(error)}`
+      : `/implement failed for ticket #${String(ticket)}: ${errorMessage(error)}`;
+    console.error(`AGENT-TICKET ${timedOut ? 'TIMEOUT' : 'FAILED'} (implement): ${reason}`);
     reportDurableState({ branch });
-    return failResult('implement', reason, branch);
+    return terminal(
+      failResult('implement', reason, branch, timedOut ? true : undefined),
+      'implementation',
+      branch,
+      timedOut ? 'TIMEOUT' : 'BLOCKED',
+      timedOut
+        ? 'The implement worker exceeded its bound; rerun /agent-ticket once the runner is free.'
+        : 'Inspect the implement worker output, then rerun /agent-ticket.',
+      headBefore,
+    );
   }
   const headAfter = await getCurrentHead(execute);
   if (headAfter === headBefore) {
     const reason = `/implement produced no local commits on ${branch}`;
     console.error(`AGENT-TICKET FAILED (implement): ${reason}`);
     reportDurableState({ branch });
-    return failResult('implement', reason, branch);
+    return terminal(
+      failResult('implement', reason, branch),
+      'implementation',
+      branch,
+      'BLOCKED',
+      'Inspect the ticket branch state, then rerun /agent-ticket.',
+      headBefore,
+    );
   }
   if (!(await isWorktreeClean(execute))) {
     const reason = `/implement left uncommitted changes on ${branch}; refusing to push a dirty worktree`;
     console.error(`AGENT-TICKET FAILED (implement): ${reason}`);
     reportDurableState({ branch });
-    return failResult('implement', reason, branch);
+    return terminal(
+      failResult('implement', reason, branch),
+      'implementation',
+      branch,
+      'BLOCKED',
+      'Inspect the ticket branch state, then rerun /agent-ticket.',
+      headAfter,
+    );
   }
   console.log(`Implementation advanced ${branch}: ${headBefore} -> ${headAfter}.`);
+  completedStages.push('implementation');
 
+  reportStage('gates');
+  await publishStage('gates', { branch, head: headAfter });
   const gates = await runGates(execute);
   for (const gate of gates) {
     console.log(`gate ${gate.name}: ${gate.ok ? 'PASS' : 'FAIL'}`);
@@ -436,15 +595,32 @@ export async function runAgentTicket(
     const reason = 'repository quality gates failed for the implementation HEAD';
     console.error(`AGENT-TICKET BLOCKED (gates): ${reason}.`);
     reportDurableState({ branch });
-    return failResult('gates', reason, branch);
+    return terminal(
+      failResult('gates', reason, branch),
+      'gates',
+      branch,
+      'BLOCKED',
+      'Fix the failing gate locally, then rerun /agent-ticket.',
+      headAfter,
+    );
   }
+  completedStages.push('gates');
 
+  reportStage('push');
+  await publishStage('push', { branch, head: headAfter });
   const pushCheck = checkInitialPush({ currentBranch: branch, worktreeClean: true });
   if (!pushCheck.ok) {
     const reason = `initial push refused: ${pushCheck.reason}`;
     console.error(`AGENT-TICKET BLOCKED (push): ${reason}`);
     reportDurableState({ branch });
-    return failResult('push', reason, branch);
+    return terminal(
+      failResult('push', reason, branch),
+      'push',
+      branch,
+      'BLOCKED',
+      'Inspect push permissions and branch state, then rerun /agent-ticket.',
+      headAfter,
+    );
   }
   try {
     await execute('git', ['push', '-u', 'origin', branch]);
@@ -452,17 +628,34 @@ export async function runAgentTicket(
     const reason = `initial push of ${branch} failed: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (push): ${reason}`);
     reportDurableState({ branch });
-    return failResult('push', reason, branch);
+    return terminal(
+      failResult('push', reason, branch),
+      'push',
+      branch,
+      'BLOCKED',
+      'Inspect push permissions and branch state, then rerun /agent-ticket.',
+      headAfter,
+    );
   }
   console.log(`Pushed ticket branch: origin/${branch}`);
+  completedStages.push('push');
 
+  reportStage('PR creation');
+  await publishStage('PR creation', { branch, head: headAfter });
   try {
     await execute('gh', buildPrCreateArgs({ branch, title: issue.title, ticket }));
   } catch (error) {
     const reason = `draft PR creation failed for ${branch}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (pr): ${reason}`);
     reportDurableState({ branch });
-    return failResult('pr', reason, branch);
+    return terminal(
+      failResult('pr', reason, branch),
+      'PR creation',
+      branch,
+      'BLOCKED',
+      'Inspect PR creation permissions, then rerun /agent-ticket.',
+      headAfter,
+    );
   }
   let prNumber: number;
   let prUrl: string | undefined;
@@ -474,25 +667,70 @@ export async function runAgentTicket(
     const reason = `draft PR was created but cannot be resolved: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET BLOCKED (pr): ${reason}`);
     reportDurableState({ branch });
-    return failResult('pr', reason, branch);
+    return terminal(
+      failResult('pr', reason, branch),
+      'PR creation',
+      branch,
+      'BLOCKED',
+      'Inspect PR creation permissions, then rerun /agent-ticket.',
+      headAfter,
+    );
   }
   console.log(
     `Draft PR #${String(prNumber)}${prUrl === undefined ? '' : `: ${prUrl}`} (base main).`,
   );
+  completedStages.push('PR creation');
 
   let review: WorkerOutput;
+  reportStage('review');
+  await publishStage('review', { branch, head: headAfter });
   try {
     review = await runWorker('npm', buildReviewCycleArgs(), 'review-cycle');
   } catch (error) {
     const exitCode = errorExitCode(error);
-    const reason = `review:cycle did not reach READY: ${errorMessage(error)}`;
+    const timedOut = isWorkerTimeout(error);
+    const reason = timedOut
+      ? `review:cycle timed out: ${errorMessage(error)}`
+      : `review:cycle did not reach READY: ${errorMessage(error)}`;
     console.error(
-      `AGENT-TICKET ${exitCode === 2 ? 'ESCALATED' : 'BLOCKED'} (review-cycle): ${reason}`,
+      `AGENT-TICKET ${timedOut ? 'TIMEOUT' : exitCode === 2 ? 'ESCALATED' : 'BLOCKED'} (review-cycle): ${reason}`,
     );
     reportDurableState({ branch, prNumber, prUrl });
-    return { exitCode, failedStage: 'review-cycle', reason, branch, prNumber, prUrl };
+    const outcome: RunStatusOutcome = timedOut
+      ? 'TIMEOUT'
+      : exitCode === 2
+        ? 'NEEDS-DECISION'
+        : 'BLOCKED';
+    const actionRequired =
+      outcome === 'NEEDS-DECISION'
+        ? 'A product, architecture, or contract decision is required before automation can continue.'
+        : outcome === 'TIMEOUT'
+          ? 'The review worker exceeded its bound; rerun once the runner is free.'
+          : 'Inspect .review-cycle/latest.json, then rerun.';
+    return terminal(
+      {
+        exitCode,
+        failedStage: 'review-cycle',
+        reason,
+        branch,
+        prNumber,
+        prUrl,
+        ...(timedOut ? { timedOut: true } : {}),
+      },
+      'review',
+      branch,
+      outcome,
+      actionRequired,
+    );
   }
   const summaryPath = extractSummaryPath(review.stdout) ?? '.review-cycle/latest.json';
+  reportStage('final acceptance-ready');
+  completedStages.push('review');
+  await publishStage('final acceptance-ready', {
+    branch,
+    outcome: 'READY',
+    reason: 'ready for final acceptance',
+  });
   console.log('');
   console.log(`READY FOR FINAL ACCEPTANCE\nBranch: ${branch}\nPR: #${String(prNumber)}`);
   console.log(`Run summary: ${summaryPath}`);

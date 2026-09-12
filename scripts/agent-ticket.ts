@@ -1,4 +1,5 @@
 import { runAgentTicket } from './agent/ticket-flow.js';
+import { readStatusEnv } from './review/run-status.js';
 
 // Supported entrypoint for ticket #23: `npm run agent:ticket -- <issue>`.
 // Takes one approved `ready-for-agent` implementation ticket from a clean
@@ -28,7 +29,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const result = await runAgentTicket(ticketArg);
+  const result = await runAgentTicket(ticketArg, { status: readStatusEnv() });
   process.exitCode = result.exitCode;
 }
 
