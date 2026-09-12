@@ -20,16 +20,16 @@ describe('review result marker', () => {
   it('round-trips a spec FAIL marker without inferring from prose', () => {
     const head = 'b'.repeat(40);
     const body = [
-      '## Spec review — Nemotron 3.5 Lightning',
+      '## Spec review — DeepSeek V4 Flash Free',
       'Reviewed HEAD: ' + head,
       'This prose claims everything passes but the marker rules.',
-      formatReviewMarker({ axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'FAIL' }),
+      formatReviewMarker({ axis: 'spec', model: 'deepseek-v4-flash-free', head, result: 'FAIL' }),
     ].join('\n');
 
     const markers = parseReviewMarkers(body);
 
     expect(markers).toEqual([
-      { axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'FAIL' },
+      { axis: 'spec', model: 'deepseek-v4-flash-free', head, result: 'FAIL' },
     ]);
   });
 
@@ -62,7 +62,7 @@ describe('review result marker', () => {
       {
         body: formatReviewMarker({
           axis: 'spec',
-          model: 'nemotron-3.5-lightning',
+          model: 'deepseek-v4-flash-free',
           head: oldHead,
           result: 'PASS',
         }),
@@ -102,9 +102,18 @@ describe('review result marker', () => {
     expect(selectCurrentHeadReports(comments, currentHead)).toEqual({});
   });
 
-  it('rejects stale Ultra spec markers once the axis requires Lightning', () => {
+  it('rejects stale Nemotron spec markers once the axis requires DeepSeek', () => {
     const currentHead = '4'.repeat(40);
     const comments = [
+      {
+        body: formatReviewMarker({
+          axis: 'spec',
+          model: 'nemotron-3.5-lightning',
+          head: currentHead,
+          result: 'PASS',
+        }),
+        createdAt: '2026-01-06T00:00:00Z',
+      },
       {
         body: formatReviewMarker({
           axis: 'spec',
@@ -112,10 +121,30 @@ describe('review result marker', () => {
           head: currentHead,
           result: 'PASS',
         }),
-        createdAt: '2026-01-06T00:00:00Z',
+        createdAt: '2026-01-06T01:00:00Z',
       },
     ];
 
     expect(selectCurrentHeadReports(comments, currentHead)).toEqual({});
+  });
+
+  it('accepts the DeepSeek spec marker for the current HEAD', () => {
+    const currentHead = '5'.repeat(40);
+    const comments = [
+      {
+        body: formatReviewMarker({
+          axis: 'spec',
+          model: 'deepseek-v4-flash-free',
+          head: currentHead,
+          result: 'PASS',
+        }),
+        createdAt: '2026-01-07T00:00:00Z',
+      },
+    ];
+
+    expect(selectCurrentHeadReports(comments, currentHead).spec).toMatchObject({
+      model: 'deepseek-v4-flash-free',
+      result: 'PASS',
+    });
   });
 });

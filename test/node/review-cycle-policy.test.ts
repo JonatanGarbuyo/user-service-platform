@@ -11,7 +11,7 @@ describe('review cycle policy', () => {
     expect(
       decideNextStep({
         standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'PASS' },
-        spec: { axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'PASS' },
+        spec: { axis: 'spec', model: 'deepseek-v4-flash-free', head, result: 'PASS' },
         cycles: 0,
         maxCycles: 3,
       }).kind,
@@ -32,7 +32,7 @@ describe('review cycle policy', () => {
   it('routes blocking FAIL findings to address-review within the bound', () => {
     const decision = decideNextStep({
       standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'FAIL' },
-      spec: { axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'PASS' },
+      spec: { axis: 'spec', model: 'deepseek-v4-flash-free', head, result: 'PASS' },
       cycles: 1,
       maxCycles: 3,
     });
@@ -43,7 +43,7 @@ describe('review cycle policy', () => {
   it('stops after the bounded number of correction cycles', () => {
     const decision = decideNextStep({
       standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'FAIL' },
-      spec: { axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'PASS' },
+      spec: { axis: 'spec', model: 'deepseek-v4-flash-free', head, result: 'PASS' },
       cycles: 3,
       maxCycles: 3,
     });
@@ -59,7 +59,7 @@ describe('review cycle policy', () => {
         head,
         result: 'NEEDS-DECISION',
       },
-      spec: { axis: 'spec', model: 'nemotron-3.5-lightning', head, result: 'PASS' },
+      spec: { axis: 'spec', model: 'deepseek-v4-flash-free', head, result: 'PASS' },
       cycles: 0,
       maxCycles: 3,
     });
