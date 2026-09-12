@@ -1,0 +1,135 @@
+name: agent-ticket
+
+on:
+  issue_comment:
+    types: [created]
+
+# One remote run per issue so duplicate /agent-ticket commands cannot race on
+# the same ticket branch. Queued, never cancelled.
+concurrency:
+  group: agent-ticket-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+# Least-privilege for ticket-branch pushes and PR/issue comments only. No
+# production, deployment, or package secrets are available to these jobs.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  actions: read
+
+jobs:
+  run:
+    # Issues only; PR comments are handled by agent-fix-cycle.
+    if: ${{ !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate /agent-ticket trigger
+        id: guard
+        run: |
+          set -euo pipefail
+          COMMENT_BODY="$(jq -r '.comment.body // empty' "$GITHUB_EVENT_PATH")"
+          FIRST_LINE="$(printf '%s' "$COMMENT_BODY" | sed -n '/[^[:space:]]/{p;q;}')"
+          # Exact fixed command only; comment text is never evaluated as shell,
+          # arguments, filenames, refs, or prompts.
+          if [ "$FIRST_LINE" != "/agent-ticket" ]; then
+            echo "No exact /agent-ticket command on the first line; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          MATCHES="$(printf '%s' "$COMMENT_BODY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -xc -e '/agent-ticket' -e '/agent-fix-cycle' || true)"
+          if [ "$MATCHES" != "1" ]; then
+            echo "/agent-ticket refused: ambiguous comment with multiple commands."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ASSOCIATION="$(jq -r '.comment.author_association // empty' "$GITHUB_EVENT_PATH")"
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "/agent-ticket refused: unauthorized actor ($ASSOCIATION)."
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          ISSUE_NUMBER="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+          ISSUE_STATE="$(gh issue view "$ISSUE_NUMBER" --json state --jq '.state')"
+          if [ "$ISSUE_STATE" != "OPEN" ]; then
+            echo "/agent-ticket refused: issue #$ISSUE_NUMBER is $ISSUE_STATE, expected OPEN."
+            gh issue comment "$ISSUE_NUMBER" --body "AGENT-TICKET REFUSED: issue #$ISSUE_NUMBER is $ISSUE_STATE, expected OPEN." || true
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' | grep -xq 'ready-for-agent'; then
+            echo "/agent-ticket refused: issue #$ISSUE_NUMBER lacks the ready-for-agent label."
+            gh issue comment "$ISSUE_NUMBER" --body "AGENT-TICKET REFUSED: issue #$ISSUE_NUMBER is not an approved ready-for-agent ticket." || true
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "issue=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Acknowledge command
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          ISSUE_NUMBER="${{ steps.guard.outputs.issue }}"
+          gh issue comment "$ISSUE_NUMBER" --body "Agent ticket run accepted for issue #$ISSUE_NUMBER. Running \`npm run agent:ticket\` on a GitHub-hosted runner; evidence will follow on this issue." || true
+
+      - name: Install pinned OpenCode
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://opencode.ai/install | bash -s -- --version=1.18.30
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Run agent ticket flow
+        # Reuses npm run agent:ticket unchanged: branch -> /implement ->
+        # quality gates -> safe push -> draft PR -> review:cycle, stopping at
+        # READY FOR FINAL ACCEPTANCE. Never merges, deploys, or publishes.
+        if: steps.guard.outputs.run == 'true'
+        env:
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+        run: |
+          set -euo pipefail
+          ISSUE_NUMBER="${{ steps.guard.outputs.issue }}"
+          npm run agent:ticket -- "$ISSUE_NUMBER"
+
+      - name: Upload run evidence
+        if: steps.guard.outputs.run == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-ticket-evidence-${{ github.event.issue.number }}
+          path: .review-cycle/latest.json
+          if-no-files-found: warn
+
+      - name: Report terminal result
+        if: steps.guard.outputs.run == 'true' && always()
+        run: |
+          set -euo pipefail
+          ISSUE_NUMBER="${{ steps.guard.outputs.issue }}"
+          HEAD="$(git rev-parse HEAD)"
+          SUMMARY="Run summary: .review-cycle/latest.json (see workflow artifacts/run logs)."
+          if [ "${{ job.status }}" = "success" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "AGENT-TICKET READY FOR FINAL ACCEPTANCE. Issue #$ISSUE_NUMBER, HEAD $HEAD. $SUMMARY Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}." || true
+          else
+            gh issue comment "$ISSUE_NUMBER" --body "AGENT-TICKET BLOCKED for issue #$ISSUE_NUMBER at HEAD $HEAD. $SUMMARY Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}." || true
+          fi
