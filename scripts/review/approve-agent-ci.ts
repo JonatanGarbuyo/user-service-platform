@@ -202,6 +202,77 @@ export function buildApproveRunArgs(repoSlug: string, runId: number): readonly s
   return ['api', `repos/${repoSlug}/actions/runs/${String(runId)}/approve`, '--method', 'POST'];
 }
 
+export interface PolledAgentCiRun {
+  runId: number;
+  headSha: string;
+  workflowName: string;
+  prNumbers: number[];
+}
+
+// Scheduled fallback for ticket #47: GitHub does not emit a `workflow_run`
+// event for the `action_required` CI run observed on PR #46 (run
+// 34698820348), so the event-driven approver never runs for exactly the case
+// it must handle. The trusted poll queries the narrow awaiting set for the
+// `ci` workflow only. `--paginate` pages concatenate safely because `--jq`
+// emits one line per run; the parser below never parses pages as one JSON
+// object. The documented list-runs shape exposes `workflow_runs`, not `runs`.
+export function buildPollRunsArgs(repoSlug: string): readonly string[] {
+  return [
+    'api',
+    `repos/${repoSlug}/actions/workflows/ci.yml/runs?status=action_required&per_page=50`,
+    '--paginate',
+    '--jq',
+    '.workflow_runs[] | "\\(.id) \\(.head_sha) \\(.name) \\([.pull_requests[].number] | map(tostring) | join(","))"',
+  ];
+}
+
+export function parsePollRunsOutput(stdout: string): PolledAgentCiRun[] {
+  const runs: PolledAgentCiRun[] = [];
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') {
+      continue;
+    }
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 3 || parts.length > 4) {
+      continue;
+    }
+    const [idText, headSha, workflowName, prCsv] = [
+      parts[0] ?? '',
+      parts[1] ?? '',
+      parts[2] ?? '',
+      parts[3] ?? '',
+    ];
+    const runId = Number.parseInt(idText, 10);
+    if (!Number.isInteger(runId) || runId <= 0) {
+      continue;
+    }
+    if (!isExactSha(headSha)) {
+      continue;
+    }
+    if (workflowName === '') {
+      continue;
+    }
+    const prNumbers: number[] = [];
+    let valid = true;
+    if (prCsv !== '') {
+      for (const entry of prCsv.split(',')) {
+        const pr = Number.parseInt(entry, 10);
+        if (!Number.isInteger(pr) || pr <= 0) {
+          valid = false;
+          break;
+        }
+        prNumbers.push(pr);
+      }
+    }
+    if (!valid) {
+      continue;
+    }
+    runs.push({ runId, headSha, workflowName, prNumbers });
+  }
+  return runs;
+}
+
 export function buildPrFetchArgs(repoSlug: string, prNumber: number): readonly string[] {
   return ['api', `repos/${repoSlug}/pulls/${String(prNumber)}`];
 }

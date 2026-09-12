@@ -8,8 +8,10 @@ import {
   APPROVE_REQUIRED_CONCLUSION,
   APPROVE_TRUSTED_WORKFLOW_NAME,
   buildApproveRunArgs,
+  buildPollRunsArgs,
   decideAgentCiApproval,
   evaluateAgentCiApproval,
+  parsePollRunsOutput,
   parseTicketBranch,
   prBodyIdentifiesTicket,
   prIdentifiesTicket,
@@ -368,6 +370,77 @@ describe('provenance evaluation from GitHub-owned API reads', () => {
   });
 });
 
+describe('scheduled poll discovery (ticket #47)', () => {
+  const HEAD_SHA = '6e3430d8a924d6b271c0aaa2463f9f167e7d9cd2';
+
+  it('queries the documented workflow_runs list with a narrow awaiting filter', () => {
+    const args = buildPollRunsArgs('o/r');
+
+    expect(args).toContain(
+      'repos/o/r/actions/workflows/ci.yml/runs?status=action_required&per_page=50',
+    );
+    expect(args).toContain('--paginate');
+    const jq = args[args.indexOf('--jq') + 1] ?? '';
+    // Real REST shape is { total_count, workflow_runs: [...] }, not `.runs`.
+    expect(jq).toMatch(/\.workflow_runs\[\]/);
+    expect(jq).not.toMatch(/\.runs\[\]/);
+  });
+
+  it('parses concatenated multi-page line output deterministically', () => {
+    // `gh api --paginate` emits each page separately; line-delimited `--jq`
+    // output stays parseable when pages concatenate, unlike one JSON object.
+    const stdout = [
+      `34698820348 ${HEAD_SHA} ci 46`,
+      '',
+      `34698820349 ${'a'.repeat(40)} ci 47,48`,
+      `34698820350 ${'b'.repeat(40)} ci `,
+      '',
+    ].join('\n');
+
+    expect(parsePollRunsOutput(stdout)).toEqual([
+      { runId: 34698820348, headSha: HEAD_SHA, workflowName: 'ci', prNumbers: [46] },
+      { runId: 34698820349, headSha: 'a'.repeat(40), workflowName: 'ci', prNumbers: [47, 48] },
+      { runId: 34698820350, headSha: 'b'.repeat(40), workflowName: 'ci', prNumbers: [] },
+    ]);
+  });
+
+  it('treats empty poll output as no candidates and skips malformed lines closed', () => {
+    expect(parsePollRunsOutput('')).toEqual([]);
+    expect(parsePollRunsOutput('\n  \n')).toEqual([]);
+    expect(parsePollRunsOutput('not-a-line\n')).toEqual([]);
+  });
+
+  it('leaves an ineligible polled run unapproved through the shared evaluator', async () => {
+    const evaluator: CommandExecutor = (command, args) => {
+      const key = `${command} ${args.join(' ')}`;
+      if (key === 'gh api repos/o/r/pulls/99') {
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            state: 'open',
+            title: 'Manual fix',
+            body: 'Manual fix',
+            user: { login: 'octocat' },
+            base: { ref: 'main', repo: { full_name: 'o/r' } },
+            head: { ref: 'feature/manual', sha: HEAD_SHA, repo: { full_name: 'o/r' } },
+          }),
+          stderr: '',
+        });
+      }
+      throw new Error(`unexpected command in test script: ${key}`);
+    };
+    const decision = await evaluateAgentCiApproval(evaluator, {
+      repoSlug: 'o/r',
+      runId: 1,
+      workflowName: 'ci',
+      runConclusion: 'action_required',
+      runHeadSha: HEAD_SHA,
+      pullRequestNumbers: [99],
+    });
+
+    expect(decision.approved).toBe(false);
+  });
+});
+
 describe('workflow permission boundaries', () => {
   const workflowsDir = resolve(
     dirname(fileURLToPath(import.meta.url)),
@@ -417,6 +490,26 @@ describe('workflow permission boundaries', () => {
     expect(raw).not.toMatch(/OPENCODE_ZEN_API_KEY/);
     expect(raw).not.toMatch(/CLOUDFLARE/);
     expect(raw).not.toMatch(/RESEND/);
+  });
+
+  it('polls awaiting runs on a schedule without relying on the missing event (ticket #47)', async () => {
+    const raw = await readFile(resolve(workflowsDir, 'approve-agent-ci.yml'), 'utf8');
+
+    // GitHub emits no workflow_run event for the observed action_required CI
+    // run, so the scheduled poll is the automatic fallback.
+    expect(raw).toMatch(/schedule/);
+    expect(raw).toMatch(/cron/);
+    // Narrow awaiting query against the documented list-runs shape.
+    expect(raw).toMatch(/status=action_required/);
+    expect(raw).toMatch(/\.workflow_runs\[\]/);
+    expect(raw).not.toMatch(/\.runs\[\]/);
+    expect(raw).toMatch(/--paginate/);
+    // Trusted boundary preserved: main checkout only, per-run provenance
+    // evaluation, no PR code execution.
+    expect(raw).toMatch(/ref:\s*main/);
+    expect(raw).toMatch(/scripts\/approve-agent-ci\.ts/);
+    expect(raw).not.toMatch(/gh\s+pr\s+checkout/i);
+    expect(raw).not.toMatch(/OPENCODE_ZEN_API_KEY/);
   });
 
   it('keeps ci least-privilege and secret-free', async () => {
