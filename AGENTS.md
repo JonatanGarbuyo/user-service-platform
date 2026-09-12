@@ -2,6 +2,8 @@
 
 This repository is developed through explicit architecture, contracts, vertical slices, tests, and review. Do not introduce new architectural patterns ad hoc.
 
+Before substantial work in a fresh context, read `docs/agents/project-state.md` as the durable operational checkpoint. It is an index/handoff only: `CONTEXT.md`, accepted ADRs, current specs/tickets, repository HEAD, and live GitHub issue/PR state remain authoritative for their respective concerns.
+
 ## Agent skills
 
 ### Issue tracker
@@ -29,7 +31,7 @@ For substantial work, follow this progression:
 3. `to-tickets` to produce dependency-aware tracer-bullet vertical slices.
 4. `implement` one ticket at a time, using TDD where possible and code review before completion.
 
-Do not skip directly from a broad idea to implementation.
+Do not skip directly from a broad idea to implementation. Read and follow the repository-local skill under `.agents/skills/` before invoking any of these workflows rather than reconstructing its procedure from model memory.
 
 ## Architecture rules
 
