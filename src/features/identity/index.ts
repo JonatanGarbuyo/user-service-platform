@@ -13,11 +13,15 @@ export type {
   LoginResult,
   RegisterRequest,
   RegisteredUser,
+  RequestPasswordResetRequest,
+  RequestPasswordResetResult,
+  ResetPasswordRequest,
+  ResetPasswordResult,
   SignOutResult,
   VerifyEmailRequest,
   VerifyEmailResult,
 } from './contract.js';
-export type { AuthMailer, VerificationMessage } from './mailer.js';
+export type { AuthMailer, PasswordResetMessage, VerificationMessage } from './mailer.js';
 export { InMemoryAuthMailer } from './mailer.js';
 export type { AuthPolicy } from './policy.js';
 export { DEFAULT_AUTH_POLICY, resolveAuthPolicy } from './policy.js';

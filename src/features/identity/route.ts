@@ -6,8 +6,12 @@ import {
   LoginResultSchema,
   RegisterRequestSchema,
   RegisteredUserSchema,
+  RequestPasswordResetRequestSchema,
+  RequestPasswordResetResultSchema,
   RequestVerificationRequestSchema,
   RequestVerificationResultSchema,
+  ResetPasswordRequestSchema,
+  ResetPasswordResultSchema,
   SignOutResultSchema,
   VerifyEmailRequestSchema,
   VerifyEmailResultSchema,
@@ -156,5 +160,51 @@ export const signOutRoute = createRoute({
       description: 'The session was invalidated.',
     },
     ...problemResponses('Sign-out failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const requestPasswordResetRoute = createRoute({
+  method: 'post',
+  path: '/auth/request-password-reset',
+  operationId: 'requestPasswordReset',
+  summary: 'Request password recovery',
+  description:
+    'Schedules a password-reset message for the account matching the email ' +
+    'address without creating identities. The response is identical whether ' +
+    'or not the address is registered, so it cannot be used for account ' +
+    'enumeration.',
+  tags: ['identity'],
+  request: {
+    body: { content: { 'application/json': { schema: RequestPasswordResetRequestSchema } } },
+  },
+  responses: {
+    202: {
+      content: { 'application/json': { schema: RequestPasswordResetResultSchema } },
+      description: 'The request was accepted.',
+    },
+    ...problemResponses('Request failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const resetPasswordRoute = createRoute({
+  method: 'post',
+  path: '/auth/reset-password',
+  operationId: 'resetPassword',
+  summary: 'Complete password reset',
+  description:
+    'Sets a new password from the token delivered by the password-reset ' +
+    'action. Reset actions are single use and expire. Successful resets ' +
+    'revoke existing sessions. Invalid, expired, reused, or malformed ' +
+    'actions fail safely without revealing token material.',
+  tags: ['identity'],
+  request: {
+    body: { content: { 'application/json': { schema: ResetPasswordRequestSchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: ResetPasswordResultSchema } },
+      description: 'The password was reset.',
+    },
+    ...problemResponses('Reset failure as RFC 9457 Problem Details.'),
   },
 });

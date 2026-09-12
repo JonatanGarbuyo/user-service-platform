@@ -26,6 +26,7 @@ export type ProblemCode =
   | 'email-verification-required'
   | 'invalid-credentials'
   | 'verification-invalid'
+  | 'reset-invalid'
   | 'unauthenticated';
 
 interface CreateProblemInput {

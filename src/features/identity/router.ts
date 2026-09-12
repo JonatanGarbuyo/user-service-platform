@@ -9,7 +9,9 @@ import {
   currentUserRoute,
   loginRoute,
   registerRoute,
+  requestPasswordResetRoute,
   requestVerificationRoute,
+  resetPasswordRoute,
   signOutRoute,
   verifyEmailRoute,
 } from './route.js';
@@ -274,6 +276,71 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
         return problem(c, 500, 'internal-error', 'Internal Server Error');
       }
       return c.json({ status: 'ok' as const }, 202);
+    }
+    return problem(c, 500, 'internal-error', 'Internal Server Error');
+  });
+
+  router.openapi(requestPasswordResetRoute, async (c) => {
+    const { auth, policy } = scopedAuth(c, override);
+    if (!policy.emailPasswordEnabled) {
+      return problem(c, 403, 'email-password-disabled', 'Email authentication is disabled');
+    }
+
+    const input = c.req.valid('json');
+    const outcome = await callEngine(() =>
+      auth.api.requestPasswordReset({
+        body: { email: input.email },
+        headers: c.req.raw.headers,
+        asResponse: true,
+      }),
+    );
+    if (outcome instanceof Response) {
+      if (outcome.ok) {
+        // Generic acceptance: the engine answers identically for unknown and
+        // known addresses, so this response cannot be used for account
+        // enumeration and never creates identities.
+        return c.json({ status: 'ok' as const }, 202);
+      }
+      const failure = await readEngineFailure(outcome);
+      if (failure.status >= 500) {
+        return problem(c, 500, 'internal-error', 'Internal Server Error');
+      }
+      return c.json({ status: 'ok' as const }, 202);
+    }
+    return problem(c, 500, 'internal-error', 'Internal Server Error');
+  });
+
+  router.openapi(resetPasswordRoute, async (c) => {
+    const { auth, policy } = scopedAuth(c, override);
+    if (!policy.emailPasswordEnabled) {
+      return problem(c, 403, 'email-password-disabled', 'Email authentication is disabled');
+    }
+
+    const input = c.req.valid('json');
+    const outcome = await callEngine(() =>
+      auth.api.resetPassword({
+        body: { newPassword: input.newPassword, token: input.token },
+        headers: c.req.raw.headers,
+        asResponse: true,
+      }),
+    );
+    if (outcome instanceof Response) {
+      if (outcome.ok) {
+        // The engine consumes the reset action (single use) and revokes
+        // existing sessions per the accepted security default.
+        return c.json({ status: 'ok' as const }, 200);
+      }
+      const failure = await readEngineFailure(outcome);
+      if (failure.status >= 500) {
+        return problem(c, 500, 'internal-error', 'Internal Server Error');
+      }
+      return problem(
+        c,
+        400,
+        'reset-invalid',
+        'Invalid or expired password reset',
+        'The password-reset action is invalid or has expired.',
+      );
     }
     return problem(c, 500, 'internal-error', 'Internal Server Error');
   });

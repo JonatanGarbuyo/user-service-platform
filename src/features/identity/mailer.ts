@@ -11,8 +11,16 @@ export interface VerificationMessage {
   readonly expiresAt?: Date;
 }
 
+export interface PasswordResetMessage {
+  readonly to: string;
+  readonly url: string;
+  readonly token: string;
+  readonly expiresAt?: Date;
+}
+
 export interface AuthMailer {
   sendVerificationEmail(message: VerificationMessage): Promise<void>;
+  sendPasswordResetEmail(message: PasswordResetMessage): Promise<void>;
 }
 
 interface CapturedMessage extends VerificationMessage {
@@ -20,13 +28,19 @@ interface CapturedMessage extends VerificationMessage {
 }
 
 // In-memory AuthMailer for Workers-runtime tests. Captured actions are
-// readable only inside the isolated test process; verification URLs and
-// tokens never reach logs, events, or error payloads through this transport.
+// readable only inside the isolated test process; verification and
+// password-reset URLs and tokens never reach logs, events, or error payloads
+// through this transport.
 export class InMemoryAuthMailer implements AuthMailer {
   private readonly messages: CapturedMessage[] = [];
+  private readonly resetMessages: CapturedMessage[] = [];
 
   get sent(): readonly CapturedMessage[] {
     return this.messages;
+  }
+
+  get passwordResets(): readonly CapturedMessage[] {
+    return this.resetMessages;
   }
 
   sendVerificationEmail(message: VerificationMessage): Promise<void> {
@@ -34,14 +48,21 @@ export class InMemoryAuthMailer implements AuthMailer {
     return Promise.resolve();
   }
 
+  sendPasswordResetEmail(message: PasswordResetMessage): Promise<void> {
+    this.resetMessages.push({ ...message, capturedAt: new Date().toISOString() });
+    return Promise.resolve();
+  }
+
   clear(): void {
     this.messages.length = 0;
+    this.resetMessages.length = 0;
   }
 }
 
 // Local development sink: records only operational metadata (recipient domain
-// and purpose) so verification flows can be exercised without credentials or
-// network delivery. Bodies, tokens and action URLs are never logged.
+// and purpose) so verification and password-reset flows can be exercised
+// without credentials or network delivery. Bodies, tokens and action URLs are
+// never logged.
 export class DevelopmentAuthMailer implements AuthMailer {
   sendVerificationEmail(message: VerificationMessage): Promise<void> {
     const domain = message.to.split('@')[1] ?? 'invalid';
@@ -50,6 +71,19 @@ export class DevelopmentAuthMailer implements AuthMailer {
         level: 'info',
         event: 'auth-mail.scheduled',
         purpose: 'email-verification',
+        recipientDomain: domain,
+      }),
+    );
+    return Promise.resolve();
+  }
+
+  sendPasswordResetEmail(message: PasswordResetMessage): Promise<void> {
+    const domain = message.to.split('@')[1] ?? 'invalid';
+    console.log(
+      JSON.stringify({
+        level: 'info',
+        event: 'auth-mail.scheduled',
+        purpose: 'password-reset',
         recipientDomain: domain,
       }),
     );
