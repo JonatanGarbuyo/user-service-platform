@@ -79,19 +79,19 @@ Verified on 2026-09-12:
 - #9 health endpoint: closed/completed.
 - #10 register + verify email: closed/completed.
 - #11 sign in/current User: closed/completed; PR #43 squash-merged.
-- #12 password recovery: implementation exists in PR #46 at exact HEAD `6e3430d8a924d6b271c0aaa2463f9f167e7d9cd2`. Repository gates and both exact-HEAD review axes passed, but final acceptance is blocked by #47 because its PR-triggered CI entered `action_required` and the trusted auto-approver path did not observe/approve it.
-- #13 production auth email: blocked by #12; terminology updated to local/sandbox/production.
-- #14 sandbox promotion: blocked by #11/#12/#13; canonical target is sandbox, not staging.
+- #12 password recovery: implementation is PR #46 at exact HEAD `6e3430d8a924d6b271c0aaa2463f9f167e7d9cd2`. `agent-fix-cycle` run `34722805060` reached READY with repository gates, exact-HEAD CI, Standards, and Spec all passing. ChatGPT final acceptance is PASS and PR #46 is no longer draft. The remaining step is the human-controlled merge; close #12 afterward if GitHub does not do so automatically.
+- #13 production auth email: next product ticket. It remains formally blocked only until #12 is merged/closed; terminology is local/sandbox/production.
+- #14 sandbox promotion: blocked by #13 (and therefore indirectly by the pending #12 merge); canonical target is sandbox, not staging.
 
-Do **not** reimplement #12. After #47 is fixed, resume PR #46 on exact HEAD `6e3430d8a924d6b271c0aaa2463f9f167e7d9cd2`, obtain successful exact-HEAD CI and current exact-HEAD review evidence as required, then perform final acceptance.
+Do **not** reimplement #12. Its implementation and acceptance evidence are complete on exact HEAD `6e3430d8a924d6b271c0aaa2463f9f167e7d9cd2`; preserve that accepted HEAD through merge.
 
-Expected product sequence after recovery:
+Expected product sequence:
 
 ```text
-#47 remote CI approval fix
-  -> accept/merge #12 via PR #46
-       -> #13 production auth email
-            -> #14 sandbox promotion
+human merge PR #46 / close #12
+  -> /agent-ticket on #13 production auth email
+       -> accept/merge #13
+            -> /agent-ticket on #14 sandbox promotion
 ```
 
 ## Remote execution/review gate
@@ -101,7 +101,8 @@ Durable accepted tooling:
 - #31 event-driven status/watchdogs: closed.
 - #36 least-privilege trusted workflow-file publication: closed.
 - #40 complete notification-first run status: closed.
-- #44 narrow trusted exact-HEAD CI approval for eligible agent-created PRs: closed, but #47 records a discovered event-handling gap in its first clean product dogfood.
+- #44 narrow trusted exact-HEAD CI approval for eligible agent-created PRs: closed.
+- #47 action-required CI recovery: closed; the recovered #12 / PR #46 dogfood subsequently reached READY through run `34722805060`, validating the approval/review path on the preserved exact HEAD.
 
 Review invariants:
 
@@ -113,15 +114,13 @@ Review invariants:
 - `.github/workflows/**` corrections stop at #36 trusted-publication handoff.
 - no automated merge/deploy/secret mutation.
 
-### Active orchestration blocker: #47
+### Current orchestration state
 
-#47 `Handle action_required CI for agent-created pull requests` is the highest-priority tooling fix because it blocks final acceptance of already-implemented #12 / PR #46.
-
-Required outcome: trusted repository orchestration must detect eligible `action_required` CI without relying on a non-emitted event, preserve all #44 fail-closed provenance rules, approve through the narrow trusted boundary, and treat approval-waiting as recoverable rather than `[FATAL]`.
+There is no active orchestration blocker on the accepted #12 implementation. The only remaining #12 transition is the human-controlled merge of PR #46 and ticket closure. Once #12 is closed, #13 is the dependency frontier and should be started with the normal GitHub-triggered `/agent-ticket` path.
 
 ## Maintenance debt
 
-Open but not the immediate #12 recovery blocker:
+Open but not the immediate product frontier:
 
 - #37 `Upgrade GitHub Actions to Node 24-native releases` — workflow maintenance; #36 publication policy is already available, so its old blocker wording is stale and should not be treated as an active dependency.
 - #38 `Audit deprecated transitive dependencies and npm security findings` — dependency/tooling hygiene; no forced `npm audit fix --force` or blind compatibility-breaking upgrade.
