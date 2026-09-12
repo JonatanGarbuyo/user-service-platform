@@ -1,4 +1,5 @@
 import type { Env } from '../../env.js';
+import { ResendAuthMailer, resolveResendConfig } from './resend-transport.js';
 
 // Application-owned transactional auth mail boundary (ADR-0010). Better Auth
 // email callbacks adapt into these purpose-specific operations; provider SDK
@@ -92,23 +93,47 @@ export class DevelopmentAuthMailer implements AuthMailer {
 }
 
 // Resolves the mailer for the current environment. Tests inject an
-// InMemoryAuthMailer explicitly; staging/production fail closed until the
-// production transport lands (ticket #13) rather than silently dropping mail.
+// InMemoryAuthMailer explicitly or select it via AUTH_MAIL_TRANSPORT; local
+// development uses the metadata-only sink and never reads provider secrets.
+// Staging, sandbox and production resolve the Resend transport (ticket #13)
+// and fail closed when its configuration is missing rather than silently
+// dropping mail.
 export function resolveAuthMailer(
-  env: Pick<Env, 'ENVIRONMENT' | 'AUTH_MAIL_TRANSPORT'>,
+  env: Pick<
+    Env,
+    | 'ENVIRONMENT'
+    | 'AUTH_MAIL_TRANSPORT'
+    | 'RESEND_API_KEY'
+    | 'AUTH_MAIL_FROM'
+    | 'AUTH_APP_NAME'
+    | 'AUTH_MAIL_ALLOWLIST'
+  >,
   override?: AuthMailer,
 ): AuthMailer {
   if (override !== undefined) {
     return override;
   }
-  if (env.AUTH_MAIL_TRANSPORT === 'inmemory') {
+  const selection = env.AUTH_MAIL_TRANSPORT?.trim().toLowerCase();
+  if (selection === 'inmemory') {
     return new InMemoryAuthMailer();
   }
+  if (selection === 'resend') {
+    return new ResendAuthMailer(resolveResendConfig(env));
+  }
+  if (selection !== undefined && selection !== '') {
+    throw new Error(`Unknown AUTH_MAIL_TRANSPORT "${selection}"; expected "inmemory" or "resend".`);
+  }
   const environment = env.ENVIRONMENT ?? 'local';
-  if (environment === 'staging' || environment === 'production') {
-    throw new Error(
-      `No transactional mail transport is configured for ${environment}; refusing to start auth flows without one (ticket #13).`,
-    );
+  if (environment === 'staging' || environment === 'sandbox' || environment === 'production') {
+    return new ResendAuthMailer(resolveResendConfig(env));
   }
   return new DevelopmentAuthMailer();
 }
+
+export { ResendAuthMailer } from './resend-transport.js';
+export type {
+  AuthMailLogger,
+  AuthMailLogRecord,
+  AuthMailPurpose,
+  ResendTransportConfig,
+} from './resend-transport.js';

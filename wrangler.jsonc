@@ -23,6 +23,13 @@
     "AUTH_REGISTRATION_ENABLED": "true",
     "AUTH_EMAIL_PASSWORD_ENABLED": "true",
     "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
+    // Transactional auth-mail branding (ADR-0010, ticket #13). The sender and
+    // product name are deployment configuration, not secrets; real
+    // staging/production sender domains are set when deployment automation
+    // lands (ticket #14). The Resend API key itself is always a secret
+    // (`wrangler secret put RESEND_API_KEY`) and never appears here.
+    "AUTH_APP_NAME": "User Service",
+    "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
   },
   // D1 binding/configuration seam for isolated local tests (ticket #9). No business
   // persistence abstractions are introduced here; the identity slice owns its
@@ -42,6 +49,13 @@
         "AUTH_REGISTRATION_ENABLED": "true",
         "AUTH_EMAIL_PASSWORD_ENABLED": "true",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
+        "AUTH_APP_NAME": "User Service",
+        "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
+        // Sandbox recipient allowlist (ticket #13): staging/sandbox deliveries
+        // outside this list are skipped before reaching the provider. The real
+        // value is set out-of-band with deployment automation (ticket #14);
+        // an empty value fails closed with an explicit configuration error.
+        "AUTH_MAIL_ALLOWLIST": "",
       },
       "d1_databases": [
         {
@@ -58,6 +72,8 @@
         "AUTH_REGISTRATION_ENABLED": "true",
         "AUTH_EMAIL_PASSWORD_ENABLED": "true",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
+        "AUTH_APP_NAME": "User Service",
+        "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
       },
       "d1_databases": [
         {

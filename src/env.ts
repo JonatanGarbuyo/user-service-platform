@@ -17,8 +17,26 @@ export interface Env {
   // environments fall back to an explicit dev-only value (never a production
   // credential) so tests need no secrets.
   BETTER_AUTH_SECRET?: string;
-  // Mail transport selection (ADR-0010): "inmemory" for tests, unset for the
-  // local development sink. Staging/production fail closed without the real
-  // transport delivered in ticket #13.
+  // Mail transport selection (ADR-0010): "inmemory" for tests, "resend" to
+  // force the production Resend adapter, unset for the local development
+  // sink. Unknown values are rejected; staging/sandbox/production resolve
+  // the Resend transport and fail closed when its configuration is missing.
   AUTH_MAIL_TRANSPORT?: string;
+  // Resend transactional-mail configuration (ticket #13). The API key is a
+  // secret supplied via `wrangler secret put` or the Cloudflare dashboard and
+  // must never be committed; the remaining values are deployment
+  // configuration. Local/test transports never read these values.
+  RESEND_API_KEY?: string;
+  // Verified sender identity, for example "User Service <noreply@example.com>".
+  // Required wherever the Resend transport is used.
+  AUTH_MAIL_FROM?: string;
+  // Branding input for application-owned mail templates. Optional; falls back
+  // to a neutral product name when unset.
+  AUTH_APP_NAME?: string;
+  // Comma-separated sandbox recipient allowlist, for example
+  // "ops@example.com,@example.org". Entries are exact emails (case-insensitive)
+  // or domains ("@example.org" or "example.org"). Required and enforced
+  // wherever the Resend transport runs outside production so sandbox runs
+  // cannot mail arbitrary recipients.
+  AUTH_MAIL_ALLOWLIST?: string;
 }
