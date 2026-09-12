@@ -5,8 +5,16 @@ import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/prob
 import { createIdentityAuth } from './auth.js';
 import { resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
-import { loginRoute, registerRoute, requestVerificationRoute, verifyEmailRoute } from './route.js';
+import {
+  currentUserRoute,
+  loginRoute,
+  registerRoute,
+  requestVerificationRoute,
+  signOutRoute,
+  verifyEmailRoute,
+} from './route.js';
 import { resolveAuthSecret } from './secret.js';
+import { resolveSessionContext, toAuthenticatedUser } from './session.js';
 
 export interface IdentityRouterOptions {
   // Test seam: an explicitly provided mailer (in-memory in tests) takes
@@ -66,21 +74,6 @@ async function callEngine(call: () => Promise<Response>): Promise<Response | Eng
   } catch (error) {
     return thrownEngineFailure(error) ?? { status: 500 };
   }
-}
-
-function publicUser(
-  payload: unknown,
-): { id: string; email: string; emailVerified: boolean } | null {
-  const user = asRecord(asRecord(payload)?.user);
-  if (
-    user === null ||
-    typeof user.id !== 'string' ||
-    typeof user.email !== 'string' ||
-    typeof user.emailVerified !== 'boolean'
-  ) {
-    return null;
-  }
-  return { id: user.id, email: user.email, emailVerified: user.emailVerified };
 }
 
 function backgroundScheduler(c: IdentityContext): (task: Promise<unknown>) => void {
@@ -171,7 +164,7 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
     );
     if (outcome instanceof Response) {
       if (outcome.ok) {
-        const user = publicUser(await outcome.json().catch(() => null));
+        const user = toAuthenticatedUser(await outcome.json().catch(() => null));
         if (user === null) {
           return problem(c, 500, 'internal-error', 'Internal Server Error');
         }
@@ -198,7 +191,7 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
     );
     if (outcome instanceof Response) {
       if (outcome.ok) {
-        const user = publicUser(await outcome.json().catch(() => null));
+        const user = toAuthenticatedUser(await outcome.json().catch(() => null));
         if (user === null) {
           return problem(c, 500, 'internal-error', 'Internal Server Error');
         }
@@ -283,6 +276,49 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       return c.json({ status: 'ok' as const }, 202);
     }
     return problem(c, 500, 'internal-error', 'Internal Server Error');
+  });
+
+  router.openapi(currentUserRoute, async (c) => {
+    const session = await resolveSessionContext({
+      env: c.env,
+      headers: c.req.raw.headers,
+      baseURL: new URL(c.req.url).origin,
+      authMailer: override,
+      background: backgroundScheduler(c),
+    });
+    if (session === null) {
+      return problem(c, 401, 'unauthenticated', 'Unauthenticated');
+    }
+    return c.json(session.user, 200);
+  });
+
+  router.openapi(signOutRoute, async (c) => {
+    const { auth } = scopedAuth(c, override);
+    const outcome = await callEngine(() =>
+      auth.api.signOut({
+        headers: c.req.raw.headers,
+        asResponse: true,
+      }),
+    );
+    if (outcome instanceof Response) {
+      // Forward the clearing cookie so the browser/API client drops the
+      // session. Sign-out stays idempotent: 4xx engine answers still end as
+      // `ok` so the response cannot be used to probe session state.
+      forwardSessionCookies(c, outcome);
+      if (outcome.ok) {
+        return c.json({ status: 'ok' as const }, 200);
+      }
+      const failure = await readEngineFailure(outcome);
+      if (failure.status >= 500) {
+        return problem(c, 500, 'internal-error', 'Internal Server Error');
+      }
+      return c.json({ status: 'ok' as const }, 200);
+    }
+    const failure = outcome;
+    if (failure.status >= 500) {
+      return problem(c, 500, 'internal-error', 'Internal Server Error');
+    }
+    return c.json({ status: 'ok' as const }, 200);
   });
 
   return router;

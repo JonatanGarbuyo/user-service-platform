@@ -40,6 +40,45 @@ async function post(path: string, body: unknown, overrides: Partial<Env> = {}): 
   );
 }
 
+async function get(
+  path: string,
+  init: { cookie?: string | null; overrides?: Partial<Env> } = {},
+): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (init.cookie !== undefined && init.cookie !== null && init.cookie.length > 0) {
+    headers.cookie = init.cookie;
+  }
+  return app.request(path, { method: 'GET', headers }, testEnv(init.overrides));
+}
+
+async function postWithCookie(
+  path: string,
+  body: unknown,
+  cookie: string | null,
+  overrides: Partial<Env> = {},
+): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (cookie !== null && cookie.length > 0) {
+    headers.cookie = cookie;
+  }
+  return app.request(
+    path,
+    { method: 'POST', headers, body: JSON.stringify(body) },
+    testEnv(overrides),
+  );
+}
+
+// Extracts the cookie pair (`name=value`) from a Set-Cookie header so it can
+// be replayed as a Cookie header without coupling tests to cookie attributes.
+function sessionCookieFrom(res: Response): string | null {
+  const setCookie = res.headers.get('set-cookie');
+  if (setCookie === null) {
+    return null;
+  }
+  const pair = setCookie.split(';')[0];
+  return pair === undefined || pair.length === 0 ? null : pair.trim();
+}
+
 async function userCount(binding: Env['DB']): Promise<number> {
   const row = await binding.prepare('SELECT COUNT(*) AS total FROM "user"').first<{
     total: number;
@@ -274,6 +313,9 @@ describe('verified-email login gate', () => {
     // Both failures share the same stable shape so neither response reveals
     // whether the account exists.
     expect(await wrongPassword.json()).toEqual(await unknownEmail.json());
+    // No session is established on credential failure.
+    expect(wrongPassword.headers.get('set-cookie')).toBeNull();
+    expect(unknownEmail.headers.get('set-cookie')).toBeNull();
   });
 });
 
@@ -304,6 +346,105 @@ describe('POST /v1/auth/request-verification', () => {
   });
 });
 
+describe('GET /v1/me', () => {
+  it('returns the current User for an authenticated session', async () => {
+    await post('/v1/auth/register', {
+      name: 'Ada Lovelace',
+      email: 'ada-me@example.com',
+      password: 'correct-horse-41',
+    });
+    await post('/v1/auth/verify-email', { token: tokenFromLastMessage() });
+    const loginRes = await post('/v1/auth/login', {
+      email: 'ada-me@example.com',
+      password: 'correct-horse-41',
+    });
+    expect(loginRes.status).toBe(200);
+    const cookie = sessionCookieFrom(loginRes);
+    expect(cookie).not.toBeNull();
+    expect(cookie ?? '').toContain('better-auth.session_token=');
+
+    const meRes = await get('/v1/me', { cookie });
+    expect(meRes.status).toBe(200);
+    expect(meRes.headers.get('content-type')).toContain('application/json');
+
+    const me = (await meRes.json()) as { id: string; email: string; emailVerified: boolean };
+    expect(typeof me.id).toBe('string');
+    expect(me.email).toBe('ada-me@example.com');
+    expect(me.emailVerified).toBe(true);
+    // Session material travels in cookies, never in the JSON body.
+    const raw = JSON.stringify(me);
+    expect(raw).not.toContain('better-auth.session_token');
+    expect(raw).not.toContain('password');
+  });
+
+  it('returns the agreed unauthenticated Problem Details shape without a session', async () => {
+    const res = await get('/v1/me');
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    expect(await res.json()).toEqual({
+      type: 'urn:problem:unauthenticated',
+      title: 'Unauthenticated',
+      status: 401,
+      code: 'unauthenticated',
+      instance: '/v1/me',
+    });
+  });
+
+  it('rejects forged session cookies without leaking material', async () => {
+    const res = await get('/v1/me', { cookie: 'better-auth.session_token=forged-value' });
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: 'unauthenticated', status: 401 });
+  });
+});
+
+describe('POST /v1/auth/sign-out', () => {
+  it('invalidates the current session across the full register -> me -> sign-out path', async () => {
+    await post('/v1/auth/register', {
+      name: 'Grace Hopper',
+      email: 'grace-me@example.com',
+      password: 'correct-horse-41',
+    });
+    await post('/v1/auth/verify-email', { token: tokenFromLastMessage() });
+    const loginRes = await post('/v1/auth/login', {
+      email: 'grace-me@example.com',
+      password: 'correct-horse-41',
+    });
+    const cookie = sessionCookieFrom(loginRes);
+    expect(cookie).not.toBeNull();
+
+    const before = await get('/v1/me', { cookie });
+    expect(before.status).toBe(200);
+
+    const signOutRes = await postWithCookie('/v1/auth/sign-out', {}, cookie);
+    expect(signOutRes.status).toBe(200);
+    expect(await signOutRes.json()).toEqual({ status: 'ok' });
+
+    const after = await get('/v1/me', { cookie });
+    expect(after.status).toBe(401);
+    expect(await after.json()).toMatchObject({ code: 'unauthenticated', status: 401 });
+  });
+
+  it('sets security-appropriate session cookie attributes on sign-in', async () => {
+    await post('/v1/auth/register', {
+      name: 'Cookie Check',
+      email: 'cookie@example.com',
+      password: 'correct-horse-41',
+    });
+    await post('/v1/auth/verify-email', { token: tokenFromLastMessage() });
+    const loginRes = await post('/v1/auth/login', {
+      email: 'cookie@example.com',
+      password: 'correct-horse-41',
+    });
+
+    const setCookie = loginRes.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain('better-auth.session_token=');
+    expect(setCookie).toMatch(/httponly/i);
+    expect(setCookie).toMatch(/samesite/i);
+  });
+});
+
 describe('identity observability redaction', () => {
   it('never logs passwords, tokens, action URLs or message bodies', async () => {
     const seen: string[] = [];
@@ -311,6 +452,7 @@ describe('identity observability redaction', () => {
       seen.push(args.map((arg) => String(arg)).join(' '));
     });
 
+    const captured = { value: '' };
     try {
       await post('/v1/auth/register', {
         name: 'Log Check',
@@ -320,7 +462,15 @@ describe('identity observability redaction', () => {
       const token = tokenFromLastMessage();
       await post('/v1/auth/login', { email: 'logs@example.com', password: 'correct-horse-41' });
       await post('/v1/auth/verify-email', { token });
-      await post('/v1/auth/login', { email: 'logs@example.com', password: 'correct-horse-41' });
+      const loginRes = await post('/v1/auth/login', {
+        email: 'logs@example.com',
+        password: 'correct-horse-41',
+      });
+      const cookie = sessionCookieFrom(loginRes) ?? '';
+      captured.value = cookie.split('=')[1] ?? '';
+      await get('/v1/me', { cookie });
+      await get('/v1/me');
+      await postWithCookie('/v1/auth/sign-out', {}, cookie);
       await post('/v1/auth/verify-email', { token: 'not-a-real-token' });
     } finally {
       spy.mockRestore();
@@ -333,6 +483,11 @@ describe('identity observability redaction', () => {
     // route pattern (`/v1/auth/verify-email`) but never `?token=...`.
     expect(transcript).not.toContain('token=');
     expect(transcript).not.toContain('?token=');
+    // Session cookies/tokens never enter logs.
+    expect(transcript).not.toContain('better-auth.session_token=');
+    if (captured.value.length > 0) {
+      expect(transcript).not.toContain(captured.value);
+    }
   });
 });
 

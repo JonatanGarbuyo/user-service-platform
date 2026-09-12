@@ -227,6 +227,45 @@
         "required": [
           "email"
         ]
+      },
+      "CurrentUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "abc123"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "emailVerified"
+        ]
+      },
+      "SignOutResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
       }
     },
     "parameters": {}
@@ -417,6 +456,70 @@
           },
           "default": {
             "description": "Request failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "summary": "Resolve the current User",
+        "description": "Returns the stable application-owned current-User representation for the session carried by the request cookies. Anonymous or invalid sessions receive the standard unauthenticated Problem Details response.",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "The authenticated current User.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUser"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Authentication failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/sign-out": {
+      "post": {
+        "operationId": "signOutIdentity",
+        "summary": "Invalidate the current session",
+        "description": "Invalidates the session carried by the request cookies. Subsequent authenticated-only requests with that session no longer resolve a User.",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "The session was invalidated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignOutResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Sign-out failure as RFC 9457 Problem Details.",
             "content": {
               "application/problem+json": {
                 "schema": {
