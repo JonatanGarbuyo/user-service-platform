@@ -77,4 +77,19 @@ describe('check polling policy', () => {
       decideCheckPoll([{ name: 'quality gates', status: 'completed', conclusion: null }]),
     ).toBe('fail');
   });
+
+  it('never treats action_required as success (ticket #44)', () => {
+    // Exact-HEAD CI stays authoritative: an awaiting-approval run must block
+    // READY, never pass.
+    expect(
+      decideCheckPoll([
+        { name: 'quality gates', status: 'completed', conclusion: 'action_required' },
+      ]),
+    ).toBe('fail');
+    expect(
+      commitChecksPass([
+        { name: 'quality gates', status: 'completed', conclusion: 'action_required' },
+      ]),
+    ).toBe(false);
+  });
 });
