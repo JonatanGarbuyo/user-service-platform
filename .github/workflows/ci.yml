@@ -5,6 +5,11 @@ on:
     branches: ['**']
   pull_request: {}
 
+# Least-privilege for product CI: approving these runs must not expose
+# write-capable repository credentials or secrets to product code/tests.
+permissions:
+  contents: read
+
 jobs:
   gates:
     name: quality gates

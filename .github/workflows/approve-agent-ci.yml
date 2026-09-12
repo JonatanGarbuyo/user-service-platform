@@ -1,0 +1,68 @@
+name: approve-agent-ci
+
+on:
+  workflow_run:
+    workflows: ['ci']
+    types: [completed]
+
+# Default-deny; the approve job grants only what it needs to inspect
+# provenance and approve the narrowly defined trusted run.
+permissions: {}
+
+# One approval attempt per triggering run; queued, never cancelled.
+concurrency:
+  group: approve-agent-ci-run-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    # Only runs GitHub reports as awaiting approval are considered. The
+    # deterministic evaluator still proves every other guard and fails closed.
+    if: ${{ github.event.workflow_run.conclusion == 'action_required' }}
+    runs-on: ubuntu-latest
+    # Least-privilege for this trusted approver only. `actions: write`
+    # approves the awaiting `ci` run; nothing here checks out or executes PR
+    # code, and no model/provider/production secret is available.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out trusted main (never PR code)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Evaluate provenance and approve trusted agent CI
+        run: |
+          set -euo pipefail
+          WORKFLOW_NAME="$(jq -r '.workflow_run.name // empty' "$GITHUB_EVENT_PATH")"
+          CONCLUSION="$(jq -r '.workflow_run.conclusion // empty' "$GITHUB_EVENT_PATH")"
+          HEAD_SHA="$(jq -r '.workflow_run.head_sha // empty' "$GITHUB_EVENT_PATH")"
+          RUN_ID="$(jq -r '.workflow_run.id' "$GITHUB_EVENT_PATH")"
+          PR_NUMBERS="$(jq -r '.workflow_run.pull_requests // [] | map(.number) | .[]' "$GITHUB_EVENT_PATH" || true)"
+          PR_ARGS=""
+          for PR in $PR_NUMBERS; do
+            PR_ARGS="$PR_ARGS --pr $PR"
+          done
+          # shellcheck disable=SC2086
+          npx tsx scripts/approve-agent-ci.ts \
+            --repo "$GITHUB_REPOSITORY" \
+            --run-id "$RUN_ID" \
+            --workflow "$WORKFLOW_NAME" \
+            --conclusion "$CONCLUSION" \
+            --head-sha "$HEAD_SHA" \
+            $PR_ARGS
