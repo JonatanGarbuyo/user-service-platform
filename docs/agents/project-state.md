@@ -4,6 +4,8 @@ Last verified: 2026-09-12
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for the domain glossary, ADRs, specs, tickets, PRs, CI, or current repository state.
 
+The live repository state described below was verified through the merge of issue #40 / PR #41 into `main` at `686f979702867e28a5d1f6e263f7d2f9ec557e11`.
+
 ## Authority and drift rules
 
 Use the right source for the right kind of truth:
@@ -69,12 +71,12 @@ Do not skip from a broad idea directly to implementation.
 
 This is an explicit project decision and must survive chat compaction.
 
-- **ChatGPT** owns design discussion, Wayfinder/spec/ticket planning, orchestration decisions, inspection of durable GitHub evidence, and final acceptance/verification.
+- **ChatGPT** owns design discussion, Wayfinder/spec/ticket planning, orchestration decisions, inspection of durable GitHub evidence, trusted publication when required, and final acceptance/verification.
 - **OpenCode agents** are the primary code builders/correctors and review workers.
 - ChatGPT should hand approved implementation tickets to repository-owned OpenCode automation rather than manually implement product tickets unless the user explicitly asks otherwise.
 - Review findings and execution evidence live durably on GitHub; manual copy/paste into chat is not part of the normal workflow.
 - Product, architecture, public-contract, infrastructure-provider, or security-policy decisions stop automation and return to planning.
-- Once issue #31 is accepted, GitHub-triggered `/agent-ticket` and `/agent-fix-cycle` are the default execution path. Local OpenCode remains the fallback/debug path.
+- GitHub-triggered `/agent-ticket` and `/agent-fix-cycle` are the default implementation/correction path. Local OpenCode is the fallback/debug path.
 
 ## Product and architecture baseline
 
@@ -128,7 +130,7 @@ Verified against GitHub on 2026-09-12:
 
 - #9 `Serve a contract-tested Worker health endpoint`: closed/completed.
 - #10 `Register and verify an email identity`: closed/completed.
-- #11 `Sign in and resolve the current User`: open, `ready-for-agent`, next product frontier.
+- #11 `Sign in and resolve the current User`: open, `ready-for-agent`, next product frontier. Its only declared blocker is #10, which is complete.
 - #12 `Recover a password safely`: blocked by #11.
 - #13 `Deliver production authentication email`: blocked by #12 (and #10, already complete).
 - #14 `Promote the identity service to staging`: blocked by #11, #12, and #13.
@@ -160,13 +162,15 @@ Role separation remains durable even if the underlying models change: implementa
 ## Review gate
 
 - `npm run review:cycle` is deterministic repository code, not an LLM orchestrator.
-- Standards and Spec are independent axes.
+- Standards and Spec are independent axes and may execute in parallel.
 - Reviews are tied to exact HEAD with machine-readable markers; stale markers do not satisfy a new HEAD.
+- Durable completed-stage evidence records both exact-HEAD review axes independently; issue #40 fixed the prior parallel-review reporting gap.
 - Valid blocking findings may invoke `/address-review` for the smallest in-scope correction, after which both axes rerun on the new HEAD.
 - Correction cycles and marker retries are bounded.
 - Local gates and exact-HEAD CI must pass before `READY FOR FINAL ACCEPTANCE`.
 - Automated push is only through repository-owned safe-push guards; models do not receive unrestricted `git push`.
-- No automated merge/deploy/publish/secret mutation.
+- Terminal notification comments begin with `[READY]`, `[BLOCKED]`, `[NEEDS-DECISION]`, `[TIMEOUT]`, or `[FATAL]` as appropriate so outcome is visible in GitHub mobile/email previews.
+- No automated merge/deploy/production publication/secret mutation.
 
 ## Remote GitHub execution
 
@@ -179,49 +183,42 @@ Issue #29 established the remote control surface:
 
 The comment text is a fixed trigger for repository-owned workflows, never arbitrary shell/prompt input. Runs use isolated GitHub-hosted runners, repository GitHub credentials for ordinary GitHub operations, and the configured OpenCode provider secret. Production Cloudflare/D1/email/deploy/package credentials must not be available to these jobs.
 
-After issue #31 is accepted, this remote GitHub path becomes the default implementation/correction path. Local OpenCode is the fallback/debug path.
+Issue #31 is accepted and closed. Its event-driven status/watchdog path is now the default implementation/correction path; local OpenCode remains fallback/debug.
 
 ### Trusted workflow-file publication
 
-Issue #36 defines the accepted policy for `.github/workflows/**` corrections:
+Issue #36 is accepted and closed and defines the policy for `.github/workflows/**` corrections:
 
 - ordinary agent/model processes never receive broad workflow-write credentials;
 - agents may prepare and test workflow-file corrections locally;
 - repository-owned orchestration detects workflow-file changes before ordinary push;
 - those corrections stop at a durable trusted-publication handoff with patch/evidence and exact base/head metadata;
-- a trusted human or ChatGPT GitHub operation publishes the reviewed workflow change;
+- a trusted human or separately authorized ChatGPT GitHub operation publishes the reviewed workflow change;
 - exact-HEAD review and CI resume after trusted publication.
+
+The policy was dogfooded successfully by issue #40: `/agent-ticket` stopped at `trusted-publication-required`, the ephemeral local commit was not retained by GitHub, the durable artifact still contained the full correction patch, ChatGPT published that exact patch through the trusted GitHub boundary, and `/agent-fix-cycle` then completed both review axes, gates, and exact-HEAD CI on the published HEAD before merge.
 
 A dedicated privileged publisher may be considered later only behind a narrow trusted boundary and explicit approval; it is not the current default.
 
-## Immediate tooling blockers before #11 remote dogfood
+## Remote execution readiness
 
-Issue #31 (`Add event-driven status and watchdogs to remote agent runs`) and PR #34 are not yet accepted.
+The pre-#11 tooling blockers are resolved:
 
-Final acceptance found a real completed-stage observability gap. A subsequent `/agent-fix-cycle` produced a corrected local commit on the ephemeral runner and all repository gates passed, but publishing that correction failed.
+- #31 `Add event-driven status and watchdogs to remote agent runs`: closed/completed.
+- #36 `Define a least-privilege publication path for workflow-file corrections`: closed/completed.
+- #40 `Make remote run status complete and notification-first`: closed/completed.
+- The final #40 dogfood reached `READY` with `Completed: Standards review, Spec review, gates, exact-HEAD CI` on one exact HEAD.
 
-The failure is now confirmed from Actions logs: GitHub rejected the push because the correction modifies `.github/workflows/agent-fix-cycle.yml` and the workflow's GitHub App/token lacks permission to create/update workflow files. This is a security/automation-boundary problem, not a safe-push branch-validation failure.
+Therefore #11 may be launched through the normal remote `/agent-ticket` path. The next product run is also the first live dogfood of the notification-first terminal-comment prefix from #40 after that workflow code reached `main`.
 
-Issue #36 now defines the accepted trusted-handoff policy for this class of change. Implement that policy and use a trusted publication step to recover/publish the #34 correction; do not broaden the model process credential.
+## Current GitHub Actions and dependency maintenance debt
 
-Do not launch #11 through remote dogfood until #31/#34 are corrected, reviewed on the corrected exact HEAD, accepted, and merged/closed as appropriate.
+This debt is active but **does not block #11** unless a concrete failure appears during its run.
 
-## Current GitHub Actions maintenance debt
+- #37 `Upgrade GitHub Actions to Node 24-native releases`: open, `ready-for-human`. It removes old first-party Action majors that target the deprecated Node 20 Action runtime. Its previous publication blocker #36 is now resolved, but the ticket remains separate maintenance work.
+- #38 `Audit deprecated transitive dependencies and npm security findings`: open, `ready-for-agent`. It investigates deprecated `@esbuild-kit/*`, npm audit findings, and install-script permissions without forcing compatibility-breaking dependency upgrades.
 
-Verified from the same Actions run on 2026-09-12:
-
-- the project runtime itself is correctly Node 24.21.0;
-- `actions/checkout@v4`, `actions/setup-node@v4`, and `actions/upload-artifact@v4` still target the deprecated Node 20 Action runtime and GitHub is currently forcing them to Node 24;
-- those old Action internals emit `punycode` / `url.parse()` deprecation warnings under Node 24;
-- `npm ci` also reports separate deprecated transitive packages, audit findings, and install-script allowlist warnings. Those are application/tool dependency-hygiene concerns and must be investigated separately from GitHub Action runtime upgrades.
-
-Track and remove this debt rather than silencing warnings or setting `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`.
-
-Active follow-up tickets:
-
-- #36: least-privilege trusted publication for workflow-file corrections;
-- #37: upgrade GitHub Actions to Node-24-native maintained releases;
-- #38: audit deprecated transitive packages, npm security findings, and install-script permissions.
+The project runtime itself remains Node 24.21.0. Do not silence Action/dependency warnings or use a forced dependency rewrite as a substitute for resolving #37/#38 deliberately.
 
 ## Maintaining this checkpoint
 
