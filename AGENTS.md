@@ -24,6 +24,8 @@ Read `docs/agents/project-state.md` at the start of a fresh substantial planning
 
 When a workflow names a project-local skill under `.agents/skills/`, read that skill before using it. Do not reconstruct Wayfinder/spec/ticket/implementation behavior from model memory.
 
+When writing or reviewing TypeScript, consult `.agents/skills/better-typescript/SKILL.md` and load only the referenced technique sections that apply to the code at hand.
+
 ### OpenCode implementation
 
 When OpenCode is used as the implementation harness, follow `docs/agents/opencode.md`. Implementation agents work only from approved `ready-for-agent` implementation tickets, one isolated ticket branch/worktree at a time.
