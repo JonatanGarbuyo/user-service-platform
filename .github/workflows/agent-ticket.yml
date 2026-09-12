@@ -253,8 +253,18 @@ jobs:
               --arg outcome "$OUTCOME" \
               --arg stage "$STAGE" \
               --arg reason "$REASON" \
-              '{version: 1, command: "review:cycle", startedAt: (if $started == "(see run log)" then $ended else $started end), endedAt: $ended, durationMs: 0, reviewedHead: $head, stage: $stage, correctionCycles: 0, markerRetries: {standards: 0, spec: 0}, standardsAttempts: [], specAttempts: [], addressReviewAttempts: [], qualityGates: [], ci: {decision: "unknown", runs: []}, outcome: $outcome, detail: $reason}' \
+              '{version: 1, command: "review:cycle", startedAt: (if $started == "(see run log)" then $ended else $started end), endedAt: $ended, durationMs: 0, reviewedHead: $head, stage: $stage, completedStages: [], correctionCycles: 0, markerRetries: {standards: 0, spec: 0}, standardsAttempts: [], specAttempts: [], addressReviewAttempts: [], qualityGates: [], ci: {decision: "unknown", runs: []}, outcome: $outcome, detail: $reason}' \
               > .review-cycle/latest.json || true
+          fi
+          COMPLETED=""
+          if [ -f .agent-ticket/outcome.json ]; then
+            COMPLETED="$(jq -r '(.completedStages // []) | join(", ")' .agent-ticket/outcome.json)"
+          fi
+          if [ -z "$COMPLETED" ] && [ -f .review-cycle/latest.json ]; then
+            COMPLETED="$(jq -r '(.completedStages // []) | join(", ")' .review-cycle/latest.json)"
+          fi
+          if [ -z "$COMPLETED" ]; then
+            COMPLETED="(none yet)"
           fi
           STATUS_BODY="<!-- agent-run-status -->
           Target: issue #$ISSUE_NUMBER
@@ -262,7 +272,7 @@ jobs:
           Branch: $BRANCH
           HEAD: $HEAD
           Stage: $STAGE
-          Completed: (see run log)
+          Completed: $COMPLETED
           Started: $STARTED
           Updated: $UPDATED
           Worker: $WORKER

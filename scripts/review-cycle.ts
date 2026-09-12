@@ -237,7 +237,7 @@ async function publishCycleStatus(
       branch: snap.branch ?? '(unknown)',
       head: snap.reviewedHead === '' ? '(unknown)' : snap.reviewedHead,
       currentStage: stage,
-      completedStages: [],
+      completedStages: [...snap.completedStages],
       startedAt: snap.startedAt,
       ...(worker === undefined ? {} : { worker }),
       ...(outcome === undefined ? {} : { outcome }),

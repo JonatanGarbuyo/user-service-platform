@@ -85,6 +85,10 @@ export interface RunSummary {
   // validation, Standards review, exact-HEAD CI) so terminal, fatal,
   // cancelled, and timed-out runs keep stage evidence without scrollback.
   stage?: string;
+  // Deterministic accumulated completed stages in visit order (ticket #31).
+  // Updated alongside `stage` so the durable status surface can render the
+  // actual stage list without log inspection.
+  completedStages: string[];
   // Worker timeout evidence where relevant: which worker exceeded which
   // bound. Absent when no timeout occurred.
   timeout?: TimeoutSummary;
@@ -144,6 +148,7 @@ export interface RunSummaryRecorder {
     base?: string;
     reviewedHead: string;
     stage?: string;
+    completedStages: string[];
     startedAt: string;
   };
   finish(outcome: TerminalOutcome, detail?: string): RunSummary;
@@ -164,6 +169,7 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
   let qualityGates: GateSummary[] = [];
   let ci: { decision: CiDecision; runs: CheckRunSummary[] } = { decision: 'unknown', runs: [] };
   let stage: string | undefined;
+  const completedStages: string[] = [];
   let timeout: TimeoutSummary | undefined;
 
   function build(outcome: TerminalOutcome, detail: string | undefined): RunSummary {
@@ -183,6 +189,7 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
       qualityGates: [...qualityGates],
       ci: { decision: ci.decision, runs: [...ci.runs] },
       outcome,
+      completedStages: [...completedStages],
     };
     if (pr !== undefined) {
       summary.pr = { ...pr };
@@ -244,6 +251,9 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
       initialHead = head;
     },
     setStage(next: string) {
+      if (stage !== undefined && stage !== next && !completedStages.includes(stage)) {
+        completedStages.push(stage);
+      }
       stage = next;
     },
     recordTimeout(worker: string, timeoutMs: number) {
@@ -272,6 +282,7 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
         ...(base === undefined ? {} : { base }),
         reviewedHead,
         ...(stage === undefined ? {} : { stage }),
+        completedStages: [...completedStages],
         startedAt: toIso(runStartedAtMs),
       };
     },

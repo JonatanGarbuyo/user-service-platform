@@ -45,6 +45,7 @@ export interface AgentTicketOutcome {
   stage: string;
   reason: string;
   startedAt: string;
+  completedStages: string[];
   actionRequired?: string;
 }
 
@@ -105,7 +106,10 @@ export interface OutcomePersistDeps {
 }
 
 export async function writeAgentTicketOutcome(
-  input: Omit<AgentTicketOutcome, 'startedAt'> & { startedAt?: string },
+  input: Omit<AgentTicketOutcome, 'startedAt' | 'completedStages'> & {
+    startedAt?: string;
+    completedStages?: readonly string[];
+  },
   deps: OutcomePersistDeps = {},
 ): Promise<string> {
   const path = deps.path ?? AGENT_TICKET_OUTCOME_PATH;
@@ -118,6 +122,7 @@ export async function writeAgentTicketOutcome(
     stage: input.stage,
     reason: input.reason,
     startedAt: input.startedAt ?? new Date().toISOString(),
+    completedStages: input.completedStages === undefined ? [] : [...input.completedStages],
   };
   if (input.actionRequired !== undefined) {
     record.actionRequired = input.actionRequired;
@@ -526,6 +531,7 @@ export async function runAgentTicket(
         stage: mapped.stage,
         reason: result.reason ?? 'terminal state',
         startedAt: startedAtIso,
+        completedStages: [...completedStages],
         ...(actionRequired === undefined ? {} : { actionRequired }),
       });
     } catch {
