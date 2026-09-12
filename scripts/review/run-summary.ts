@@ -136,6 +136,12 @@ export interface RunSummaryRecorder {
   setReviewedHead(head: string): void;
   setInitialHead(head: string): void;
   setStage(stage: string): void;
+  // Explicit completion for parallel stages (ticket #40). The initial dual
+  // reviewers run concurrently under one stage transition, so a stage that
+  // completed in parallel would otherwise never appear in `completedStages`.
+  // Callers mark only axes with an exact-HEAD validated marker; a missing or
+  // stale marker must never be marked completed.
+  markCompleted(stage: string): void;
   recordTimeout(worker: string, timeoutMs: number): void;
   setMarkerRetries(retries: Record<ReviewAxis, number>): void;
   setQualityGates(gates: GateSummary[]): void;
@@ -255,6 +261,11 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
         completedStages.push(stage);
       }
       stage = next;
+    },
+    markCompleted(next: string) {
+      if (!completedStages.includes(next)) {
+        completedStages.push(next);
+      }
     },
     recordTimeout(worker: string, timeoutMs: number) {
       timeout = { worker, timeoutMs };

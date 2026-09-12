@@ -329,8 +329,11 @@ jobs:
         # workflow-level cancellation or timeout where scripts never ran. The
         # durable status comment is PATCHed to its terminal state, and one
         # concise terminal comment is posted so normal GitHub routing notifies
-        # (PATCH edits alone do not notify). BLOCKED/NEEDS-DECISION/TIMEOUT
-        # mention the owner so GitHub Mobile pushes; READY stays silent.
+        # (PATCH edits alone do not notify). Terminal bodies lead with the
+        # outcome prefix (ticket #40) so mobile/email previews surface the
+        # result without opening logs; BLOCKED/NEEDS-DECISION/TIMEOUT/FATAL
+        # mention the owner after the prefix so GitHub Mobile pushes; READY
+        # stays a notification/comment only and never merges or deploys.
         if: steps.guard.outputs.run == 'true' && always()
         run: |
           set -euo pipefail
@@ -457,7 +460,7 @@ jobs:
             gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --method PATCH -f body="$STATUS_BODY" || true
           fi
           if [ "$OUTCOME" = "BLOCKED" ] || [ "$OUTCOME" = "NEEDS-DECISION" ] || [ "$OUTCOME" = "TIMEOUT" ] || [ "$OUTCOME" = "FATAL" ]; then
-            gh pr comment "$PR_NUMBER" --body "@JonatanGarbuyo $OUTCOME: $STAGE — $REASON. Action required: $ACTION PR #$PR_NUMBER, reviewed HEAD $HEAD. Workflow run: $RUN_URL." || true
+            gh pr comment "$PR_NUMBER" --body "[$OUTCOME] @JonatanGarbuyo $STAGE — $REASON. Action required: $ACTION PR #$PR_NUMBER, reviewed HEAD $HEAD. Workflow run: $RUN_URL." || true
           else
-            gh pr comment "$PR_NUMBER" --body "AGENT-FIX-CYCLE READY FOR FINAL ACCEPTANCE. PR #$PR_NUMBER, reviewed HEAD $HEAD. Run summary: .review-cycle/latest.json (see workflow artifacts/run logs). Stopped at READY FOR FINAL ACCEPTANCE; never merges. Workflow run: $RUN_URL." || true
+            gh pr comment "$PR_NUMBER" --body "[READY] PR #$PR_NUMBER, reviewed HEAD $HEAD ready for final acceptance. Run summary: .review-cycle/latest.json (see workflow artifacts/run logs). Stopped at READY FOR FINAL ACCEPTANCE; never merges. Workflow run: $RUN_URL." || true
           fi
