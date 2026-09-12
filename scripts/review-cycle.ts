@@ -552,6 +552,17 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
     }
     recorder.setMarkerRetries({ ...markerRetries });
     recorder.setReviewedHead(head);
+    // Dual-review completion (ticket #40). The initial reviewers run in
+    // parallel under a single stage transition, so the transition alone can
+    // only record one axis. Mark each axis completed only from its
+    // exact-HEAD validated marker — a missing or stale marker never counts.
+    // Workers stay concurrent; only completion bookkeeping is explicit.
+    if (reports.standards !== undefined) {
+      recorder.markCompleted('Standards review');
+    }
+    if (reports.spec !== undefined) {
+      recorder.markCompleted('Spec review');
+    }
 
     const decision = decideNextStep({
       standards: reports.standards,
