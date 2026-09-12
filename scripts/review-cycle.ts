@@ -281,6 +281,10 @@ function fatalDetail(error: unknown): string {
   return message.slice(0, 300);
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // Trusted-publication handoff (ticket #36): corrections touching
 // `.github/workflows/**` must never attempt the doomed generic push with the
 // least-privilege credential. Detection runs over the exact known range and
@@ -298,7 +302,7 @@ async function blockOnWorkflowHandoff(
   } catch (error) {
     const reason =
       `${TRUSTED_PUBLICATION_MARKER}: cannot prove the correction is free of workflow files: ` +
-      (error instanceof Error ? error.message : String(error));
+      errorMessage(error);
     console.error(`REVIEW-CYCLE BLOCKED: ${reason}`);
     process.exitCode = 1;
     await concludeWithSummary(recorder, 'BLOCKED', reason);
@@ -318,14 +322,12 @@ async function blockOnWorkflowHandoff(
   try {
     patch = await getWorkflowPatch(runCommand, range.base, range.head, files);
   } catch (error) {
-    patch = `# workflow handoff patch unavailable: ${error instanceof Error ? error.message : String(error)}\n`;
+    patch = `# workflow handoff patch unavailable: ${errorMessage(error)}\n`;
   }
   try {
     await persistWorkflowHandoffBundle(record, patch);
   } catch (error) {
-    console.error(
-      `Handoff persistence failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    console.error(`Handoff persistence failed: ${errorMessage(error)}`);
   }
   console.error(`REVIEW-CYCLE BLOCKED: ${record.reason}`);
   console.error(`Handoff evidence: ${HANDOFF_PATCH_PATH} ${HANDOFF_RECORD_PATH}`);
