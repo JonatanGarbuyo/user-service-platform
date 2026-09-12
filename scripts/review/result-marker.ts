@@ -39,7 +39,7 @@ export function parseReviewMarkers(body: string): ReviewMarker[] {
 }
 
 export function expectedModelForAxis(axis: ReviewAxis): string {
-  return axis === 'standards' ? 'mimo-v2.5' : 'nemotron-3.5-lightning';
+  return axis === 'standards' ? 'mimo-v2.5' : 'muse-spark-1.3-contributor-free';
 }
 
 export interface CurrentHeadReports {
@@ -56,7 +56,7 @@ export function selectCurrentHeadReports(
   for (const comment of comments) {
     for (const marker of parseReviewMarkers(comment.body)) {
       // Acceptance criterion (PR #17): an axis only counts reports from its
-      // configured model family — Standards is MiMo, Spec is Nemotron.
+      // configured model family — Standards is MiMo, Spec is Muse Spark.
       if (marker.model !== expectedModelForAxis(marker.axis)) {
         continue;
       }

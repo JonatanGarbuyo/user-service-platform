@@ -49,7 +49,7 @@ describe('review run summary timing accumulation', () => {
       axis: 'spec',
       attempt: 1,
       durationMs: 2000,
-      model: 'nemotron-3.5-lightning',
+      model: 'muse-spark-1.3-contributor-free',
       result: 'FAIL',
     });
     expect(summary.outcome).toBe('BLOCKED');

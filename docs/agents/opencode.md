@@ -13,7 +13,7 @@ The repository defines three dedicated agents:
 ```text
 implementer          -> opencode/muse-spark-1.3-contributor-free
 reviewer-standards   -> opencode/mimo-v2.5-free
-reviewer-spec        -> opencode/nemotron-3.5-lightning-free
+reviewer-spec        -> opencode/muse-spark-1.3-contributor-free
 ```
 
 `/implement` and `/address-review` are wired to `implementer`. `/review-standards` and `/review-spec` run as subagents so both review axes have independent context and different model families.
@@ -91,7 +91,7 @@ The PR should reference the implementation ticket and parent spec. Review findin
 Every implementation ticket must pass two independent read-only reviews before final acceptance:
 
 1. **Standards — MiMo-V2.5 Free**: repository rules, architecture conventions, maintainability, and the repository-pinned code-review skill's smell baseline.
-2. **Spec — Nemotron 3.5 Lightning Free**: missing/incorrect requirements and scope creep against the implementation ticket and parent spec.
+2. **Spec — Muse Spark 1.3 Contributor Free**: missing/incorrect requirements and scope creep against the implementation ticket and parent spec.
 
 From the implementation branch with an open PR, run:
 

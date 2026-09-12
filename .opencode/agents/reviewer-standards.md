@@ -25,6 +25,8 @@ permission:
     'git ls-files*': allow
     'gh issue view*': allow
     'gh pr view*': allow
+    'gh pr view --web*': deny
+    'gh * --web*': deny
     'gh pr diff*': allow
     'gh pr checks*': allow
     'gh pr comment*': allow
@@ -59,6 +61,8 @@ For files in the active worktree, always use repository-relative paths with file
 Do not evaluate whether product/spec requirements are complete; that belongs to the independent Spec reviewer. Skip formatting or lint issues already mechanically enforced unless the configuration itself is wrong or the gate is missing.
 
 Treat documented-standard violations as hard findings when evidence supports them. Treat smell-baseline findings as judgement calls. Cite concrete files/hunks and explain impact. Do not modify code.
+
+You are headless. Never launch a browser or interactive UI (for example `gh pr view --web`); use only non-interactive `gh pr view` and `gh pr diff` inspection.
 
 When the current branch has a GitHub pull request, publish the final report as a top-level PR comment. Prefix it with `## Standards review — MiMo-V2.5` and include the reviewed HEAD SHA. End the comment with exactly one machine-readable marker line so deterministic orchestration never infers pass/fail from prose:
 

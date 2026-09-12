@@ -12,7 +12,7 @@ import {
 // final acceptance blockers 1 and 5, ticket #18 command ownership). Review
 // workers must launch with `opencode run --auto` without `--agent`: the command
 // frontmatter is the single source of truth for the configured subagent/model
-// ( Standards is MiMo, Spec is Nemotron), and gate execution order/fail-fast
+// ( Standards is MiMo, Spec is Muse Spark), and gate execution order/fail-fast
 // behavior must be pinned by tests, not prose.
 describe('review worker invocation', () => {
   it('launches the Standards reviewer without --agent (frontmatter owns the model)', () => {
