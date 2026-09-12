@@ -1,4 +1,4 @@
-# ADR-0008: Isolate local, staging, and production and promote releases explicitly
+# ADR-0008: Isolate local, sandbox, and production and promote releases explicitly
 
 ## Status
 
@@ -10,13 +10,13 @@ The service runs on Cloudflare Workers with D1 and R2. Worker versions do not in
 
 ## Decision
 
-Use three operational contexts: local development, staging, and production.
+Use three operational contexts: local development, sandbox, and production.
 
-Staging and production are separate Cloudflare Worker environments and use separate D1 databases, R2 buckets, secrets, domains/routes, and environment-specific configuration. Mutable resources must never be shared between staging and production.
+Sandbox and production are separate Cloudflare Worker environments and use separate D1 databases, R2 buckets, secrets, domains/routes, and environment-specific configuration. Mutable resources must never be shared between sandbox and production.
 
 Pull requests initially run local/CI checks only; per-PR deployed Cloudflare infrastructure is deferred.
 
-Once deployment automation exists, merges to `main` may deploy automatically to staging. Production is an explicit promotion/release step and records the source commit plus resulting Worker version/deployment identifier.
+Once deployment automation exists, merges to `main` may deploy automatically to sandbox. Production is an explicit promotion/release step and records the source commit plus resulting Worker version/deployment identifier.
 
 Database migrations are version controlled and validated against local/disposable D1 before merge. Production schema changes use an expand-deploy-contract strategy whenever rollback compatibility could matter:
 
@@ -26,7 +26,7 @@ Database migrations are version controlled and validated against local/disposabl
 
 A Worker code rollback is not a data rollback. D1 Time Travel is the emergency point-in-time data recovery mechanism and requires an explicit runbook and confirmation.
 
-Smoke tests are required after staging and production deployment.
+Smoke tests are required after sandbox and production deployment.
 
 ## Consequences
 
