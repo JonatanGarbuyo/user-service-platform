@@ -189,20 +189,22 @@ Final acceptance found a real completed-stage observability gap. A subsequent `/
 
 The failure is now confirmed from Actions logs: GitHub rejected the push because the correction modifies `.github/workflows/agent-fix-cycle.yml` and the workflow's GitHub App/token lacks permission to create/update workflow files. This is a security/automation-boundary problem, not a safe-push branch-validation failure.
 
-Do not solve this by exposing a broad PAT or unrestricted workflow-write credential to the model process. The workflow-file mutation path needs an explicit least-privilege design before remote correction can be considered complete.
+Do not solve this by exposing a broad PAT or unrestricted workflow-write credential to the model process. Issue #36 tracks the least-privilege workflow-file publication decision and directly blocks reliable recovery/completion of #31/#34.
 
 Do not launch #11 through remote dogfood until #31/#34 are corrected, reviewed on the corrected exact HEAD, accepted, and merged/closed as appropriate.
 
-## Current GitHub Actions maintenance debt
+## Current GitHub Actions and dependency maintenance debt
 
 Verified from the same Actions run on 2026-09-12:
 
 - the project runtime itself is correctly Node 24.21.0;
 - `actions/checkout@v4`, `actions/setup-node@v4`, and `actions/upload-artifact@v4` still target the deprecated Node 20 Action runtime and GitHub is currently forcing them to Node 24;
 - those old Action internals emit `punycode` / `url.parse()` deprecation warnings under Node 24;
-- `npm ci` also reports separate deprecated transitive packages, audit findings, and install-script allowlist warnings. Those are application/tool dependency-hygiene concerns and must be investigated separately from GitHub Action runtime upgrades.
+- issue #37 tracks migration to maintained Node-24-native Action releases;
+- `npm ci` also reports deprecated transitive packages, audit findings, and install-script allowlist warnings;
+- issue #38 tracks compatibility-safe investigation/remediation of those npm dependency findings separately from the Action runtime migration.
 
-Track and remove this debt rather than silencing warnings or setting `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`.
+Do not silence these warnings, use `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`, or run `npm audit fix --force` as a substitute for understanding and fixing the dependency/runtime path.
 
 ## Maintaining this checkpoint
 
