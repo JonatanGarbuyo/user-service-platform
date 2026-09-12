@@ -55,4 +55,4 @@ These are future capabilities, not placeholders that must be implemented in the 
 
 ## Decision record
 
-Wayfinder decision: https://github.com/JonatanGarbuyo/hisense-lab/issues/3
+Wayfinder decision: https://github.com/JonatanGarbuyo/user-service-platform/issues/3
