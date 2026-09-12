@@ -7,6 +7,7 @@ import {
   runAddressReview,
   runReviewAxis,
 } from '../../scripts/review/runner.js';
+import { WorkerTimeoutError, isWorkerTimeout } from '../../scripts/review/worker-timeout.js';
 
 // Seam under test: deterministic worker-invocation and gate policy (PR #17
 // final acceptance blockers 1 and 5, ticket #18 command ownership). Review
@@ -122,5 +123,12 @@ describe('quality gate sequencing', () => {
     expect(results.map((gate) => gate.name)).toEqual(['lint', 'format:check', 'typecheck']);
     expect(results.at(-1)?.ok).toBe(false);
     expect(seen).toEqual(['run lint', 'run format:check', 'run typecheck']);
+  });
+
+  it('propagates worker timeouts instead of absorbing them as gate verdicts', async () => {
+    const timeout = new WorkerTimeoutError('gates', 900_000, 'npm run lint');
+    const executor = vi.fn(() => Promise.reject(timeout));
+
+    await expect(runQualityGates(executor)).rejects.toSatisfy(isWorkerTimeout);
   });
 });

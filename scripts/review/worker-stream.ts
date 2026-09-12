@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { EventEmitter } from 'node:events';
+import { WORKER_KILL_GRACE_MS, WorkerTimeoutError } from './worker-timeout.js';
 
 export interface StreamHandlers {
   onStdoutLine?: (line: string) => void;
@@ -10,15 +11,26 @@ export interface WorkerStreamOptions {
   label: string;
   heartbeatMs?: number;
   now?: () => number;
+  // Bounded execution (ticket #31): when set, a silent or hung worker is
+  // terminated and the promise rejects with a distinguishable
+  // `WorkerTimeoutError` instead of hanging indefinitely. Callers pass the
+  // per-worker bound from `timeoutForWorker`; no default is applied here so
+  // short deterministic commands stay on the buffered `runCommand` path.
+  timeoutMs?: number;
+  killGraceMs?: number;
 }
 
 export type SpawnFn = (command: string, args: readonly string[]) => SpawnedWorker;
 
 // Minimal structural seam over the spawned worker: the real `spawn()` result
 // satisfies this, and tests inject EventEmitters without real subprocesses.
+// `kill` terminates the hung subprocess tree so no orphan OpenCode process
+// continues after the workflow has stopped.
 export interface SpawnedWorker extends EventEmitter {
   stdout: EventEmitter | null;
   stderr: EventEmitter | null;
+  kill?: (signal?: number | NodeJS.Signals) => unknown;
+  pid?: number;
 }
 
 export interface WorkerStreamResult {
@@ -53,7 +65,8 @@ export function runWorkerStream(
   command: string,
   args: readonly string[],
   options: WorkerStreamOptions,
-  spawnFn: SpawnFn = (cmd, argv) => spawn(cmd, [...argv], { stdio: ['ignore', 'pipe', 'pipe'] }),
+  spawnFn: SpawnFn = (cmd, argv) =>
+    spawn(cmd, [...argv], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] }),
   handlers: StreamHandlers = {},
 ): Promise<WorkerStreamResult> {
   const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
@@ -79,6 +92,59 @@ export function runWorkerStream(
         );
       }
     }, heartbeatMs);
+    // Avoid holding the event loop open for diagnostic timers.
+    if (typeof (heartbeat as unknown as { unref?: unknown }).unref === 'function') {
+      (heartbeat as unknown as { unref: () => void }).unref();
+    }
+
+    // The worker runs detached in its own process group so the watchdog can
+    // terminate the whole tree: `child.kill()` alone only signals the direct
+    // child, leaving `opencode` grandchildren orphaned (ticket #31 context).
+    const killTree = (signal: number | NodeJS.Signals): void => {
+      try {
+        child.kill?.(signal);
+      } catch {
+        // Best-effort: termination must never mask the timeout itself.
+      }
+      const pid = child.pid;
+      if (pid !== undefined && Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(-pid, signal);
+        } catch {
+          // Best-effort: the group may already be gone.
+        }
+      }
+    };
+
+    // Bounded watchdog (ticket #31): terminate the hung subprocess tree and
+    // reject with a distinguishable timeout so callers can report TIMEOUT
+    // rather than a generic exit failure. SIGTERM first, SIGKILL after a
+    // short grace so no orphan OpenCode process continues.
+    const timeoutMs = options.timeoutMs;
+    const killGraceMs = options.killGraceMs ?? WORKER_KILL_GRACE_MS;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let killEscalation: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      watchdog = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearInterval(heartbeat);
+        console.log(`[${options.label}] timed out after ${String(timeoutMs)}ms; terminating`);
+        killTree('SIGTERM');
+        killEscalation = setTimeout(() => {
+          killTree('SIGKILL');
+        }, killGraceMs);
+        if (typeof (killEscalation as unknown as { unref?: unknown }).unref === 'function') {
+          (killEscalation as unknown as { unref: () => void }).unref();
+        }
+        reject(new WorkerTimeoutError(options.label, timeoutMs, invocation));
+      }, timeoutMs);
+      if (typeof (watchdog as unknown as { unref?: unknown }).unref === 'function') {
+        (watchdog as unknown as { unref: () => void }).unref();
+      }
+    }
 
     const finish = (error: Error | null, exitCode: number | null): void => {
       if (settled) {
@@ -86,6 +152,9 @@ export function runWorkerStream(
       }
       settled = true;
       clearInterval(heartbeat);
+      if (watchdog !== undefined) {
+        clearTimeout(watchdog);
+      }
       if (stdoutBuffer.text !== '') {
         const line = stripCarriageReturn(stdoutBuffer.text);
         stdout += `${line}\n`;

@@ -25,6 +25,10 @@ jobs:
     # Pull requests only; plain issues are handled by agent-ticket.
     if: ${{ github.event.issue.pull_request }}
     runs-on: ubuntu-latest
+    # Backstop only: repository-owned worker bounds (ticket #31) terminate hung
+    # workers well before this; the terminal step below still runs and
+    # publishes the terminal status.
+    timeout-minutes: 90
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -136,6 +140,33 @@ jobs:
           fi
           echo "Checked-out HEAD $ACTUAL matches validated OID."
 
+      - name: Create durable run status comment
+        # One status surface per run (ticket #31): review:cycle PATCHes this
+        # same comment as stages advance, and the terminal step PATCHes the
+        # final outcome, so the current stage and terminal result are visible
+        # from GitHub mobile/web without log polling. Bodies are deterministic
+        # repository-owned metadata only — never transcripts or secrets.
+        id: status
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ steps.guard.outputs.pr }}"
+          BRANCH="${{ steps.guard.outputs.branch }}"
+          HEAD="${{ steps.guard.outputs.head }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          BODY="$(printf '<!-- agent-run-status -->\nTarget: PR #%s\nRun: %s\nBranch: %s\nHEAD: %s\nStage: validation\nCompleted: (none yet)\nStarted: %s\nUpdated: %s\nWorker: (none)\nOutcome: in progress' "$PR_NUMBER" "$RUN_URL" "$BRANCH" "$HEAD" "$STARTED" "$STARTED")"
+          COMMENT_URL="$(gh pr comment "$PR_NUMBER" --body "$BODY")"
+          COMMENT_ID="$(printf '%s' "$COMMENT_URL" | grep -oE 'issuecomment-[0-9]+' | grep -oE '[0-9]+' || true)"
+          if [ -z "$COMMENT_ID" ]; then
+            echo "Could not parse a status comment id from: $COMMENT_URL; continuing without stage updates."
+            echo "comment-id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "comment-id=$COMMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "AGENT_RUN_STATUS_COMMENT_ID=$COMMENT_ID" >> "$GITHUB_ENV"
+          echo "AGENT_RUN_URL=$RUN_URL" >> "$GITHUB_ENV"
+
       - name: Install pinned OpenCode
         if: steps.guard.outputs.run == 'true'
         run: |
@@ -144,13 +175,28 @@ jobs:
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
       - name: Run address-review correction
+        # Bounded like the repository-owned address-review worker (ticket #31):
+        # `timeout` terminates a hung correction run instead of leaving the
+        # workflow at `still running` indefinitely. Exit 124 leaves a sentinel
+        # that the terminal step maps to TIMEOUT (distinct from model, gate,
+        # CI, or cancellation failures).
         if: steps.guard.outputs.run == 'true'
         env:
           OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
         run: |
           set -euo pipefail
           PR_NUMBER="${{ steps.guard.outputs.pr }}"
-          opencode run --auto --command address-review "$PR_NUMBER"
+          if timeout --signal=TERM --kill-after=60s 20m opencode run --auto --command address-review "$PR_NUMBER"; then
+            echo "address-review completed within its bound."
+          else
+            CODE=$?
+            if [ "$CODE" -eq 124 ]; then
+              echo "address-review exceeded its 20m bound (TIMEOUT)."
+              printf 'address-review timed out after 20m' > .address-review-timeout
+              exit 1
+            fi
+            exit "$CODE"
+          fi
 
       - name: Require clean correction or explicit no-code outcome
         if: steps.guard.outputs.run == 'true'
@@ -196,14 +242,127 @@ jobs:
           if-no-files-found: warn
 
       - name: Report terminal result
+        # Publishes the terminal state for the run (ticket #31), including
+        # workflow-level cancellation or timeout where scripts never ran. The
+        # durable status comment is PATCHed to its terminal state, and one
+        # concise terminal comment is posted so normal GitHub routing notifies
+        # (PATCH edits alone do not notify). BLOCKED/NEEDS-DECISION/TIMEOUT
+        # mention the owner so GitHub Mobile pushes; READY stays silent.
         if: steps.guard.outputs.run == 'true' && always()
         run: |
           set -euo pipefail
           PR_NUMBER="${{ steps.guard.outputs.pr }}"
           HEAD="$(git rev-parse HEAD)"
-          SUMMARY="Run summary: .review-cycle/latest.json (see workflow artifacts/run logs). Stopped at READY FOR FINAL ACCEPTANCE; never merges."
-          if [ "${{ job.status }}" = "success" ]; then
-            gh pr comment "$PR_NUMBER" --body "AGENT-FIX-CYCLE READY FOR FINAL ACCEPTANCE. PR #$PR_NUMBER, reviewed HEAD $HEAD. $SUMMARY Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}." || true
+          BRANCH="$(git branch --show-current)"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          UPDATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          OUTCOME="BLOCKED"
+          STAGE="run"
+          REASON="workflow did not reach READY"
+          ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-fix-cycle."
+          STARTED="(see run log)"
+          WORKER="(none)"
+          if [ -f .address-review-timeout ]; then
+            OUTCOME="TIMEOUT"
+            STAGE="address-review"
+            REASON="$(head -c 300 .address-review-timeout)"
+            WORKER="address-review"
+            ACTION="The address-review worker exceeded its bound; rerun once the runner is free."
+          elif [ -f .review-cycle/latest.json ]; then
+            SUMMARY_OUTCOME="$(jq -r '.outcome // empty' .review-cycle/latest.json)"
+            SUMMARY_DETAIL="$(jq -r '.detail // empty' .review-cycle/latest.json | head -c 300)"
+            SUMMARY_STAGE="$(jq -r '.stage // empty' .review-cycle/latest.json)"
+            SUMMARY_STARTED="$(jq -r '.startedAt // empty' .review-cycle/latest.json)"
+            SUMMARY_WORKER="$(jq -r '.timeout.worker // empty' .review-cycle/latest.json)"
+            if [ -n "$SUMMARY_STAGE" ]; then
+              STAGE="$SUMMARY_STAGE"
+            fi
+            if [ -n "$SUMMARY_STARTED" ]; then
+              STARTED="$SUMMARY_STARTED"
+            fi
+            if [ -n "$SUMMARY_WORKER" ]; then
+              WORKER="$SUMMARY_WORKER"
+            fi
+            case "$SUMMARY_OUTCOME" in
+              READY)
+                OUTCOME="READY"
+                REASON="${SUMMARY_DETAIL:-ready for final acceptance}"
+                ACTION=""
+                ;;
+              NEEDS-DECISION)
+                OUTCOME="NEEDS-DECISION"
+                REASON="${SUMMARY_DETAIL:-a human decision is required}"
+                ACTION="A product, architecture, or contract decision is required before automation can continue."
+                ;;
+              TIMEOUT)
+                OUTCOME="TIMEOUT"
+                REASON="${SUMMARY_DETAIL:-a worker exceeded its bound}"
+                ACTION="A worker exceeded its bound; rerun once the runner is free."
+                ;;
+              FATAL)
+                OUTCOME="FATAL"
+                REASON="${SUMMARY_DETAIL:-an unhandled worker failure}"
+                ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-fix-cycle."
+                ;;
+              *)
+                OUTCOME="BLOCKED"
+                REASON="${SUMMARY_DETAIL:-workflow did not reach READY}"
+                ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-fix-cycle."
+                ;;
+            esac
+          elif [ "${{ job.status }}" = "success" ]; then
+            OUTCOME="READY"
+            STAGE="final acceptance-ready"
+            REASON="ready for final acceptance"
+            ACTION=""
+          fi
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            OUTCOME="BLOCKED"
+            REASON="workflow cancelled"
+            ACTION="Inspect the workflow state, then rerun /agent-fix-cycle."
+            if [ -f .review-cycle/latest.json ]; then
+              jq --arg ended "$UPDATED" --arg reason "$REASON" \
+                '.outcome = "BLOCKED" | .detail = $reason | .endedAt = $ended' \
+                .review-cycle/latest.json > .review-cycle/latest.json.tmp \
+                && mv .review-cycle/latest.json.tmp .review-cycle/latest.json || true
+            fi
+          fi
+          if [ ! -f .review-cycle/latest.json ]; then
+            mkdir -p .review-cycle
+            jq -n \
+              --arg started "$STARTED" \
+              --arg ended "$UPDATED" \
+              --arg head "$HEAD" \
+              --arg outcome "$OUTCOME" \
+              --arg stage "$STAGE" \
+              --arg reason "$REASON" \
+              '{version: 1, command: "review:cycle", startedAt: (if $started == "(see run log)" then $ended else $started end), endedAt: $ended, durationMs: 0, reviewedHead: $head, stage: $stage, completedStages: [], correctionCycles: 0, markerRetries: {standards: 0, spec: 0}, standardsAttempts: [], specAttempts: [], addressReviewAttempts: [], qualityGates: [], ci: {decision: "unknown", runs: []}, outcome: $outcome, detail: $reason}' \
+              > .review-cycle/latest.json || true
+          fi
+          COMPLETED=""
+          if [ -f .review-cycle/latest.json ]; then
+            COMPLETED="$(jq -r '(.completedStages // []) | join(", ")' .review-cycle/latest.json)"
+          fi
+          if [ -z "$COMPLETED" ]; then
+            COMPLETED="(none yet)"
+          fi
+          STATUS_BODY="<!-- agent-run-status -->
+          Target: PR #$PR_NUMBER
+          Run: $RUN_URL
+          Branch: $BRANCH
+          HEAD: $HEAD
+          Stage: $STAGE
+          Completed: $COMPLETED
+          Started: $STARTED
+          Updated: $UPDATED
+          Worker: $WORKER
+          Outcome: $OUTCOME — $REASON"
+          COMMENT_ID="${{ steps.status.outputs.comment-id }}"
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --method PATCH -f body="$STATUS_BODY" || true
+          fi
+          if [ "$OUTCOME" = "BLOCKED" ] || [ "$OUTCOME" = "NEEDS-DECISION" ] || [ "$OUTCOME" = "TIMEOUT" ] || [ "$OUTCOME" = "FATAL" ]; then
+            gh pr comment "$PR_NUMBER" --body "@JonatanGarbuyo $OUTCOME: $STAGE — $REASON. Action required: $ACTION PR #$PR_NUMBER, reviewed HEAD $HEAD. Workflow run: $RUN_URL." || true
           else
-            gh pr comment "$PR_NUMBER" --body "AGENT-FIX-CYCLE BLOCKED for PR #$PR_NUMBER at HEAD $HEAD. $SUMMARY Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}." || true
+            gh pr comment "$PR_NUMBER" --body "AGENT-FIX-CYCLE READY FOR FINAL ACCEPTANCE. PR #$PR_NUMBER, reviewed HEAD $HEAD. Run summary: .review-cycle/latest.json (see workflow artifacts/run logs). Stopped at READY FOR FINAL ACCEPTANCE; never merges. Workflow run: $RUN_URL." || true
           fi

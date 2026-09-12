@@ -1,4 +1,5 @@
-import { runAgentTicket } from './agent/ticket-flow.js';
+import { runAgentTicket, writeAgentTicketOutcome } from './agent/ticket-flow.js';
+import { readStatusEnv } from './review/run-status.js';
 
 // Supported entrypoint for ticket #23: `npm run agent:ticket -- <issue>`.
 // Takes one approved `ready-for-agent` implementation ticket from a clean
@@ -28,7 +29,17 @@ async function main(): Promise<void> {
     return;
   }
 
-  const result = await runAgentTicket(ticketArg);
+  // Durable evidence (ticket #31): stage updates PATCH the workflow-owned
+  // status comment when routing is configured, and every terminal state is
+  // recorded to the repository-local outcome file read by the workflow
+  // terminal step — including pre-review failures where `review:cycle` never
+  // ran. Both are best-effort and never change the exit code computed here.
+  const result = await runAgentTicket(ticketArg, {
+    status: readStatusEnv(),
+    recordOutcome: (record) => {
+      return writeAgentTicketOutcome(record).then(() => undefined);
+    },
+  });
   process.exitCode = result.exitCode;
 }
 

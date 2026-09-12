@@ -9,3 +9,4 @@ coverage/
 !.env.example
 .DS_Store
 .review-cycle/
+.agent-ticket/
