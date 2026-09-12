@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADDRESS_REVIEW_TIMEOUT_MS,
+  GATE_TIMEOUT_MS,
   IMPLEMENT_TIMEOUT_MS,
   REVIEW_CYCLE_TIMEOUT_MS,
   REVIEWER_TIMEOUT_MS,
   WorkerTimeoutError,
   isWorkerTimeout,
+  timeoutDetails,
   timeoutForWorker,
 } from '../../scripts/review/worker-timeout.js';
 
@@ -40,6 +42,20 @@ describe('worker timeout policy', () => {
     expect(timeoutForWorker('implement')).toBe(IMPLEMENT_TIMEOUT_MS);
     expect(timeoutForWorker('address-review')).toBe(ADDRESS_REVIEW_TIMEOUT_MS);
     expect(timeoutForWorker('review-cycle')).toBe(REVIEW_CYCLE_TIMEOUT_MS);
+    expect(timeoutForWorker('gates')).toBe(GATE_TIMEOUT_MS);
+  });
+
+  it('keeps the gate bound well below the observed 7700s hang', () => {
+    expect(GATE_TIMEOUT_MS).toBeLessThan(7_700_000);
+  });
+
+  it('extracts typed timeout details without ad-hoc casts', () => {
+    expect(timeoutDetails(new WorkerTimeoutError('gates', 900_000, 'npm run lint'))).toEqual({
+      workerLabel: 'gates',
+      timeoutMs: 900_000,
+    });
+    expect(timeoutDetails(new Error('plain failure'))).toBeUndefined();
+    expect(timeoutDetails(null)).toBeUndefined();
   });
 
   it('distinguishes worker timeouts from model, gate, CI, and cancellation failures', () => {

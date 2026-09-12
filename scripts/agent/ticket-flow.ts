@@ -88,11 +88,12 @@ export function terminalOutcomeFor(result: AgentTicketTerminal): {
   if (result.exitCode === 0) {
     return { outcome: 'READY', stage: 'final acceptance-ready' };
   }
-  if (result.exitCode === 2) {
-    return { outcome: 'NEEDS-DECISION', stage: stageForFailedStage(result.failedStage) };
-  }
+  // A timeout stays a timeout regardless of the accompanying exit code.
   if (result.timedOut === true) {
     return { outcome: 'TIMEOUT', stage: stageForFailedStage(result.failedStage) };
+  }
+  if (result.exitCode === 2) {
+    return { outcome: 'NEEDS-DECISION', stage: stageForFailedStage(result.failedStage) };
   }
   return { outcome: 'BLOCKED', stage: stageForFailedStage(result.failedStage) };
 }

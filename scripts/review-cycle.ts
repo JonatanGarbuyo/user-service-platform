@@ -9,7 +9,7 @@ import {
   formatReadySummary,
   type MarkerRetries,
 } from './review/cycle-policy.js';
-import { qualityGatesPass, runQualityGates } from './review/gates.js';
+import { qualityGatesPass, runQualityGates, type GateResult } from './review/gates.js';
 import {
   CHECK_POLL_ATTEMPTS,
   CHECK_POLL_DELAY_MS,
@@ -29,6 +29,7 @@ import {
   runCommand,
   runReviewAxis,
   type CommandExecutor,
+  type CommandResult,
 } from './review/runner.js';
 import {
   createRunSummaryRecorder,
@@ -88,6 +89,14 @@ async function refreshPrUntilHead(
 function streamingWorkerExecutor(label: string): CommandExecutor {
   return (command, args) =>
     runWorkerStream(command, args, { label, timeoutMs: timeoutForWorker(label) });
+}
+
+// Quality gates run on the same bounded streaming path as OpenCode workers
+// (ticket #31): a hung gate command terminates with a distinguishable
+// TIMEOUT instead of stalling the cycle with no output. Short git/gh
+// inspection commands stay on the buffered `runCommand` path.
+function boundedGatesExecutor(command: string, args: readonly string[]): Promise<CommandResult> {
+  return runWorkerStream(command, args, { label: 'gates', timeoutMs: timeoutForWorker('gates') });
 }
 
 function parseArgs(argv: readonly string[]): CycleOptions {
@@ -475,7 +484,23 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
 
     if (decision.kind === 'ready-for-acceptance') {
       await setCycleStage(recorder, 'gates');
-      const gates = await runQualityGates();
+      let gates: GateResult[];
+      try {
+        gates = await runQualityGates(boundedGatesExecutor);
+      } catch (error) {
+        if (!isWorkerTimeout(error)) {
+          throw error;
+        }
+        const details = timeoutDetails(error);
+        if (details !== undefined) {
+          recorder.recordTimeout(details.workerLabel, details.timeoutMs);
+        }
+        console.error('REVIEW-CYCLE TIMEOUT: quality gates exceeded their bound.');
+        process.exitCode = 1;
+        await concludeWithSummary(recorder, 'TIMEOUT', 'quality gates timed out');
+        notifyTerminalBell(options.noBell);
+        return;
+      }
       recorder.setQualityGates(gates.map((gate) => ({ name: gate.name, ok: gate.ok })));
       const pass = qualityGatesPass(gates);
       for (const gate of gates) {

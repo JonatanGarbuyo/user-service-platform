@@ -1,4 +1,5 @@
 import { runCommand, type CommandExecutor } from './runner.js';
+import { isWorkerTimeout } from './worker-timeout.js';
 
 export interface GateResult {
   name: string;
@@ -28,6 +29,12 @@ export async function runQualityGates(
       const { stdout, stderr } = await execute('npm', gate.args);
       results.push({ name: gate.name, ok: true, output: `${stdout}${stderr}`.slice(-2000) });
     } catch (error) {
+      // Bounded-execution timeouts are control flow, not gate verdicts: let
+      // them propagate so callers report TIMEOUT instead of a generic gate
+      // failure. Every other failure stops at the first failing gate.
+      if (isWorkerTimeout(error)) {
+        throw error;
+      }
       const output = error instanceof Error ? error.message.slice(-2000) : String(error);
       results.push({ name: gate.name, ok: false, output });
       break;

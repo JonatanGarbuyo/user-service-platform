@@ -78,16 +78,6 @@ export function formatRunStatusBody(state: RunStatusState): string {
   return `${lines.join('\n')}\n`;
 }
 
-export interface StatusCommentRef {
-  id?: number;
-  url?: string;
-}
-
-export interface RunStatusPublisher {
-  createStatusComment(body: string): Promise<StatusCommentRef>;
-  updateStatusComment(id: number, body: string): Promise<void>;
-}
-
 export interface StatusEnv {
   commentId: number;
   repoSlug: string;

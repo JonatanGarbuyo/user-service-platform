@@ -216,6 +216,11 @@ jobs:
                 REASON="${SUMMARY_DETAIL:-a worker exceeded its bound}"
                 ACTION="A worker exceeded its bound; rerun once the runner is free."
                 ;;
+              FATAL)
+                OUTCOME="FATAL"
+                REASON="${SUMMARY_DETAIL:-an unhandled worker failure}"
+                ACTION="Inspect the workflow logs and .review-cycle/latest.json, then rerun /agent-ticket."
+                ;;
               *)
                 OUTCOME="BLOCKED"
                 REASON="${SUMMARY_DETAIL:-workflow did not reach READY}"
@@ -232,6 +237,12 @@ jobs:
             OUTCOME="BLOCKED"
             REASON="workflow cancelled"
             ACTION="Inspect the workflow state, then rerun /agent-ticket."
+            if [ -f .review-cycle/latest.json ]; then
+              jq --arg ended "$UPDATED" --arg reason "$REASON" \
+                '.outcome = "BLOCKED" | .detail = $reason | .endedAt = $ended' \
+                .review-cycle/latest.json > .review-cycle/latest.json.tmp \
+                && mv .review-cycle/latest.json.tmp .review-cycle/latest.json || true
+            fi
           fi
           if [ ! -f .review-cycle/latest.json ]; then
             mkdir -p .review-cycle
@@ -260,7 +271,7 @@ jobs:
           if [ -n "$COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --method PATCH -f body="$STATUS_BODY" || true
           fi
-          if [ "$OUTCOME" = "BLOCKED" ] || [ "$OUTCOME" = "NEEDS-DECISION" ] || [ "$OUTCOME" = "TIMEOUT" ]; then
+          if [ "$OUTCOME" = "BLOCKED" ] || [ "$OUTCOME" = "NEEDS-DECISION" ] || [ "$OUTCOME" = "TIMEOUT" ] || [ "$OUTCOME" = "FATAL" ]; then
             gh issue comment "$ISSUE_NUMBER" --body "@JonatanGarbuyo $OUTCOME: $STAGE — $REASON. Action required: $ACTION Issue #$ISSUE_NUMBER, HEAD $HEAD. Workflow run: $RUN_URL." || true
           else
             gh issue comment "$ISSUE_NUMBER" --body "AGENT-TICKET READY FOR FINAL ACCEPTANCE. Issue #$ISSUE_NUMBER, HEAD $HEAD. Run summary: .review-cycle/latest.json (see workflow artifacts/run logs). Workflow run: $RUN_URL." || true
