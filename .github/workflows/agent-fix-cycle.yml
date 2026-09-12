@@ -33,15 +33,15 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Check out trusted main for guard validation
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '24.21.0'
+          node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Install dependencies
@@ -121,7 +121,7 @@ jobs:
 
       - name: Check out PR head after authorization
         if: steps.guard.outputs.run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.guard.outputs.branch }}
           fetch-depth: 0
@@ -315,7 +315,7 @@ jobs:
         # run evidence so a blocked workflow-file correction can be published
         # without reconstructing work from runner logs.
         if: steps.guard.outputs.run == 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-fix-cycle-evidence-${{ github.event.issue.number }}
           path: |
