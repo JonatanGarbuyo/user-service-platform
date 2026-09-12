@@ -4,7 +4,7 @@ Last verified: 2026-09-12
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for the domain glossary, ADRs, specs, tickets, PRs, CI, or current repository state.
 
-The live repository state described below was verified through the merge of issue #40 / PR #41 into `main` at `686f979702867e28a5d1f6e263f7d2f9ec557e11`.
+The live repository state described below was verified through the merge of issue #11 / PR #43 into `main` at `cda758944b34f8cfd6e27dfbf2fc67cfa98559fc`.
 
 ## Authority and drift rules
 
@@ -130,18 +130,17 @@ Verified against GitHub on 2026-09-12:
 
 - #9 `Serve a contract-tested Worker health endpoint`: closed/completed.
 - #10 `Register and verify an email identity`: closed/completed.
-- #11 `Sign in and resolve the current User`: open, `ready-for-agent`, next product frontier. Its only declared blocker is #10, which is complete.
-- #12 `Recover a password safely`: blocked by #11.
+- #11 `Sign in and resolve the current User`: closed/completed; PR #43 passed address-review, repository gates, both exact-HEAD review axes, and exact-HEAD CI before squash merge at `cda758944b34f8cfd6e27dfbf2fc67cfa98559fc`.
+- #12 `Recover a password safely`: open, `ready-for-agent`, next product frontier. Its only declared blocker is #11, which is complete.
 - #13 `Deliver production authentication email`: blocked by #12 (and #10, already complete).
 - #14 `Promote the identity service to staging`: blocked by #11, #12, and #13.
 
 Expected sequence:
 
 ```text
-#11 sign in/current User
-  -> #12 password recovery
-       -> #13 production auth email
-            -> #14 staging promotion
+#12 password recovery
+  -> #13 production auth email
+       -> #14 staging promotion
 ```
 
 Do not start a ticket before its declared blockers are complete.
@@ -200,22 +199,34 @@ The policy was dogfooded successfully by issue #40: `/agent-ticket` stopped at `
 
 A dedicated privileged publisher may be considered later only behind a narrow trusted boundary and explicit approval; it is not the current default.
 
+### Trusted exact-HEAD CI approval
+
+Issue #44 is accepted and closed. It adds a narrow trusted workflow for GitHub's `action_required` state on PR-triggered CI created by the repository's own agent automation:
+
+- the implementation/model token does not receive `actions: write`;
+- the approver runs from trusted `main` workflow code and does not execute PR code;
+- it validates same-repository provenance, agent-created ticket branch/PR identity, `ready-for-agent` issue provenance, unchanged expected HEAD, and other fail-closed guards before approval;
+- PRs that change workflow files are not auto-approved by this path.
+
+Issue #11 predated #44 and its original CI run was already stuck in `action_required`, so that historical run could not be retried. PR #43 was closed/reopened without changing its reviewed HEAD to obtain a fresh exact-HEAD CI run, which passed. Future agent-created product PRs should exercise #44 directly from PR creation rather than require that transitional recovery.
+
 ## Remote execution readiness
 
-The pre-#11 tooling blockers are resolved:
+The tooling required for normal product execution is operational:
 
 - #31 `Add event-driven status and watchdogs to remote agent runs`: closed/completed.
 - #36 `Define a least-privilege publication path for workflow-file corrections`: closed/completed.
 - #40 `Make remote run status complete and notification-first`: closed/completed.
-- The final #40 dogfood reached `READY` with `Completed: Standards review, Spec review, gates, exact-HEAD CI` on one exact HEAD.
+- #44 `Auto-approve exact-HEAD CI for trusted agent-created PRs`: closed/completed.
+- #11 completed the first product implementation through the remote pipeline and reached `READY` with `Completed: Standards review, Spec review, gates, exact-HEAD CI` on exact HEAD `9dd1bf898c1aa4139969925b75924595ef0ed09e` before merge.
 
-Therefore #11 may be launched through the normal remote `/agent-ticket` path. The next product run is also the first live dogfood of the notification-first terminal-comment prefix from #40 after that workflow code reached `main`.
+Therefore #12 is the next approved product ticket for the normal remote `/agent-ticket` path. Its run is the first clean product opportunity to dogfood the #44 auto-approver from agent-created PR creation through exact-HEAD CI.
 
 ## Current GitHub Actions and dependency maintenance debt
 
-This debt is active but **does not block #11** unless a concrete failure appears during its run.
+This debt is active but **does not block the current product frontier** unless a concrete failure appears during a product run.
 
-- #37 `Upgrade GitHub Actions to Node 24-native releases`: open, `ready-for-human`. It removes old first-party Action majors that target the deprecated Node 20 Action runtime. Its previous publication blocker #36 is now resolved, but the ticket remains separate maintenance work.
+- #37 `Upgrade GitHub Actions to Node 24-native releases`: open, `ready-for-human`. It removes old first-party Action majors that target the deprecated Node 20 Action runtime. Its previous publication blocker #36 is resolved, but the ticket remains separate maintenance work.
 - #38 `Audit deprecated transitive dependencies and npm security findings`: open, `ready-for-agent`. It investigates deprecated `@esbuild-kit/*`, npm audit findings, and install-script permissions without forcing compatibility-breaking dependency upgrades.
 
 The project runtime itself remains Node 24.21.0. Do not silence Action/dependency warnings or use a forced dependency rewrite as a substitute for resolving #37/#38 deliberately.
