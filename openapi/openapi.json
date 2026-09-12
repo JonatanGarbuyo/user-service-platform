@@ -228,6 +228,71 @@
           "email"
         ]
       },
+      "RequestPasswordResetResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "RequestPasswordResetRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "ResetPasswordResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Password-reset token from the action URL."
+          },
+          "newPassword": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "example": "correct-horse-41"
+          }
+        },
+        "required": [
+          "token",
+          "newPassword"
+        ]
+      },
       "CurrentUser": {
         "type": "object",
         "properties": {
@@ -456,6 +521,88 @@
           },
           "default": {
             "description": "Request failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/request-password-reset": {
+      "post": {
+        "operationId": "requestPasswordReset",
+        "summary": "Request password recovery",
+        "description": "Schedules a password-reset message for the account matching the email address without creating identities. The response is identical whether or not the address is registered, so it cannot be used for account enumeration.",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestPasswordResetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The request was accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestPasswordResetResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/reset-password": {
+      "post": {
+        "operationId": "resetPassword",
+        "summary": "Complete password reset",
+        "description": "Sets a new password from the token delivered by the password-reset action. Reset actions are single use and expire. Successful resets revoke existing sessions. Invalid, expired, reused, or malformed actions fail safely without revealing token material.",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The password was reset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetPasswordResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Reset failure as RFC 9457 Problem Details.",
             "content": {
               "application/problem+json": {
                 "schema": {

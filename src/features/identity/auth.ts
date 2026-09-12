@@ -64,6 +64,14 @@ export function createIdentityAuth(input: IdentityAuthInput) {
       requireEmailVerification: policy.requireEmailVerification,
       minPasswordLength: 8,
       maxPasswordLength: 128,
+      // Password recovery goes through the application-owned AuthMailer like
+      // verification does; provider SDK/types stay inside adapters (ADR-0010).
+      // Successful resets revoke existing sessions so previously issued
+      // sessions cannot continue authenticating (ticket #12, ADR-0005).
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: async ({ user, url, token }) => {
+        await mailer.sendPasswordResetEmail({ to: user.email, url, token });
+      },
     },
     emailVerification: {
       sendOnSignUp: true,
