@@ -1,6 +1,7 @@
 import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import type { D1Database } from '@cloudflare/workers-types';
 import { betterAuth } from 'better-auth';
+import { admin } from 'better-auth/plugins/admin';
 import { drizzle } from 'drizzle-orm/d1';
 import type { AuthMailer } from './mailer.js';
 import type { AuthPolicy } from './policy.js';
@@ -51,6 +52,14 @@ export function createIdentityAuth(input: IdentityAuthInput) {
     secret,
     logger: createRedactingLogger(),
     database: drizzleAdapter(database, { provider: 'sqlite', schema: identitySchema }),
+    // Better Auth supported administration capability (ticket #59, spec #8).
+    // Roles, bans and session administration belong to the Identity boundary;
+    // they are not editorial CMS roles and imply no custom admin UI. The
+    // plugin's management endpoints are never mounted on the public Worker:
+    // administration is exercised server-side through `auth.api` (notably the
+    // explicit first-admin bootstrap), so enabling the plugin adds no public
+    // HTTP surface by itself.
+    plugins: [admin()],
     advanced: {
       backgroundTasks: {
         handler: (task) => {

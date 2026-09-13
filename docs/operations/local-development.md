@@ -103,7 +103,32 @@ curl -s -X POST http://localhost:8787/v1/auth/register \
 Remove the override (or restore `true`) and restart to return to the
 profile defaults.
 
-## 5. Confirm the gates before handing off
+## 5. Bootstrap the first administrator
+
+With the Worker running against fresh local D1 (sections 2–3), create the
+first administrative User through the auth engine (ticket #59, spec #8):
+
+```bash
+ADMIN_NAME="Site Admin" ADMIN_EMAIL="admin@example.com" \
+  ADMIN_PASSWORD="correct-horse-41" npm run admin:bootstrap
+```
+
+`npm run admin:bootstrap` (`scripts/bootstrap-admin.ts`) posts explicit
+operator inputs to `POST /v1/auth/admin/bootstrap` on the running Worker
+(`ADMIN_BOOTSTRAP_BASE_URL`, default `http://localhost:8787`). The first
+call succeeds with the application-owned admin representation
+(`role: "admin"`); no migration seeds credentials and the repository defines
+no default admin password. The bootstrapped administrator remains subject
+to the deployment email-verification policy and completes verification
+before signing in.
+
+The operation is first-admin-wins: repeats or conflicting identities fail
+with explicit machine codes (`admin-already-bootstrapped`,
+`admin-email-conflict`, exit code 2) instead of duplicating privileged
+accounts. The script logs only method, path, status and stable codes —
+never names, addresses, passwords, tokens or action URLs.
+
+## 6. Confirm the gates before handing off
 
 ```bash
 npm run check        # lint + formatting
