@@ -2,7 +2,7 @@ import type { Env } from '../../env.js';
 
 // Dev-only signing fallback for local development and isolated tests. This
 // value is not a credential: it must never be relied upon outside local/test
-// contexts, and staging/production fail closed when BETTER_AUTH_SECRET is
+// contexts, and sandbox/production fail closed when BETTER_AUTH_SECRET is
 // absent so a real secret cannot be silently replaced.
 export const DEV_AUTH_SECRET = 'local-dev-only-insecure-secret-do-not-use-in-production';
 
@@ -15,7 +15,7 @@ export function resolveAuthSecret(env: Pick<Env, 'ENVIRONMENT' | 'BETTER_AUTH_SE
     return configured;
   }
   const environment = env.ENVIRONMENT ?? 'local';
-  if (environment === 'staging' || environment === 'production') {
+  if (environment === 'staging' || environment === 'sandbox' || environment === 'production') {
     throw new Error(
       `BETTER_AUTH_SECRET is required in ${environment}; refusing to start without an explicit secret.`,
     );
