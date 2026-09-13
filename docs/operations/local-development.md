@@ -139,7 +139,8 @@ received by email, sign in with the verified account, request password
 recovery for the same address, open the reset action received by email, and
 sign in with the new password. Automated tests never do this: they stay
 credential-free on the in-memory transport, and the full scripted acceptance
-lives in ticket #60.
+(`npm run acceptance:local`, `docs/operations/local-acceptance.md`,
+ticket #60) is the local release gate before sandbox promotion.
 
 SMTP notes:
 
