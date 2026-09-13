@@ -366,8 +366,8 @@ describe('resolveAuthMailer', () => {
   });
 
   it('rejects unknown transport selections instead of silently downgrading', () => {
-    expect(() => resolveAuthMailer({ ENVIRONMENT: 'local', AUTH_MAIL_TRANSPORT: 'smtp' })).toThrow(
-      /AUTH_MAIL_TRANSPORT/,
-    );
+    expect(() =>
+      resolveAuthMailer({ ENVIRONMENT: 'local', AUTH_MAIL_TRANSPORT: 'sendmail' }),
+    ).toThrow(/AUTH_MAIL_TRANSPORT/);
   });
 });

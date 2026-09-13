@@ -23,7 +23,8 @@
   // Cloudflare infrastructure/runtime bindings here. Local overrides come from
   // the ignored root `.env` (`npm run dev:local`); sandbox/production
   // overrides (if ever needed) are set out-of-band in Cloudflare. Secrets
-  // (`BETTER_AUTH_SECRET`, `RESEND_API_KEY`) are always runtime secrets
+  // (`BETTER_AUTH_SECRET`, `RESEND_API_KEY`, and `SMTP_USER`/`SMTP_PASSWORD`
+  // when the SMTP transport is selected) are always runtime secrets
   // (`wrangler secret put ... --env sandbox`) and never appear here.
   "vars": {
     "ENVIRONMENT": "local",

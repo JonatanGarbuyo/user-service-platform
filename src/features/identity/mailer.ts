@@ -1,5 +1,6 @@
 import type { Env } from '../../env.js';
 import { ResendAuthMailer, resolveResendConfig } from './resend-transport.js';
+import { SmtpAuthMailer, resolveSmtpConfig } from './smtp-transport.js';
 
 // Application-owned transactional auth mail boundary (ADR-0010). Better Auth
 // email callbacks adapt into these purpose-specific operations; provider SDK
@@ -95,15 +96,20 @@ export class DevelopmentAuthMailer implements AuthMailer {
 // Resolves the mailer for the current environment. Tests inject an
 // InMemoryAuthMailer explicitly or select it via AUTH_MAIL_TRANSPORT; local
 // development uses the metadata-only sink and never reads provider secrets.
-// Staging, sandbox and production resolve the Resend transport (ticket #13)
-// and fail closed when its configuration is missing rather than silently
-// dropping mail.
+// Staging, sandbox and production resolve their profile transport (ticket
+// #13 Resend, ticket #58 SMTP) and fail closed when its configuration is
+// missing rather than silently dropping mail.
 export function resolveAuthMailer(
   env: Pick<
     Env,
     | 'ENVIRONMENT'
     | 'AUTH_MAIL_TRANSPORT'
     | 'RESEND_API_KEY'
+    | 'SMTP_HOST'
+    | 'SMTP_PORT'
+    | 'SMTP_SECURE'
+    | 'SMTP_USER'
+    | 'SMTP_PASSWORD'
     | 'AUTH_MAIL_FROM'
     | 'AUTH_APP_NAME'
     | 'AUTH_MAIL_ALLOWLIST'
@@ -120,8 +126,13 @@ export function resolveAuthMailer(
   if (selection === 'resend') {
     return new ResendAuthMailer(resolveResendConfig(env));
   }
+  if (selection === 'smtp') {
+    return new SmtpAuthMailer(resolveSmtpConfig(env));
+  }
   if (selection !== undefined && selection !== '') {
-    throw new Error(`Unknown AUTH_MAIL_TRANSPORT "${selection}"; expected "inmemory" or "resend".`);
+    throw new Error(
+      `Unknown AUTH_MAIL_TRANSPORT "${selection}"; expected "inmemory", "resend" or "smtp".`,
+    );
   }
   const environment = env.ENVIRONMENT ?? 'local';
   if (environment === 'staging' || environment === 'sandbox' || environment === 'production') {
@@ -137,3 +148,13 @@ export type {
   AuthMailPurpose,
   ResendTransportConfig,
 } from './resend-transport.js';
+export { SmtpAuthMailer } from './smtp-transport.js';
+export type {
+  SmtpMailLogger,
+  SmtpMailLogRecord,
+  SmtpMailPurpose,
+  SmtpOutboundMail,
+  SmtpSendMail,
+  SmtpSendResult,
+  SmtpTransportConfig,
+} from './smtp-transport.js';

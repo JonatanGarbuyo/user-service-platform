@@ -103,30 +103,53 @@ curl -s -X POST http://localhost:8787/v1/auth/register \
 Remove the override (or restore `true`) and restart to return to the
 profile defaults.
 
-## 5. Bootstrap the first administrator
+## 5. Real-delivery acceptance (SMTP or Resend)
 
-With the Worker running against fresh local D1 (sections 2–3), create the
-first administrative User through the auth engine (ticket #59, spec #8):
+The metadata-only sink above proves routing and contracts, not delivery.
+Ticket #58 makes the local registration/verification and password-recovery
+journeys runnable against a real transport through the running Worker. The
+`AuthMailer` boundary, background-send behavior and redaction guarantees are
+unchanged; only deployment configuration selects the concrete transport.
 
 ```bash
-ADMIN_NAME="Site Admin" ADMIN_EMAIL="admin@example.com" \
-  ADMIN_PASSWORD="correct-horse-41" npm run admin:bootstrap
+# in .env, either:
+AUTH_MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=mailer@example.com
+SMTP_PASSWORD=<local-only secret>
+AUTH_MAIL_ALLOWLIST=<local test domain, e.g. @example.com>
+# or:
+AUTH_MAIL_TRANSPORT=resend
+RESEND_API_KEY=<local-only secret>
+AUTH_MAIL_ALLOWLIST=<local test domain, e.g. @example.com>
 ```
 
-`npm run admin:bootstrap` (`scripts/bootstrap-admin.ts`) posts explicit
-operator inputs to `POST /v1/auth/admin/bootstrap` on the running Worker
-(`ADMIN_BOOTSTRAP_BASE_URL`, default `http://localhost:8787`). The first
-call succeeds with the application-owned admin representation
-(`role: "admin"`); no migration seeds credentials and the repository defines
-no default admin password. The bootstrapped administrator remains subject
-to the deployment email-verification policy and completes verification
-before signing in.
+Non-production deliveries are allowlist-guarded for both transports, so the
+allowlist must cover the local test address before anything is delivered.
 
-The operation is first-admin-wins: repeats or conflicting identities fail
-with explicit machine codes (`admin-already-bootstrapped`,
-`admin-email-conflict`, exit code 2) instead of duplicating privileged
-accounts. The script logs only method, path, status and stable codes —
-never names, addresses, passwords, tokens or action URLs.
+```bash
+npm run dev:local
+```
+
+Then exercise the real journeys through the running Worker: register an
+address the local transport may deliver to, open the verification action
+received by email, sign in with the verified account, request password
+recovery for the same address, open the reset action received by email, and
+sign in with the new password. Automated tests never do this: they stay
+credential-free on the in-memory transport, and the full scripted acceptance
+lives in ticket #60.
+
+SMTP notes:
+
+- Host, port, implicit-TLS (`SMTP_SECURE=true`, typically 465) versus
+  STARTTLS (`SMTP_SECURE=false`, typically 587), credentials and sender
+  identity are plain configuration; there are no provider-specific branches.
+- Port 25 and malformed host/port/mode values fail closed with a redacted
+  configuration error.
+- TLS certificate verification is always enforced and cannot be disabled
+  through supported application configuration.
 
 ## 6. Confirm the gates before handing off
 

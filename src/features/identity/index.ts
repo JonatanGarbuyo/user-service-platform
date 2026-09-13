@@ -8,8 +8,6 @@ import { createIdentityRouter, type IdentityRouterOptions } from './router.js';
 export { createIdentityRouter };
 export type { IdentityRouterOptions };
 export type {
-  AdminBootstrapRequest,
-  AdminBootstrapResult,
   CurrentUser,
   LoginRequest,
   LoginResult,
@@ -24,12 +22,19 @@ export type {
   VerifyEmailResult,
 } from './contract.js';
 export type { AuthMailer, PasswordResetMessage, VerificationMessage } from './mailer.js';
-export { InMemoryAuthMailer, ResendAuthMailer } from './mailer.js';
+export { InMemoryAuthMailer, ResendAuthMailer, SmtpAuthMailer } from './mailer.js';
 export type { AuthMailPurpose, ResendTransportConfig } from './mailer.js';
 export type { AuthMailLogger, AuthMailLogRecord } from './mailer.js';
+export type {
+  SmtpMailLogger,
+  SmtpMailLogRecord,
+  SmtpMailPurpose,
+  SmtpOutboundMail,
+  SmtpSendMail,
+  SmtpSendResult,
+  SmtpTransportConfig,
+} from './mailer.js';
 export type { AuthPolicy } from './policy.js';
 export { DEFAULT_AUTH_POLICY, resolveAuthPolicy } from './policy.js';
-export type { BootstrapAdminInput, BootstrapAdminOutcome } from './admin.js';
-export { bootstrapAdminUser } from './admin.js';
 export type { AuthenticatedUser, ResolveSessionInput, SessionContext } from './session.js';
 export { resolveSessionContext, toAuthenticatedUser, toSessionContext } from './session.js';

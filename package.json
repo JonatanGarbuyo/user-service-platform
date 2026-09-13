@@ -12,7 +12,6 @@
     "dev:local": "wrangler dev --env-file .env",
     "db:local:migrate": "wrangler d1 migrations apply DB --local",
     "db:local:reset": "tsx scripts/reset-local-d1.ts",
-    "admin:bootstrap": "tsx scripts/bootstrap-admin.ts",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
@@ -51,6 +50,7 @@
     "better-auth": "1.7.4",
     "drizzle-orm": "0.45.2",
     "hono": "4.13.7",
+    "nodemailer": "10.0.9",
     "zod": "4.6.1"
   },
   "allowScripts": {
