@@ -113,7 +113,12 @@ function scopedAuth(
     db: c.env.DB,
     policy,
     mailer: resolveAuthMailer(
-      { ...effective.config, RESEND_API_KEY: c.env.RESEND_API_KEY },
+      {
+        ...effective.config,
+        RESEND_API_KEY: c.env.RESEND_API_KEY,
+        SMTP_USER: c.env.SMTP_USER,
+        SMTP_PASSWORD: c.env.SMTP_PASSWORD,
+      },
       override,
     ),
     secret: resolveAuthSecret({

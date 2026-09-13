@@ -110,13 +110,18 @@ describe('resolveEffectiveConfig', () => {
       runtime: {
         BETTER_AUTH_SECRET: 'super-secret-value',
         RESEND_API_KEY: 're_secret_value',
+        SMTP_USER: 'mailer@example.com',
+        SMTP_PASSWORD: 'smtp_secret_value',
         AUTH_APP_NAME: 'Local Suite',
       },
     });
     expect(JSON.stringify(effective.config)).not.toContain('super-secret-value');
     expect(JSON.stringify(effective.config)).not.toContain('re_secret_value');
+    expect(JSON.stringify(effective.config)).not.toContain('smtp_secret_value');
     expect(effective.config).not.toHaveProperty('BETTER_AUTH_SECRET');
     expect(effective.config).not.toHaveProperty('RESEND_API_KEY');
+    expect(effective.config).not.toHaveProperty('SMTP_USER');
+    expect(effective.config).not.toHaveProperty('SMTP_PASSWORD');
     expect(effective.config.AUTH_APP_NAME).toBe('Local Suite');
   });
 
@@ -155,9 +160,38 @@ describe('resolveEffectiveConfig', () => {
     expect(() =>
       resolveEffectiveConfig({
         environment: 'local',
-        runtime: { AUTH_MAIL_TRANSPORT: 'smtp' },
+        runtime: { AUTH_MAIL_TRANSPORT: 'sendmail' },
       }),
     ).toThrow(/AUTH_MAIL_TRANSPORT/);
+  });
+
+  it('accepts the SMTP transport and its TLS mode values', () => {
+    expect(
+      resolveEffectiveConfig({
+        environment: 'local',
+        runtime: {
+          AUTH_MAIL_TRANSPORT: 'smtp',
+          SMTP_HOST: 'smtp.example.com',
+          SMTP_PORT: '587',
+          SMTP_SECURE: 'false',
+        },
+      }).config.AUTH_MAIL_TRANSPORT,
+    ).toBe('smtp');
+    expect(
+      resolveEffectiveConfig({
+        environment: 'local',
+        runtime: { AUTH_MAIL_TRANSPORT: 'smtp', SMTP_SECURE: 'true' },
+      }).config.SMTP_SECURE,
+    ).toBe('true');
+  });
+
+  it('rejects malformed SMTP TLS modes instead of silently changing transport security', () => {
+    expect(() =>
+      resolveEffectiveConfig({
+        environment: 'local',
+        runtime: { SMTP_SECURE: 'starttls' },
+      }),
+    ).toThrow(/SMTP_SECURE/);
   });
 
   it('never echoes runtime values in validation errors', () => {

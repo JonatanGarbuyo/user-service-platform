@@ -125,13 +125,18 @@ describe('effective configuration as Identity source of truth', () => {
       runtime: {
         BETTER_AUTH_SECRET: 'super-secret-value',
         RESEND_API_KEY: 're_secret_value',
+        SMTP_USER: 'mailer@example.com',
+        SMTP_PASSWORD: 'smtp_secret_value',
         AUTH_APP_NAME: 'Local Suite',
       },
     });
     const config = effective.config as NonSecretProfile & Record<string, unknown>;
     expect(config).not.toHaveProperty('BETTER_AUTH_SECRET');
     expect(config).not.toHaveProperty('RESEND_API_KEY');
+    expect(config).not.toHaveProperty('SMTP_USER');
+    expect(config).not.toHaveProperty('SMTP_PASSWORD');
     expect(JSON.stringify(effective.config)).not.toContain('super-secret-value');
     expect(JSON.stringify(effective.config)).not.toContain('re_secret_value');
+    expect(JSON.stringify(effective.config)).not.toContain('smtp_secret_value');
   });
 });

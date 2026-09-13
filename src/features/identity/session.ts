@@ -95,7 +95,12 @@ export async function resolveSessionContext(
     db: input.env.DB,
     policy,
     mailer: resolveAuthMailer(
-      { ...effective.config, RESEND_API_KEY: input.env.RESEND_API_KEY },
+      {
+        ...effective.config,
+        RESEND_API_KEY: input.env.RESEND_API_KEY,
+        SMTP_USER: input.env.SMTP_USER,
+        SMTP_PASSWORD: input.env.SMTP_PASSWORD,
+      },
       input.authMailer,
     ),
     secret: resolveAuthSecret({

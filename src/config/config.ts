@@ -67,10 +67,19 @@ function validateProfile(config: NonSecretProfile): void {
   parseBooleanFlag('AUTH_EMAIL_PASSWORD_ENABLED', config.AUTH_EMAIL_PASSWORD_ENABLED);
   parseBooleanFlag('AUTH_REQUIRE_EMAIL_VERIFICATION', config.AUTH_REQUIRE_EMAIL_VERIFICATION);
   const transport = config.AUTH_MAIL_TRANSPORT.trim().toLowerCase();
-  if (transport !== '' && transport !== 'inmemory' && transport !== 'resend') {
+  if (
+    transport !== '' &&
+    transport !== 'inmemory' &&
+    transport !== 'resend' &&
+    transport !== 'smtp'
+  ) {
     throw new Error(
-      'Configuration error: AUTH_MAIL_TRANSPORT must be "inmemory" or "resend" when set.',
+      'Configuration error: AUTH_MAIL_TRANSPORT must be "inmemory", "resend" or "smtp" when set.',
     );
+  }
+  const secure = config.SMTP_SECURE.trim().toLowerCase();
+  if (secure !== '' && secure !== 'true' && secure !== 'false') {
+    throw new Error('Configuration error: SMTP_SECURE must be "true" or "false" when set.');
   }
 }
 
