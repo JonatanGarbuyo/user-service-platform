@@ -48,5 +48,13 @@
     "drizzle-orm": "0.45.2",
     "hono": "4.13.7",
     "zod": "4.6.1"
+  },
+  "allowScripts": {
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.28.1": true,
+    "workerd@1.20260815.1": true,
+    "workerd@1.20260908.1": true
   }
 }
