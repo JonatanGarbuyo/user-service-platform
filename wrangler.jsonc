@@ -16,21 +16,17 @@
   // password hashing; both require the Node.js compatibility flag on Workers
   // (ticket #10, ADR-0005).
   "compatibility_flags": ["nodejs_compat"],
+  // Non-secret application configuration lives in the versioned profiles
+  // (`src/config/profiles.ts`, spec #8, ticket #57): the Worker composes one
+  // effective configuration per request from the selected profile + same-name
+  // runtime overrides. Wrangler carries only the ENVIRONMENT selector and
+  // Cloudflare infrastructure/runtime bindings here. Local overrides come from
+  // the ignored root `.env` (`npm run dev:local`); sandbox/production
+  // overrides (if ever needed) are set out-of-band in Cloudflare. Secrets
+  // (`BETTER_AUTH_SECRET`, `RESEND_API_KEY`) are always runtime secrets
+  // (`wrangler secret put ... --env sandbox`) and never appear here.
   "vars": {
     "ENVIRONMENT": "local",
-    // Application-owned authentication policy defaults (ADR-0005). These are
-    // deployment configuration, not secrets: the identity slice translates
-    // them into Better Auth behaviour per request.
-    "AUTH_REGISTRATION_ENABLED": "true",
-    "AUTH_EMAIL_PASSWORD_ENABLED": "true",
-    "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
-    // Transactional auth-mail branding (ADR-0010, ticket #13). The sender and
-    // product name are deployment configuration, not secrets; real
-    // sandbox/production sender domains are set when the runbook provisions
-    // those environments (ticket #14). The Resend API key itself is always a secret
-    // (`wrangler secret put RESEND_API_KEY --env sandbox`) and never appears here.
-    "AUTH_APP_NAME": "User Service",
-    "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
   },
   // Cloudflare-native observability baseline (ADR-0009, ticket #14): Worker
   // logs, traces and platform metrics are enabled for every environment.
@@ -55,17 +51,14 @@
     // still accepts the legacy "staging" ENVIRONMENT value as a sandbox
     // context, but Wrangler configuration uses "sandbox" only.
     "sandbox": {
+      // Sandbox non-secret defaults come from SANDBOX_PROFILE (spec #8,
+      // ticket #57, PR #61 review). Only the ENVIRONMENT selector and the
+      // deployment-specific recipient-allowlist slot stay here; every other
+      // application default is read from the versioned profile. The real
+      // allowlist value is set out-of-band during provisioning (ticket #14);
+      // an empty value fails closed with an explicit configuration error.
       "vars": {
         "ENVIRONMENT": "sandbox",
-        "AUTH_REGISTRATION_ENABLED": "true",
-        "AUTH_EMAIL_PASSWORD_ENABLED": "true",
-        "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
-        // Explicit Resend selection (ticket #57): identical to the previous
-        // ENVIRONMENT-derived default; sandbox deliveries stay
-        // allowlist-guarded and fail closed without AUTH_MAIL_ALLOWLIST.
-        "AUTH_MAIL_TRANSPORT": "resend",
-        "AUTH_APP_NAME": "User Service",
-        "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
         // Sandbox recipient allowlist (ticket #13, ADR-0010): sandbox deliveries
         // outside this list are skipped before reaching the provider. The real
         // value is set out-of-band during sandbox provisioning (ticket #14);
@@ -82,17 +75,11 @@
       ],
     },
     "production": {
+      // Production non-secret defaults come from PRODUCTION_PROFILE (spec #8,
+      // ticket #57, PR #61 review). Only the ENVIRONMENT selector stays here;
+      // any differing non-secret override is set out-of-band in Cloudflare.
       "vars": {
         "ENVIRONMENT": "production",
-        "AUTH_REGISTRATION_ENABLED": "true",
-        "AUTH_EMAIL_PASSWORD_ENABLED": "true",
-        "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
-        // Explicit Resend selection (ticket #57): identical to the previous
-        // ENVIRONMENT-derived default, stated here so every environment
-        // carries a complete non-secret profile.
-        "AUTH_MAIL_TRANSPORT": "resend",
-        "AUTH_APP_NAME": "User Service",
-        "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
       },
       "d1_databases": [
         {
