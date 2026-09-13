@@ -145,7 +145,11 @@ duplicating privileged accounts.
 The runner logs one JSON line per stage (method, path, status, stable
 `pass`/problem-code outcome) plus a final `acceptance-summary` record with
 the exact tested commit (`git rev-parse HEAD`), the selected transport by
-name, per-stage outcomes, and `eligibility: eligible | ineligible`. Keep the
+name, per-stage outcomes, and `eligibility: eligible | ineligible`. The
+machine `acceptance-summary` covers only the executed HTTP stages from
+`health` onward; `reset-d1`, `migrations`, and `worker-boot` are
+operator-executed prerequisites evidenced via the retained transcript rather
+than machine-logged summary entries. Keep the
 full terminal transcript — including the `db:local:reset` completion output
 and the Worker boot log — as the evidence record: together they show the
 reset/migrations/boot prerequisites and whether each stage passed.
