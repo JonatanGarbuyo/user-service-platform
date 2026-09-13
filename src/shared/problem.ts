@@ -27,7 +27,9 @@ export type ProblemCode =
   | 'invalid-credentials'
   | 'verification-invalid'
   | 'reset-invalid'
-  | 'unauthenticated';
+  | 'unauthenticated'
+  | 'admin-already-bootstrapped'
+  | 'admin-email-conflict';
 
 interface CreateProblemInput {
   status: number;

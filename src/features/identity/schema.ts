@@ -13,6 +13,17 @@ export const user = sqliteTable('user', {
   image: text('image'),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+  // Better Auth Admin plugin capability (ticket #59). `role` carries the
+  // administrative role (`admin`) versus the default (`user`); ban fields
+  // support the engine's ban lifecycle. All are nullable at the storage
+  // level (pre-admin rows predate the capability); the plugin supplies the
+  // application defaults. No row here ever seeds credentials or privileged
+  // identities: the first administrator is created by the explicit bootstrap
+  // operation through Better Auth APIs.
+  role: text('role'),
+  banned: integer('banned', { mode: 'boolean' }).notNull().default(false),
+  banReason: text('ban_reason'),
+  banExpires: integer('ban_expires', { mode: 'timestamp' }),
 });
 
 export const session = sqliteTable('session', {
@@ -23,6 +34,9 @@ export const session = sqliteTable('session', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
+  // Better Auth Admin plugin session field for impersonation tracking
+  // (ticket #59). Null for ordinary sessions.
+  impersonatedBy: text('impersonated_by'),
   userId: text('user_id')
     .notNull()
     .references(() => user.id, { onDelete: 'cascade' }),

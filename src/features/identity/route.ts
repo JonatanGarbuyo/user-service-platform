@@ -1,6 +1,8 @@
 import { createRoute } from '@hono/zod-openapi';
 import { ProblemDetailsSchema } from '../../shared/problem.js';
 import {
+  AdminBootstrapRequestSchema,
+  AdminBootstrapResultSchema,
   CurrentUserSchema,
   LoginRequestSchema,
   LoginResultSchema,
@@ -206,5 +208,30 @@ export const resetPasswordRoute = createRoute({
       description: 'The password was reset.',
     },
     ...problemResponses('Reset failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const adminBootstrapRoute = createRoute({
+  method: 'post',
+  path: '/auth/admin/bootstrap',
+  operationId: 'bootstrapAdmin',
+  summary: 'Bootstrap the first administrator',
+  description:
+    'Creates the first administrative User through the auth engine after ' +
+    'migrations, using explicit operator-supplied credentials. Succeeds only ' +
+    'while no administrator exists; repeats and conflicting identities fail ' +
+    'with stable machine codes instead of duplicating privileged accounts. ' +
+    'The bootstrapped administrator remains subject to the deployment email ' +
+    'verification policy before signing in.',
+  tags: ['identity'],
+  request: {
+    body: { content: { 'application/json': { schema: AdminBootstrapRequestSchema } } },
+  },
+  responses: {
+    201: {
+      content: { 'application/json': { schema: AdminBootstrapResultSchema } },
+      description: 'The first administrator was created.',
+    },
+    ...problemResponses('Bootstrap failure as RFC 9457 Problem Details.'),
   },
 });

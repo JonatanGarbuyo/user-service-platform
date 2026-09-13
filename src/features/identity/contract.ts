@@ -121,6 +121,26 @@ export const SignOutResultSchema = z
   })
   .openapi('SignOutResult');
 
+export const AdminBootstrapRequestSchema = z
+  .object({
+    name: z.string().min(1).max(200).openapi({ example: 'Ada Lovelace' }),
+    email: emailField,
+    password: passwordField,
+  })
+  .openapi('AdminBootstrapRequest');
+
+export const AdminBootstrapResultSchema = z
+  .object({
+    id: z.string().openapi({ example: 'abc123' }),
+    email: emailField,
+    // The only role this operation ever assigns. A literal (not a free
+    // string) so consumers and the generated OpenAPI contract cannot mistake
+    // bootstrap for general role management.
+    role: z.literal('admin').openapi({ example: 'admin' }),
+    emailVerified: z.boolean().openapi({ example: false }),
+  })
+  .openapi('AdminBootstrapResult');
+
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
 export type RegisteredUser = z.infer<typeof RegisteredUserSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
@@ -133,3 +153,5 @@ export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequestSchema>;
 export type ResetPasswordResult = z.infer<typeof ResetPasswordResultSchema>;
 export type CurrentUser = z.infer<typeof CurrentUserSchema>;
 export type SignOutResult = z.infer<typeof SignOutResultSchema>;
+export type AdminBootstrapRequest = z.infer<typeof AdminBootstrapRequestSchema>;
+export type AdminBootstrapResult = z.infer<typeof AdminBootstrapResultSchema>;

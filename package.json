@@ -12,6 +12,7 @@
     "dev:local": "wrangler dev --env-file .env",
     "db:local:migrate": "wrangler d1 migrations apply DB --local",
     "db:local:reset": "tsx scripts/reset-local-d1.ts",
+    "admin:bootstrap": "tsx scripts/bootstrap-admin.ts",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
