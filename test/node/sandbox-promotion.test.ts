@@ -93,6 +93,38 @@ function loadWrangler(): WranglerConfig {
   return readJsonc('wrangler.jsonc') as WranglerConfig;
 }
 
+// Returns the shell bodies of every `run: |` block in a workflow so
+// assertions can pin shell-input hardening without constraining `with:` or
+// `env:` mappings that legitimately reference workflow inputs.
+function readRunBlocks(path: string): string[] {
+  const raw = readFileSync(path, 'utf8');
+  const lines = raw.split('\n');
+  const blocks: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    const runMatch = /^(\s*)run:\s*\|\s*$/.exec(line);
+    if (runMatch === null) {
+      continue;
+    }
+    const baseIndent = (runMatch[1] ?? '').length;
+    const body: string[] = [];
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const bodyLine = lines[j] ?? '';
+      if (bodyLine.trim().length === 0) {
+        body.push(bodyLine);
+        continue;
+      }
+      const indent = bodyLine.length - bodyLine.trimStart().length;
+      if (indent <= baseIndent) {
+        break;
+      }
+      body.push(bodyLine);
+    }
+    blocks.push(body.join('\n'));
+  }
+  return blocks;
+}
+
 // Returns the raw text of the top-level `on:` trigger block of a workflow,
 // with `#` comments stripped so prose cannot satisfy trigger assertions.
 function readTriggerBlock(path: string): string {
@@ -218,6 +250,20 @@ describe('deployment promotion gates (ticket #14, ADR-0008)', () => {
     expect(triggers).not.toMatch(/pull_request/);
     const workflow = readFileSync('.github/workflows/promote-production.yml', 'utf8');
     expect(workflow).toMatch(/--env production/);
+  });
+
+  it('routes workflow_dispatch inputs through env in shell run blocks', () => {
+    const path = '.github/workflows/promote-production.yml';
+    const workflow = readFileSync(path, 'utf8');
+    const runBlocks = readRunBlocks(path);
+    expect(runBlocks.length).toBeGreaterThan(0);
+    for (const block of runBlocks) {
+      expect(block).not.toMatch(/\$\{\{\s*inputs\./);
+    }
+    expect(workflow).toMatch(/CONFIRM_PRODUCTION:\s*\$\{\{\s*inputs\.confirm_production\s*\}\}/);
+    expect(workflow).toMatch(/SOURCE_COMMIT:\s*\$\{\{\s*inputs\.source_commit\s*\}\}/);
+    expect(workflow).toMatch(/\$CONFIRM_PRODUCTION/);
+    expect(workflow).toMatch(/\$SOURCE_COMMIT/);
   });
 });
 

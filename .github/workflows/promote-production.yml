@@ -34,9 +34,11 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - name: Refuse unconfirmed promotion
+        env:
+          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.confirm_production }}" != "PROMOTE" ]; then
+          if [ "$CONFIRM_PRODUCTION" != "PROMOTE" ]; then
             echo "Refusing production promotion without explicit PROMOTE confirmation."
             exit 1
           fi
@@ -48,10 +50,12 @@ jobs:
           fetch-depth: 0
 
       - name: Verify the promoted commit is on main
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
           git fetch origin main
-          git merge-base --is-ancestor "${{ inputs.source_commit }}" origin/main
+          git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -69,7 +73,9 @@ jobs:
         run: npx wrangler deploy --env production
 
       - name: Record production deployment
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
-          echo "source_commit=${{ inputs.source_commit }}"
+          echo "source_commit=$SOURCE_COMMIT"
           npx wrangler deployments list --env production
