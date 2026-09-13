@@ -103,7 +103,55 @@ curl -s -X POST http://localhost:8787/v1/auth/register \
 Remove the override (or restore `true`) and restart to return to the
 profile defaults.
 
-## 5. Confirm the gates before handing off
+## 5. Real-delivery acceptance (SMTP or Resend)
+
+The metadata-only sink above proves routing and contracts, not delivery.
+Ticket #58 makes the local registration/verification and password-recovery
+journeys runnable against a real transport through the running Worker. The
+`AuthMailer` boundary, background-send behavior and redaction guarantees are
+unchanged; only deployment configuration selects the concrete transport.
+
+```bash
+# in .env, either:
+AUTH_MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=mailer@example.com
+SMTP_PASSWORD=<local-only secret>
+AUTH_MAIL_ALLOWLIST=<local test domain, e.g. @example.com>
+# or:
+AUTH_MAIL_TRANSPORT=resend
+RESEND_API_KEY=<local-only secret>
+AUTH_MAIL_ALLOWLIST=<local test domain, e.g. @example.com>
+```
+
+Non-production deliveries are allowlist-guarded for both transports, so the
+allowlist must cover the local test address before anything is delivered.
+
+```bash
+npm run dev:local
+```
+
+Then exercise the real journeys through the running Worker: register an
+address the local transport may deliver to, open the verification action
+received by email, sign in with the verified account, request password
+recovery for the same address, open the reset action received by email, and
+sign in with the new password. Automated tests never do this: they stay
+credential-free on the in-memory transport, and the full scripted acceptance
+lives in ticket #60.
+
+SMTP notes:
+
+- Host, port, implicit-TLS (`SMTP_SECURE=true`, typically 465) versus
+  STARTTLS (`SMTP_SECURE=false`, typically 587), credentials and sender
+  identity are plain configuration; there are no provider-specific branches.
+- Port 25 and malformed host/port/mode values fail closed with a redacted
+  configuration error.
+- TLS certificate verification is always enforced and cannot be disabled
+  through supported application configuration.
+
+## 6. Confirm the gates before handing off
 
 ```bash
 npm run check        # lint + formatting

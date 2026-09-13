@@ -8,7 +8,7 @@
 //
 // Secrets are structurally excluded: the profile type only admits
 // `NonSecretVarName` keys, so placing `BETTER_AUTH_SECRET`, `RESEND_API_KEY`
-// or provider credentials through this path is a type error, not a review
+// or SMTP credentials through this path is a type error, not a review
 // observation. Sandbox/production secrets are configured directly in
 // Cloudflare and never appear here.
 export const NON_SECRET_VAR_NAMES = [
@@ -20,6 +20,9 @@ export const NON_SECRET_VAR_NAMES = [
   'AUTH_MAIL_FROM',
   'AUTH_APP_NAME',
   'AUTH_MAIL_ALLOWLIST',
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_SECURE',
 ] as const;
 
 export type NonSecretVarName = (typeof NON_SECRET_VAR_NAMES)[number];
@@ -35,7 +38,12 @@ export type CanonicalEnvironment = 'local' | 'sandbox' | 'production';
 
 // Known secret inputs. They must never enter versioned profiles or merged
 // non-secret configuration; they travel as runtime secrets only.
-export const SECRET_VAR_NAMES = ['BETTER_AUTH_SECRET', 'RESEND_API_KEY'] as const;
+export const SECRET_VAR_NAMES = [
+  'BETTER_AUTH_SECRET',
+  'RESEND_API_KEY',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+] as const;
 
 export type SecretVarName = (typeof SECRET_VAR_NAMES)[number];
 
@@ -44,7 +52,9 @@ function freezeProfile(profile: NonSecretProfile): NonSecretProfile {
 }
 
 // Local development defaults: open registration gated on verified email with
-// the metadata-only development mail sink (unset transport).
+// the metadata-only development mail sink (unset transport). SMTP slots stay
+// explicitly unset until a real-delivery local scenario selects the SMTP
+// transport (ticket #58).
 export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'local',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -54,11 +64,16 @@ export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_MAIL_FROM: 'User Service <noreply@example.com>',
   AUTH_APP_NAME: 'User Service',
   AUTH_MAIL_ALLOWLIST: '',
+  SMTP_HOST: '',
+  SMTP_PORT: '',
+  SMTP_SECURE: '',
 } satisfies NonSecretProfile);
 
 // Sandbox defaults: verified-email policy with the Resend transport selected
 // explicitly. The recipient allowlist is intentionally empty here and must be
 // supplied out-of-band per deployment; delivery without one fails closed.
+// SMTP slots stay explicitly unset until a deployment selects the SMTP
+// transport (ticket #58).
 export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'sandbox',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -68,11 +83,16 @@ export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_MAIL_FROM: 'User Service <noreply@example.com>',
   AUTH_APP_NAME: 'User Service',
   AUTH_MAIL_ALLOWLIST: '',
+  SMTP_HOST: '',
+  SMTP_PORT: '',
+  SMTP_SECURE: '',
 } satisfies NonSecretProfile);
 
 // Production defaults: verified-email policy with the Resend transport. The
 // allowlist slot stays empty because production deliveries are not
 // allowlist-guarded; sandbox/production secrets still live outside this file.
+// SMTP slots stay explicitly unset until a deployment selects the SMTP
+// transport (ticket #58).
 export const PRODUCTION_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'production',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -82,6 +102,9 @@ export const PRODUCTION_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_MAIL_FROM: 'User Service <noreply@example.com>',
   AUTH_APP_NAME: 'User Service',
   AUTH_MAIL_ALLOWLIST: '',
+  SMTP_HOST: '',
+  SMTP_PORT: '',
+  SMTP_SECURE: '',
 } satisfies NonSecretProfile);
 
 export const ENVIRONMENT_PROFILES: Record<CanonicalEnvironment, NonSecretProfile> = {

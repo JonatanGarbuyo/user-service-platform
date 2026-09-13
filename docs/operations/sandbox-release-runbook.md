@@ -42,6 +42,10 @@ npx wrangler d1 create user-service-sandbox
 # 3. Set sandbox secrets (never commit these; never reuse production values).
 npx wrangler secret put BETTER_AUTH_SECRET --env sandbox
 npx wrangler secret put RESEND_API_KEY --env sandbox
+# Only when the sandbox deployment selects the SMTP transport
+# (AUTH_MAIL_TRANSPORT=smtp, ticket #58):
+npx wrangler secret put SMTP_USER --env sandbox
+npx wrangler secret put SMTP_PASSWORD --env sandbox
 
 # 4. Set the sandbox sender/allowlist to sandbox-only values, e.g. via the
 #    Cloudflare dashboard or wrangler vars, then confirm:
@@ -59,7 +63,13 @@ Repository secrets required for automation:
 
 Sandbox mail must stay allowlisted: `AUTH_MAIL_ALLOWLIST` covers only
 operator/test domains, and any delivery outside it is skipped with
-`auth-mail.sandbox-skipped` telemetry before reaching Resend (ADR-0010).
+`auth-mail.sandbox-skipped` telemetry before reaching the provider
+(ADR-0010). The allowlist guard applies to both the Resend and SMTP
+transports. The concrete transport is deployment configuration
+(`AUTH_MAIL_TRANSPORT=resend` or `smtp` with provider-neutral
+`SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE` plus `SMTP_USER`/`SMTP_PASSWORD`
+secrets); switching transports never changes Identity semantics, templates,
+or public contracts (ticket #58).
 
 ## 3. Release procedure
 
