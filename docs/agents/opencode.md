@@ -76,6 +76,21 @@ A chat transcript is not stronger authority than these artifacts.
 - Follow the ticket's highest agreed test seam and use TDD where required.
 - A green formatter/linter is not sufficient; every acceptance criterion must be verified.
 
+### Remote Git identity preflight
+
+`npm run agent:ticket` deliberately relies on npm's lifecycle hook `preagent:ticket` before the ticket runner starts. The hook executes `scripts/configure-agent-git-identity.ts`, which configures the ephemeral GitHub Actions checkout with the deterministic `github-actions[bot]` identity required for local ticket commits before safe publication.
+
+The invariant is narrow:
+
+- the hook acts only when `GITHUB_ACTIONS=true`;
+- it sets only `user.name` and `user.email` through `git config --local`;
+- outside GitHub Actions it is a no-op and must not overwrite a developer's Git identity;
+- it must never switch to `--global` configuration;
+- it does not add credentials, GitHub permissions, generic push capability, workflow-write, merge, deploy, or secret access;
+- branch publication still goes through the repository-owned safe-push/trusted-publication controls.
+
+This preflight exists because the remote implementer is allowed to create local commits, while the GitHub-hosted checkout does not otherwise guarantee a usable commit identity.
+
 ## Pull request as the review handoff
 
 After local implementation is complete, push the ticket branch and open a draft pull request before adversarial review. The pull request is the durable handoff between implementation, automated/model review, and final human/ChatGPT acceptance.
