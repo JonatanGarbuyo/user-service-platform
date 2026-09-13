@@ -1,4 +1,4 @@
-import type { CommandExecutor } from './runner.js';
+import { runCommand, type CommandExecutor } from './runner.js';
 import { isWorkflowFile } from './workflow-handoff.js';
 
 // Deterministic provenance guards for auto-approving exact-HEAD CI on trusted
@@ -271,6 +271,83 @@ export function parsePollRunsOutput(stdout: string): PolledAgentCiRun[] {
     runs.push({ runId, headSha, workflowName, prNumbers });
   }
   return runs;
+}
+
+// Exact-HEAD workflow-run observation for ticket #47 corrected-HEAD
+// regression (live #60/PR #68 evidence): a zero-job `action_required` ci run
+// is visible through the Actions workflow-runs API but surfaces no commit
+// check-run, so `fetchCommitCheckRuns()` returns `[]` and the review cycle
+// never requests trusted approval. Querying the canonical `ci` workflow runs
+// filtered by exact HEAD closes that blind spot. The payload shape follows the
+// documented list-runs response (`workflow_runs`, not `runs`); `--jq` emits
+// one line per run so `--paginate` pages concatenate safely.
+export interface HeadWorkflowRun {
+  runId: number;
+  headSha: string;
+  workflowName: string;
+  status: string;
+  conclusion: string | null;
+}
+
+export function buildHeadRunsArgs(repoSlug: string, headSha: string): readonly string[] {
+  return [
+    'api',
+    `repos/${repoSlug}/actions/workflows/ci.yml/runs?head_sha=${headSha}&per_page=20`,
+    '--jq',
+    '.workflow_runs[] | "\\(.id) \\(.head_sha) \\(.name) \\(.status) \\(.conclusion // "null")"',
+  ];
+}
+
+export function parseHeadRunsOutput(stdout: string): HeadWorkflowRun[] {
+  const runs: HeadWorkflowRun[] = [];
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') {
+      continue;
+    }
+    const parts = trimmed.split(/\s+/);
+    if (parts.length !== 5) {
+      continue;
+    }
+    const [idText, headSha, workflowName, status, conclusionText] = [
+      parts[0] ?? '',
+      parts[1] ?? '',
+      parts[2] ?? '',
+      parts[3] ?? '',
+      parts[4] ?? '',
+    ];
+    const runId = Number.parseInt(idText, 10);
+    if (!Number.isInteger(runId) || runId <= 0) {
+      continue;
+    }
+    if (!isExactSha(headSha)) {
+      continue;
+    }
+    if (workflowName === '' || status === '') {
+      continue;
+    }
+    runs.push({
+      runId,
+      headSha,
+      workflowName,
+      status,
+      conclusion: conclusionText === 'null' || conclusionText === '' ? null : conclusionText,
+    });
+  }
+  return runs;
+}
+
+export function hasApprovalWaitingWorkflowRuns(runs: readonly HeadWorkflowRun[]): boolean {
+  return runs.some((run) => run.conclusion === APPROVE_REQUIRED_CONCLUSION);
+}
+
+export async function fetchHeadWorkflowRuns(
+  repoSlug: string,
+  headSha: string,
+  execute: CommandExecutor = runCommand,
+): Promise<HeadWorkflowRun[]> {
+  const { stdout } = await execute('gh', buildHeadRunsArgs(repoSlug, headSha));
+  return parseHeadRunsOutput(stdout);
 }
 
 // Narrow repository_dispatch event type for ticket #47 liveness. The
