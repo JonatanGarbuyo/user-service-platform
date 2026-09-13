@@ -545,6 +545,7 @@ describe('exact-HEAD workflow-run observation (ticket #47 corrected-HEAD regress
 
     expect(args.join(' ')).toContain(`repos/o/r/actions/workflows/ci.yml/runs`);
     expect(args.join(' ')).toContain(`head_sha=${HEAD_SHA}`);
+    expect(args.join(' ')).toContain('--paginate');
     expect(args.join(' ')).toContain('.workflow_runs[]');
     expect(args.join(' ')).not.toContain('.runs[]');
   });

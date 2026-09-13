@@ -293,6 +293,7 @@ export function buildHeadRunsArgs(repoSlug: string, headSha: string): readonly s
   return [
     'api',
     `repos/${repoSlug}/actions/workflows/ci.yml/runs?head_sha=${headSha}&per_page=20`,
+    '--paginate',
     '--jq',
     '.workflow_runs[] | "\\(.id) \\(.head_sha) \\(.name) \\(.status) \\(.conclusion // "null")"',
   ];
