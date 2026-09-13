@@ -1,4 +1,5 @@
 import type { Env } from '../../env.js';
+import { resolveEffectiveConfig } from '../../config/index.js';
 import { createIdentityAuth } from './auth.js';
 import { resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy } from './policy.js';
@@ -74,7 +75,15 @@ export function toSessionContext(payload: unknown): SessionContext | null {
 export async function resolveSessionContext(
   input: ResolveSessionInput,
 ): Promise<SessionContext | null> {
-  const policy = resolveAuthPolicy(input.env);
+  // Application boundary (ticket #57, PR #61 review): compose one effective
+  // non-secret configuration from the selected versioned profile + same-name
+  // runtime overrides before touching Better Auth or D1. Secrets/bindings
+  // continue directly from runtime and never enter the effective config.
+  const effective = resolveEffectiveConfig({
+    environment: input.env.ENVIRONMENT,
+    runtime: { ...input.env },
+  });
+  const policy = resolveAuthPolicy(effective.config);
   const background =
     input.background ??
     ((task) => {
@@ -85,8 +94,14 @@ export async function resolveSessionContext(
   const auth = createIdentityAuth({
     db: input.env.DB,
     policy,
-    mailer: resolveAuthMailer(input.env, input.authMailer),
-    secret: resolveAuthSecret(input.env),
+    mailer: resolveAuthMailer(
+      { ...effective.config, RESEND_API_KEY: input.env.RESEND_API_KEY },
+      input.authMailer,
+    ),
+    secret: resolveAuthSecret({
+      ENVIRONMENT: effective.config.ENVIRONMENT,
+      BETTER_AUTH_SECRET: input.env.BETTER_AUTH_SECRET,
+    }),
     baseURL: input.baseURL,
     background,
   });

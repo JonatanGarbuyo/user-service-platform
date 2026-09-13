@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
+import { resolveEffectiveConfig } from '../../config/index.js';
 import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
 import { createIdentityAuth } from './auth.js';
@@ -98,12 +99,27 @@ function scopedAuth(
   c: IdentityContext,
   override?: AuthMailer,
 ): { auth: ReturnType<typeof createIdentityAuth>; policy: AuthPolicy } {
-  const policy = resolveAuthPolicy(c.env);
+  // Application boundary (ticket #57, PR #61 review): compose one effective
+  // non-secret configuration from the selected versioned profile + same-name
+  // runtime overrides, then make policy/mailer read those effective values.
+  // Secrets/bindings continue directly from runtime and never enter the
+  // versioned/effective non-secret config.
+  const effective = resolveEffectiveConfig({
+    environment: c.env.ENVIRONMENT,
+    runtime: { ...c.env },
+  });
+  const policy = resolveAuthPolicy(effective.config);
   const auth = createIdentityAuth({
     db: c.env.DB,
     policy,
-    mailer: resolveAuthMailer(c.env, override),
-    secret: resolveAuthSecret(c.env),
+    mailer: resolveAuthMailer(
+      { ...effective.config, RESEND_API_KEY: c.env.RESEND_API_KEY },
+      override,
+    ),
+    secret: resolveAuthSecret({
+      ENVIRONMENT: effective.config.ENVIRONMENT,
+      BETTER_AUTH_SECRET: c.env.BETTER_AUTH_SECRET,
+    }),
     baseURL: new URL(c.req.url).origin,
     background: backgroundScheduler(c),
   });

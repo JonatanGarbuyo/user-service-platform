@@ -1,0 +1,202 @@
+import { describe, expect, it } from 'vitest';
+import {
+  assertValidNonSecretConfig,
+  resolveEffectiveConfig,
+  type EffectiveConfig,
+} from './config.js';
+import {
+  ENVIRONMENT_PROFILES,
+  LOCAL_PROFILE,
+  NON_SECRET_VAR_NAMES,
+  PRODUCTION_PROFILE,
+  SANDBOX_PROFILE,
+  SECRET_VAR_NAMES,
+} from './profiles.js';
+
+// Seam under test (ticket #57, spec #8): the environment configuration
+// boundary. Versioned non-secret profiles plus same-name runtime overrides
+// resolve to one validated effective configuration. No runtime, database or
+// auth engine is involved.
+describe('environment profiles', () => {
+  it('covers exactly the canonical local, sandbox and production environments', () => {
+    expect(Object.keys(ENVIRONMENT_PROFILES).sort()).toEqual(['local', 'production', 'sandbox']);
+  });
+
+  it('gives every profile a complete value for each canonical runtime variable name', () => {
+    for (const profile of [LOCAL_PROFILE, SANDBOX_PROFILE, PRODUCTION_PROFILE]) {
+      expect(Object.keys(profile).sort()).toEqual([...NON_SECRET_VAR_NAMES].sort());
+      for (const name of NON_SECRET_VAR_NAMES) {
+        expect(typeof profile[name]).toBe('string');
+      }
+    }
+  });
+
+  it('uses the local deployment defaults for the local profile', () => {
+    expect(LOCAL_PROFILE).toMatchObject({
+      ENVIRONMENT: 'local',
+      AUTH_REGISTRATION_ENABLED: 'true',
+      AUTH_EMAIL_PASSWORD_ENABLED: 'true',
+      AUTH_REQUIRE_EMAIL_VERIFICATION: 'true',
+    });
+  });
+
+  it('keeps profiles independent instead of inheriting from a shared base', () => {
+    expect(LOCAL_PROFILE).not.toBe(SANDBOX_PROFILE);
+    expect(SANDBOX_PROFILE).not.toBe(PRODUCTION_PROFILE);
+    expect(LOCAL_PROFILE).not.toBe(PRODUCTION_PROFILE);
+    expect(SANDBOX_PROFILE.ENVIRONMENT).toBe('sandbox');
+    expect(PRODUCTION_PROFILE.ENVIRONMENT).toBe('production');
+  });
+
+  it('freezes versioned profiles so runtime code cannot mutate them', () => {
+    for (const profile of [LOCAL_PROFILE, SANDBOX_PROFILE, PRODUCTION_PROFILE]) {
+      expect(Object.isFrozen(profile)).toBe(true);
+    }
+  });
+
+  it('never carries known secret inputs in versioned profiles', () => {
+    for (const profile of [LOCAL_PROFILE, SANDBOX_PROFILE, PRODUCTION_PROFILE]) {
+      for (const secret of SECRET_VAR_NAMES) {
+        expect(profile).not.toHaveProperty(secret);
+      }
+      // Allow-list assertion: every profile key is a known non-secret
+      // variable name, so a secret-bearing key cannot slip in unnoticed.
+      for (const key of Object.keys(profile)) {
+        expect(NON_SECRET_VAR_NAMES as readonly string[]).toContain(key);
+      }
+    }
+  });
+});
+
+describe('resolveEffectiveConfig', () => {
+  it('selects the local profile when no environment is provided', () => {
+    const effective: EffectiveConfig = resolveEffectiveConfig({ runtime: {} });
+    expect(effective.environment).toBe('local');
+    expect(effective.config).toEqual(LOCAL_PROFILE);
+  });
+
+  it('selects the matching complete profile per canonical environment', () => {
+    expect(resolveEffectiveConfig({ environment: 'sandbox', runtime: {} }).config).toEqual(
+      SANDBOX_PROFILE,
+    );
+    expect(resolveEffectiveConfig({ environment: 'production', runtime: {} }).config).toEqual(
+      PRODUCTION_PROFILE,
+    );
+  });
+
+  it('lets same-name runtime values override profile values', () => {
+    const effective = resolveEffectiveConfig({
+      environment: 'local',
+      runtime: { AUTH_REGISTRATION_ENABLED: 'false', AUTH_APP_NAME: 'Local Suite' },
+    });
+    expect(effective.config.AUTH_REGISTRATION_ENABLED).toBe('false');
+    expect(effective.config.AUTH_APP_NAME).toBe('Local Suite');
+    expect(effective.config.AUTH_EMAIL_PASSWORD_ENABLED).toBe(
+      LOCAL_PROFILE.AUTH_EMAIL_PASSWORD_ENABLED,
+    );
+  });
+
+  it('ignores undefined runtime values so they never blank profile defaults', () => {
+    const effective = resolveEffectiveConfig({
+      environment: 'local',
+      runtime: { AUTH_APP_NAME: undefined },
+    });
+    expect(effective.config.AUTH_APP_NAME).toBe(LOCAL_PROFILE.AUTH_APP_NAME);
+  });
+
+  it('never lets runtime secrets enter the merged non-secret configuration', () => {
+    const effective = resolveEffectiveConfig({
+      environment: 'local',
+      runtime: {
+        BETTER_AUTH_SECRET: 'super-secret-value',
+        RESEND_API_KEY: 're_secret_value',
+        AUTH_APP_NAME: 'Local Suite',
+      },
+    });
+    expect(JSON.stringify(effective.config)).not.toContain('super-secret-value');
+    expect(JSON.stringify(effective.config)).not.toContain('re_secret_value');
+    expect(effective.config).not.toHaveProperty('BETTER_AUTH_SECRET');
+    expect(effective.config).not.toHaveProperty('RESEND_API_KEY');
+    expect(effective.config.AUTH_APP_NAME).toBe('Local Suite');
+  });
+
+  it('maps the legacy staging name onto the sandbox profile without adding staging config', () => {
+    const effective = resolveEffectiveConfig({ environment: 'staging', runtime: {} });
+    expect(effective.environment).toBe('sandbox');
+    expect(effective.config).toEqual(SANDBOX_PROFILE);
+    expect(Object.keys(ENVIRONMENT_PROFILES)).not.toContain('staging');
+  });
+
+  it('keeps the isolated test context on the local profile shape', () => {
+    const effective = resolveEffectiveConfig({
+      environment: 'test',
+      runtime: { AUTH_REGISTRATION_ENABLED: 'true' },
+    });
+    expect(effective.environment).toBe('test');
+    expect(effective.config.AUTH_REGISTRATION_ENABLED).toBe('true');
+  });
+
+  it('rejects unknown environments with a redacted error', () => {
+    expect(() => resolveEffectiveConfig({ environment: 'qa', runtime: {} })).toThrow(
+      /local.*sandbox.*production/,
+    );
+  });
+
+  it('rejects malformed boolean overrides instead of silently changing policy', () => {
+    expect(() =>
+      resolveEffectiveConfig({
+        environment: 'local',
+        runtime: { AUTH_REQUIRE_EMAIL_VERIFICATION: 'treu' },
+      }),
+    ).toThrow(/AUTH_REQUIRE_EMAIL_VERIFICATION/);
+  });
+
+  it('rejects unknown mail transports', () => {
+    expect(() =>
+      resolveEffectiveConfig({
+        environment: 'local',
+        runtime: { AUTH_MAIL_TRANSPORT: 'smtp' },
+      }),
+    ).toThrow(/AUTH_MAIL_TRANSPORT/);
+  });
+
+  it('never echoes runtime values in validation errors', () => {
+    let message = '';
+    try {
+      resolveEffectiveConfig({
+        environment: 'local',
+        runtime: {
+          AUTH_REQUIRE_EMAIL_VERIFICATION: 'treu-super-secret-marker',
+          RESEND_API_KEY: 're_secret_marker',
+        },
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message.length).toBeGreaterThan(0);
+    expect(message).not.toContain('treu-super-secret-marker');
+    expect(message).not.toContain('re_secret_marker');
+  });
+});
+
+describe('assertValidNonSecretConfig', () => {
+  it('accepts the existing isolated test environment inputs', () => {
+    expect(() => {
+      assertValidNonSecretConfig({
+        ENVIRONMENT: 'test',
+        AUTH_REGISTRATION_ENABLED: 'true',
+        AUTH_EMAIL_PASSWORD_ENABLED: 'true',
+        AUTH_REQUIRE_EMAIL_VERIFICATION: 'true',
+      });
+    }).not.toThrow();
+  });
+
+  it('rejects malformed values at the application boundary', () => {
+    expect(() => {
+      assertValidNonSecretConfig({
+        ENVIRONMENT: 'local',
+        AUTH_REGISTRATION_ENABLED: 'yes',
+      });
+    }).toThrow(/AUTH_REGISTRATION_ENABLED/);
+  });
+});
