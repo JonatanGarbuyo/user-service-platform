@@ -4,10 +4,12 @@
 // public HTTP boundary against a freshly initialized local D1 database with a
 // real configured transactional-mail transport. The operator prepares the
 // environment first (`npm run db:local:reset`, `npm run dev:local` with a real
-// `AUTH_MAIL_TRANSPORT`), then runs this script; the human follows the real
-// verification/reset actions received by email and pastes the delivered tokens
-// as environment inputs. The runner never bypasses those steps through
-// test-only transport state or direct database mutation.
+// `AUTH_MAIL_TRANSPORT`), then runs this script once; the runner pauses
+// mid-run and prompts for the delivered verification/reset tokens, so a single
+// fresh-DB pass completes the real email flows. Tokens may also be
+// pre-supplied as environment inputs for a non-interactive run. The runner
+// never bypasses those steps through test-only transport state or direct
+// database mutation.
 //
 // Typical local use from a clean clone (each step documented in
 // `docs/operations/local-acceptance.md`):
@@ -20,12 +22,15 @@
 // ACCEPTANCE_EMAIL="acceptance@example.com" \
 //   ACCEPTANCE_PASSWORD="correct-horse-60" \
 //   ACCEPTANCE_NEW_PASSWORD="correct-horse-61" \
-//   ACCEPTANCE_VERIFICATION_TOKEN="<token-from-verification-email>" \
-//   ACCEPTANCE_RESET_TOKEN="<token-from-reset-email>" \
 //   ADMIN_NAME="Site Admin" ADMIN_EMAIL="admin@example.com" \
 //   ADMIN_PASSWORD="correct-horse-41" \
 //   npm run acceptance:local
 // ```
+//
+// When the runner reaches each mail stage it prints a prompt naming the
+// expected token variable; paste the `token` query parameter from the
+// delivered action URL. Pre-supplying `ACCEPTANCE_VERIFICATION_TOKEN` and/or
+// `ACCEPTANCE_RESET_TOKEN` in the environment skips the corresponding prompt.
 //
 // Redaction (ADR-0009, ADR-0010): this script logs only HTTP method, path,
 // status and stable problem codes plus the non-secret evidence summary
@@ -35,16 +40,15 @@
 // in-memory transport; this operational runner is distinct from ordinary CI
 // tests and never runs there.
 import { execSync } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 
-// Ordered procedure stages (ticket #60). The first three are
-// operator-executed prerequisites (`npm run db:local:reset` reapplies the
-// canonical migrations; `npm run dev:local` boots the Worker) whose own
-// command output joins the evidence record; the runner executes and records
-// every stage from `health` onward through the public HTTP boundary.
+// Ordered runner stages (ticket #60). The reset/migrations/boot prerequisites
+// (`npm run db:local:reset` reapplies the canonical migrations;
+// `npm run dev:local` boots the Worker) are operator-executed steps evidenced
+// via the retained terminal transcript; the runner executes and records every
+// stage listed here through the public HTTP boundary, and the machine
+// `acceptance-summary` covers exactly these stages.
 export const ACCEPTANCE_STAGES = [
-  'reset-d1',
-  'migrations',
-  'worker-boot',
   'health',
   'me-anonymous',
   'register',
@@ -68,8 +72,8 @@ export interface LocalAcceptanceConfig {
   readonly email: string;
   readonly password: string;
   readonly newPassword: string;
-  readonly verificationToken: string;
-  readonly resetToken: string;
+  readonly verificationToken: string | undefined;
+  readonly resetToken: string | undefined;
 }
 
 export interface LocalAcceptanceAdmin {
@@ -94,9 +98,14 @@ function readEnv(env: AcceptanceEnv, name: keyof AcceptanceEnv): string {
   return (env[name] ?? '').trim();
 }
 
-// Resolves the human-supplied acceptance inputs. Every failure names the
-// variable and the expected shape; values are never echoed, so a missing
-// secret or token cannot leak through the error itself.
+// Resolves the human-supplied acceptance inputs. Identity and password
+// inputs are required before any HTTP stage executes; email-action tokens are
+// optional upfront because neither token exists on a freshly reset D1 until
+// the runner itself triggers the corresponding real email mid-run. A
+// pre-supplied token skips its mid-run prompt; otherwise the runner prompts
+// interactively at the stage that needs it. Every failure names the variable
+// and the expected shape; values are never echoed, so a missing secret or
+// token cannot leak through the error itself.
 export function resolveLocalAcceptanceConfig(
   env: AcceptanceEnv = process.env,
 ): LocalAcceptanceConfig {
@@ -104,8 +113,6 @@ export function resolveLocalAcceptanceConfig(
   const email = readEnv(env, 'ACCEPTANCE_EMAIL');
   const password = readEnv(env, 'ACCEPTANCE_PASSWORD');
   const newPassword = readEnv(env, 'ACCEPTANCE_NEW_PASSWORD');
-  const verificationToken = readEnv(env, 'ACCEPTANCE_VERIFICATION_TOKEN');
-  const resetToken = readEnv(env, 'ACCEPTANCE_RESET_TOKEN');
   if (email.length === 0) {
     throw new Error('ACCEPTANCE_EMAIL is required (address that receives real delivery).');
   }
@@ -115,22 +122,76 @@ export function resolveLocalAcceptanceConfig(
   if (newPassword.length === 0) {
     throw new Error('ACCEPTANCE_NEW_PASSWORD is required (password set by the reset action).');
   }
-  if (verificationToken.length === 0) {
-    throw new Error(
-      'ACCEPTANCE_VERIFICATION_TOKEN is required (token from the delivered verification email).',
-    );
-  }
-  if (resetToken.length === 0) {
-    throw new Error('ACCEPTANCE_RESET_TOKEN is required (token from the delivered reset email).');
-  }
   return {
     baseUrl: baseUrl.length > 0 ? baseUrl : 'http://localhost:8787',
     email,
     password,
     newPassword,
-    verificationToken,
-    resetToken,
+    verificationToken: resolveEmailActionToken(env, 'ACCEPTANCE_VERIFICATION_TOKEN'),
+    resetToken: resolveEmailActionToken(env, 'ACCEPTANCE_RESET_TOKEN'),
   };
+}
+
+export type EmailActionTokenName = 'ACCEPTANCE_VERIFICATION_TOKEN' | 'ACCEPTANCE_RESET_TOKEN';
+
+// Reads an optional email-action token without ever logging its value. An
+// empty or missing variable resolves to undefined so the runner can prompt
+// for it when its mail stage is reached.
+export function resolveEmailActionToken(
+  env: AcceptanceEnv = process.env,
+  name: EmailActionTokenName,
+): string | undefined {
+  const value = readEnv(env, name);
+  return value.length > 0 ? value : undefined;
+}
+
+// Requires an email-action token at the stage that consumes it. Failures name
+// the variable and the expected shape; values are never echoed.
+export function requireEmailActionToken(
+  token: string | undefined,
+  name: EmailActionTokenName,
+): string {
+  if (token === undefined || token.length === 0) {
+    throw new Error(`${name} is required (token from the delivered email).`);
+  }
+  return token;
+}
+
+// Prompts the operator for a delivered email-action token mid-run. The prompt
+// names only the variable; the pasted value is never echoed into logs.
+async function promptForEmailActionToken(name: EmailActionTokenName): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      `${name} is required (token from the delivered email); re-run with it set in the environment.`,
+    );
+  }
+  const prompt =
+    `Open the delivered email, extract the token query parameter from its action URL, ` +
+    `and paste it as ${name}: `;
+  process.stdout.write(prompt);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question('')).trim();
+    return requireEmailActionToken(answer.length > 0 ? answer : undefined, name);
+  } finally {
+    rl.close();
+  }
+}
+
+// Returns the pre-supplied token when present, otherwise prompts mid-run so a
+// single fresh-DB pass can complete the real verification/reset flows.
+async function resolveInteractiveToken(
+  supplied: string | undefined,
+  name: EmailActionTokenName,
+): Promise<string> {
+  if (supplied !== undefined && supplied.length > 0) {
+    return supplied;
+  }
+  const fromEnv = resolveEmailActionToken(process.env, name);
+  if (fromEnv !== undefined && fromEnv.length > 0) {
+    return fromEnv;
+  }
+  return promptForEmailActionToken(name);
 }
 
 // Resolves the explicit first-admin inputs for the closing bootstrap stage.
@@ -366,11 +427,18 @@ async function main(): Promise<void> {
       fail('login-unverified', gated.res.status, 'expected 403 email-verification-required');
     }
 
-    // Human-completed verification from the delivered email.
+    // Human-completed verification from the delivered email. The token does
+    // not exist until this run's registration email arrives, so resolve it
+    // here: use the pre-supplied environment value when present, otherwise
+    // pause and prompt mid-run for a single fresh-DB pass.
+    const verificationToken = await resolveInteractiveToken(
+      config.verificationToken,
+      'ACCEPTANCE_VERIFICATION_TOKEN',
+    );
     const verify = await request('verify-email', '/v1/auth/verify-email', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: config.verificationToken }),
+      body: JSON.stringify({ token: verificationToken }),
     });
     if (verify.res.status !== 200 || booleanField(verify.payload, 'emailVerified') !== true) {
       fail('verify-email', verify.res.status, 'expected 200 with emailVerified:true');
@@ -441,11 +509,14 @@ async function main(): Promise<void> {
       );
     }
 
-    // Human-completed reset from the delivered email.
+    // Human-completed reset from the delivered email. Like verification, the
+    // token only exists after this run's recovery email arrives, so resolve
+    // it here with an optional mid-run prompt.
+    const resetToken = await resolveInteractiveToken(config.resetToken, 'ACCEPTANCE_RESET_TOKEN');
     const reset = await request('reset-password', '/v1/auth/reset-password', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: config.resetToken, newPassword: config.newPassword }),
+      body: JSON.stringify({ token: resetToken, newPassword: config.newPassword }),
     });
     if (reset.res.status !== 200) {
       fail('reset-password', reset.res.status, 'expected 200 on password reset');

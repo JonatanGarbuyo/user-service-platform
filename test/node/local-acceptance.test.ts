@@ -3,6 +3,8 @@ import {
   ACCEPTANCE_STAGES,
   assertSafeLocalAcceptanceTarget,
   formatAcceptanceSummary,
+  requireEmailActionToken,
+  resolveEmailActionToken,
   resolveLocalAcceptanceConfig,
 } from '../../scripts/local-acceptance.js';
 
@@ -30,30 +32,71 @@ describe('local acceptance operator inputs', () => {
     });
   });
 
-  it.each([
-    ['ACCEPTANCE_EMAIL'],
-    ['ACCEPTANCE_PASSWORD'],
-    ['ACCEPTANCE_NEW_PASSWORD'],
-    ['ACCEPTANCE_VERIFICATION_TOKEN'],
-    ['ACCEPTANCE_RESET_TOKEN'],
-  ])('fails closed without %s and never echoes values', (missing) => {
-    const env = {
-      ACCEPTANCE_EMAIL: 'acceptance@example.com',
-      ACCEPTANCE_PASSWORD: 'correct-horse-60',
-      ACCEPTANCE_NEW_PASSWORD: 'correct-horse-61',
-      ACCEPTANCE_VERIFICATION_TOKEN: 'verification-token',
-      ACCEPTANCE_RESET_TOKEN: 'reset-token',
-      [missing]: '',
-    };
+  it.each([['ACCEPTANCE_EMAIL'], ['ACCEPTANCE_PASSWORD'], ['ACCEPTANCE_NEW_PASSWORD']])(
+    'fails closed without %s and never echoes values',
+    (missing) => {
+      const env = {
+        ACCEPTANCE_EMAIL: 'acceptance@example.com',
+        ACCEPTANCE_PASSWORD: 'correct-horse-60',
+        ACCEPTANCE_NEW_PASSWORD: 'correct-horse-61',
+        ACCEPTANCE_VERIFICATION_TOKEN: 'verification-token',
+        ACCEPTANCE_RESET_TOKEN: 'reset-token',
+        [missing]: '',
+      };
+      let message = '';
+      try {
+        resolveLocalAcceptanceConfig(env);
+      } catch (error) {
+        message = error instanceof Error ? error.message : '';
+      }
+      expect(message).toContain(missing);
+      expect(message).not.toContain('correct-horse-60');
+      expect(message).not.toContain('acceptance@example.com');
+      expect(message).not.toContain('verification-token');
+    },
+  );
+
+  it('starts a fresh-DB run without upfront email-action tokens', () => {
+    expect(
+      resolveLocalAcceptanceConfig({
+        ACCEPTANCE_EMAIL: 'acceptance@example.com',
+        ACCEPTANCE_PASSWORD: 'correct-horse-60',
+        ACCEPTANCE_NEW_PASSWORD: 'correct-horse-61',
+      }),
+    ).toEqual({
+      baseUrl: 'http://localhost:8787',
+      email: 'acceptance@example.com',
+      password: 'correct-horse-60',
+      newPassword: 'correct-horse-61',
+      verificationToken: undefined,
+      resetToken: undefined,
+    });
+  });
+
+  it('resolves optional email-action tokens from the environment without echoing values', () => {
+    expect(
+      resolveEmailActionToken(
+        { ACCEPTANCE_VERIFICATION_TOKEN: '  verification-token  ' },
+        'ACCEPTANCE_VERIFICATION_TOKEN',
+      ),
+    ).toBe('verification-token');
+    expect(resolveEmailActionToken({}, 'ACCEPTANCE_VERIFICATION_TOKEN')).toBeUndefined();
+    expect(
+      resolveEmailActionToken({ ACCEPTANCE_RESET_TOKEN: '' }, 'ACCEPTANCE_RESET_TOKEN'),
+    ).toBeUndefined();
+  });
+
+  it('requires an email-action token at its stage and never echoes values', () => {
+    expect(requireEmailActionToken('verification-token', 'ACCEPTANCE_VERIFICATION_TOKEN')).toBe(
+      'verification-token',
+    );
     let message = '';
     try {
-      resolveLocalAcceptanceConfig(env);
+      requireEmailActionToken(undefined, 'ACCEPTANCE_VERIFICATION_TOKEN');
     } catch (error) {
       message = error instanceof Error ? error.message : '';
     }
-    expect(message).toContain(missing);
-    expect(message).not.toContain('correct-horse-60');
-    expect(message).not.toContain('acceptance@example.com');
+    expect(message).toContain('ACCEPTANCE_VERIFICATION_TOKEN');
     expect(message).not.toContain('verification-token');
   });
 
@@ -73,11 +116,8 @@ describe('local acceptance operator inputs', () => {
 });
 
 describe('local acceptance evidence', () => {
-  it('covers the ticket acceptance order with stable stage names', () => {
+  it('covers the executed HTTP stages without advertising operator prerequisites', () => {
     expect(ACCEPTANCE_STAGES).toEqual([
-      'reset-d1',
-      'migrations',
-      'worker-boot',
       'health',
       'me-anonymous',
       'register',

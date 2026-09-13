@@ -71,15 +71,15 @@ Worker running; every step below goes through its public HTTP boundary
 ## 3. Run the acceptance runner
 
 In a second terminal, with the Worker still running, supply the acceptance
-identity, its password rotation, the tokens you will receive by real email,
-and the first-admin inputs:
+identity, its password rotation, and the first-admin inputs. Run the command
+once from the freshly reset state: the runner pauses mid-run and prompts for
+each delivered token, so both tokens must not be supplied upfront (neither
+exists until this run's emails arrive).
 
 ```bash
 ACCEPTANCE_EMAIL="acceptance@example.com" \
   ACCEPTANCE_PASSWORD="correct-horse-60" \
   ACCEPTANCE_NEW_PASSWORD="correct-horse-61" \
-  ACCEPTANCE_VERIFICATION_TOKEN="<token-from-verification-email>" \
-  ACCEPTANCE_RESET_TOKEN="<token-from-reset-email>" \
   ADMIN_NAME="Site Admin" ADMIN_EMAIL="admin@example.com" \
   ADMIN_PASSWORD="correct-horse-41" \
   npm run acceptance:local
@@ -89,17 +89,25 @@ ACCEPTANCE_EMAIL="acceptance@example.com" \
 non-localhost target, so these real credentials and email-action tokens
 cannot be sent to a deployment from this runner.
 
+For a non-interactive run, `ACCEPTANCE_VERIFICATION_TOKEN` and/or
+`ACCEPTANCE_RESET_TOKEN` may be pre-supplied in the environment; each
+pre-supplied token skips its corresponding mid-run prompt.
+
 ## 4. Human email interaction (explicit, never bypassed)
 
 The runner does not read test-only transport state and never mutates the
-database directly. When it reaches each mail stage:
+database directly. A single run completes both mail flows without restarting:
+when the runner reaches each mail stage it pauses and prompts for the
+corresponding token variable.
 
-1. Open the verification email delivered to `ACCEPTANCE_EMAIL` through your
-   selected transport.
-2. Extract the `token` query parameter from the verification action URL.
-3. Paste it as `ACCEPTANCE_VERIFICATION_TOKEN` and (re)run the acceptance
-   command; repeat the same interaction for the reset email with
-   `ACCEPTANCE_RESET_TOKEN`.
+1. When the runner prompts for `ACCEPTANCE_VERIFICATION_TOKEN`, open the
+   verification email delivered to `ACCEPTANCE_EMAIL` through your selected
+   transport.
+2. Extract the `token` query parameter from the verification action URL and
+   paste it at the prompt; the runner continues through sign-in, sign-out,
+   and password recovery.
+3. When the runner prompts for `ACCEPTANCE_RESET_TOKEN`, repeat the same
+   interaction with the reset email.
 
 Registration and password recovery each produce a real message through the
 selected transport; verification and reset complete through the real
@@ -107,7 +115,9 @@ selected transport; verification and reset complete through the real
 
 ## 5. Stage order and expected outcomes
 
-The runner proves, in order:
+Sections 1–2 are operator-executed prerequisites (reset/migrations/boot)
+evidenced via the retained transcript. The runner executes and records, in
+order:
 
 1. `health` — `GET /v1/health` returns `200 {status:"ok"}`.
 2. `me-anonymous` — anonymous `GET /v1/me` returns `401 unauthenticated`.
@@ -147,12 +157,10 @@ The runner logs one JSON line per stage (method, path, status, stable
 the exact tested commit (`git rev-parse HEAD`), the selected transport by
 name, per-stage outcomes (stage name, HTTP status, and stable outcome), and
 `eligibility: eligible | ineligible`. The machine `acceptance-summary`
-covers only the executed HTTP stages from `health` onward; `reset-d1`,
-`migrations`, and `worker-boot` are operator-executed prerequisites evidenced
-via the retained transcript rather than machine-logged summary entries. Keep
-the full terminal transcript — including the `db:local:reset` completion
-output and the Worker boot log — as the evidence record: together they show
-the reset/migrations/boot prerequisites and whether each stage passed.
+covers exactly the runner stages listed in section 5. Keep the full terminal
+transcript — including the `db:local:reset` completion output and the Worker
+boot log — as the evidence record: together they show the
+reset/migrations/boot prerequisites and whether each runner stage passed.
 
 No passwords, provider credentials, cookies, session tokens,
 verification/reset tokens, action URLs, or message bodies appear in ordinary
