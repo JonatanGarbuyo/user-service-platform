@@ -168,11 +168,14 @@ jobs:
           echo "AGENT_RUN_URL=$RUN_URL" >> "$GITHUB_ENV"
 
       - name: Install pinned OpenCode
+        # Ticket #66: install through the documented npm distribution instead
+        # of the curl installer's unsupported --version flag, then verify the
+        # pinned CLI version before invoking it.
         if: steps.guard.outputs.run == 'true'
         run: |
           set -euo pipefail
-          curl -fsSL https://opencode.ai/install | bash -s -- --version=1.18.30
-          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+          npm install -g opencode-ai@1.18.30
+          opencode --version | grep -F '1.18.30'
 
       - name: Run address-review correction
         # Bounded like the repository-owned address-review worker (ticket #31):

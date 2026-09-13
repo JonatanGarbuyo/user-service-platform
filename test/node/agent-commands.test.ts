@@ -318,4 +318,52 @@ describe('agent workflow contracts', () => {
       expect(workflow).not.toMatch(/github\.event\.comment\.body/);
     },
   );
+
+  describe('deterministic OpenCode installation (ticket #66)', () => {
+    it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+      'installs the pinned OpenCode version through npm on %s',
+      (name) => {
+        const workflow = readWorkflow(name);
+
+        expect(workflow).toMatch(/npm install -g opencode-ai@1\.18\.30/);
+      },
+    );
+
+    it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+      'verifies the installed CLI version before invoking it on %s',
+      (name) => {
+        const workflow = readWorkflow(name);
+        const installIndex = workflow.indexOf('Install pinned OpenCode');
+
+        expect(installIndex).toBeGreaterThan(-1);
+        const installSection = workflow.slice(installIndex);
+        expect(installSection).toMatch(/opencode --version/);
+        expect(installSection).toMatch(/1\.18\.30/);
+        const verifyIndex = installSection.indexOf('opencode --version');
+        // agent-ticket invokes through `npm run agent:ticket` (which spawns
+        // `opencode run` internally); agent-fix-cycle invokes `opencode run`
+        // directly for address-review. Search after the install step so the
+        // acknowledge comment (which names the flow) is not mistaken for the
+        // invocation.
+        const tail = workflow.slice(installIndex);
+        const directInvoke = tail.indexOf('opencode run');
+        const ticketInvoke = tail.indexOf('npm run agent:ticket', verifyIndex);
+        const invokeIndex = directInvoke === -1 ? ticketInvoke : directInvoke;
+        expect(verifyIndex).toBeGreaterThan(-1);
+        expect(invokeIndex).toBeGreaterThan(-1);
+        expect(verifyIndex).toBeLessThan(invokeIndex);
+      },
+    );
+
+    it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+      'never uses the unsupported curl installer version flag on %s',
+      (name) => {
+        const workflow = readWorkflow(name);
+
+        expect(workflow).not.toMatch(/opencode\.ai\/install/);
+        expect(workflow).not.toMatch(/bash -s -- --version/);
+        expect(workflow).not.toMatch(/\.opencode\/bin/);
+      },
+    );
+  });
 });
