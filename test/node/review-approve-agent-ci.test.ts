@@ -10,11 +10,15 @@ import {
   APPROVE_TRUSTED_WORKFLOW_NAME,
   buildApprovalDispatchArgs,
   buildApproveRunArgs,
+  buildHeadRunsArgs,
   buildPollRunsArgs,
   decideAgentCiApproval,
   evaluateAgentCiApproval,
+  fetchHeadWorkflowRuns,
   filterPolledRunsForHint,
+  hasApprovalWaitingWorkflowRuns,
   parseDispatchHint,
+  parseHeadRunsOutput,
   parsePollRunsOutput,
   parseTicketBranch,
   prBodyIdentifiesTicket,
@@ -530,6 +534,78 @@ describe('immediate dispatch liveness (ticket #47 regression)', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('repos/o/r/dispatches');
     expect(calls[0]).toContain('approve-agent-ci-request');
+  });
+});
+
+describe('exact-HEAD workflow-run observation (ticket #47 corrected-HEAD regression)', () => {
+  const HEAD_SHA = '66b24d50cdeb83e01106da28ab8510ab168a6f84';
+
+  it('queries the canonical ci workflow runs filtered by exact HEAD', () => {
+    const args = buildHeadRunsArgs('o/r', HEAD_SHA);
+
+    expect(args.join(' ')).toContain(`repos/o/r/actions/workflows/ci.yml/runs`);
+    expect(args.join(' ')).toContain(`head_sha=${HEAD_SHA}`);
+    expect(args.join(' ')).toContain('--paginate');
+    expect(args.join(' ')).toContain('.workflow_runs[]');
+    expect(args.join(' ')).not.toContain('.runs[]');
+  });
+
+  it('parses exact-HEAD workflow runs fail-closed', () => {
+    const stdout = `${String(34773466917)} ${HEAD_SHA} ci completed action_required\n`;
+    const runs = parseHeadRunsOutput(stdout);
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      runId: 34773466917,
+      headSha: HEAD_SHA,
+      conclusion: 'action_required',
+    });
+    expect(parseHeadRunsOutput('')).toEqual([]);
+    expect(parseHeadRunsOutput('not-a-run-line\n')).toEqual([]);
+  });
+
+  it('detects approval-waiting workflow runs even when commit check-runs are empty', () => {
+    expect(
+      hasApprovalWaitingWorkflowRuns([
+        {
+          runId: 34773466917,
+          headSha: HEAD_SHA,
+          status: 'completed',
+          conclusion: 'action_required',
+          workflowName: 'ci',
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      hasApprovalWaitingWorkflowRuns([
+        {
+          runId: 34773466917,
+          headSha: HEAD_SHA,
+          status: 'completed',
+          conclusion: 'success',
+          workflowName: 'ci',
+        },
+      ]),
+    ).toBe(false);
+    expect(hasApprovalWaitingWorkflowRuns([])).toBe(false);
+  });
+
+  it('fetches exact-HEAD workflow runs through the injected executor seam', async () => {
+    const calls: string[] = [];
+    const execute: CommandExecutor = (command, args) => {
+      calls.push(`${command} ${args.join(' ')}`);
+      return Promise.resolve({
+        stdout: `${String(34773466917)} ${HEAD_SHA} ci completed action_required\n`,
+        stderr: '',
+      });
+    };
+
+    const runs = await fetchHeadWorkflowRuns('o/r', HEAD_SHA, execute);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain(`head_sha=${HEAD_SHA}`);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.runId).toBe(34773466917);
   });
 });
 
