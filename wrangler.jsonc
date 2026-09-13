@@ -1,9 +1,10 @@
 {
-  // Cloudflare Worker configuration. Local, staging and production are separate
-  // operational contexts (ADR-0008): staging/production use distinct databases and
-  // are never provisioned or mutated by ticket #9. The database_id values below are
-  // local/test placeholders; real staging/production resources are provisioned
-  // out-of-band when deployment automation lands (ticket #14).
+  // Cloudflare Worker configuration. Local, sandbox and production are separate
+  // operational contexts (ADR-0008): sandbox/production use distinct databases and
+  // are never provisioned or mutated by local tests. The database_id values below are
+  // local/test placeholders; real sandbox/production resources are provisioned
+  // out-of-band as documented in docs/operations/sandbox-release-runbook.md
+  // (ticket #14).
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "user-service",
   "main": "src/index.ts",
@@ -25,11 +26,18 @@
     "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
     // Transactional auth-mail branding (ADR-0010, ticket #13). The sender and
     // product name are deployment configuration, not secrets; real
-    // staging/production sender domains are set when deployment automation
-    // lands (ticket #14). The Resend API key itself is always a secret
-    // (`wrangler secret put RESEND_API_KEY`) and never appears here.
+    // sandbox/production sender domains are set when the runbook provisions
+    // those environments (ticket #14). The Resend API key itself is always a secret
+    // (`wrangler secret put RESEND_API_KEY --env sandbox`) and never appears here.
     "AUTH_APP_NAME": "User Service",
     "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
+  },
+  // Cloudflare-native observability baseline (ADR-0009, ticket #14): Worker
+  // logs, traces and platform metrics are enabled for every environment.
+  // Application logs stay structured/correlated with request ids and never
+  // carry credentials, tokens, cookies, action URLs or message bodies.
+  "observability": {
+    "enabled": true,
   },
   // D1 binding/configuration seam for isolated local tests (ticket #9). No business
   // persistence abstractions are introduced here; the identity slice owns its
@@ -43,24 +51,27 @@
     },
   ],
   "env": {
-    "staging": {
+    // Canonical sandbox environment (ADR-0008, ticket #14). Application code
+    // still accepts the legacy "staging" ENVIRONMENT value as a sandbox
+    // context, but Wrangler configuration uses "sandbox" only.
+    "sandbox": {
       "vars": {
-        "ENVIRONMENT": "staging",
+        "ENVIRONMENT": "sandbox",
         "AUTH_REGISTRATION_ENABLED": "true",
         "AUTH_EMAIL_PASSWORD_ENABLED": "true",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
         "AUTH_APP_NAME": "User Service",
         "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
-        // Sandbox recipient allowlist (ticket #13): staging/sandbox deliveries
+        // Sandbox recipient allowlist (ticket #13, ADR-0010): sandbox deliveries
         // outside this list are skipped before reaching the provider. The real
-        // value is set out-of-band with deployment automation (ticket #14);
+        // value is set out-of-band during sandbox provisioning (ticket #14);
         // an empty value fails closed with an explicit configuration error.
         "AUTH_MAIL_ALLOWLIST": "",
       },
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "user-service-staging",
+          "database_name": "user-service-sandbox",
           "database_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "migrations_dir": "drizzle",
         },
