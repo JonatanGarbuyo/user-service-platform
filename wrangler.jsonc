@@ -60,6 +60,10 @@
         "AUTH_REGISTRATION_ENABLED": "true",
         "AUTH_EMAIL_PASSWORD_ENABLED": "true",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
+        // Explicit Resend selection (ticket #57): identical to the previous
+        // ENVIRONMENT-derived default; sandbox deliveries stay
+        // allowlist-guarded and fail closed without AUTH_MAIL_ALLOWLIST.
+        "AUTH_MAIL_TRANSPORT": "resend",
         "AUTH_APP_NAME": "User Service",
         "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
         // Sandbox recipient allowlist (ticket #13, ADR-0010): sandbox deliveries
@@ -83,6 +87,10 @@
         "AUTH_REGISTRATION_ENABLED": "true",
         "AUTH_EMAIL_PASSWORD_ENABLED": "true",
         "AUTH_REQUIRE_EMAIL_VERIFICATION": "true",
+        // Explicit Resend selection (ticket #57): identical to the previous
+        // ENVIRONMENT-derived default, stated here so every environment
+        // carries a complete non-secret profile.
+        "AUTH_MAIL_TRANSPORT": "resend",
         "AUTH_APP_NAME": "User Service",
         "AUTH_MAIL_FROM": "User Service <noreply@example.com>",
       },

@@ -1,4 +1,5 @@
 import type { Env } from '../../env.js';
+import { assertValidNonSecretConfig } from '../../config/index.js';
 import { createIdentityAuth } from './auth.js';
 import { resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy } from './policy.js';
@@ -74,6 +75,10 @@ export function toSessionContext(payload: unknown): SessionContext | null {
 export async function resolveSessionContext(
   input: ResolveSessionInput,
 ): Promise<SessionContext | null> {
+  // Application boundary (ticket #57): fail early on invalid effective
+  // non-secret configuration with a redacted error before touching Better
+  // Auth or D1.
+  assertValidNonSecretConfig({ ...input.env });
   const policy = resolveAuthPolicy(input.env);
   const background =
     input.background ??

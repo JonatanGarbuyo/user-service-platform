@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
+import { assertValidNonSecretConfig } from '../../config/index.js';
 import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
 import { createIdentityAuth } from './auth.js';
@@ -98,6 +99,11 @@ function scopedAuth(
   c: IdentityContext,
   override?: AuthMailer,
 ): { auth: ReturnType<typeof createIdentityAuth>; policy: AuthPolicy } {
+  // Application boundary (ticket #57): the effective non-secret
+  // configuration is parsed and validated once per request and fails early
+  // with a redacted error. Runtime secrets in `c.env` are ignored here and
+  // flow directly to the resolvers that require them.
+  assertValidNonSecretConfig({ ...c.env });
   const policy = resolveAuthPolicy(c.env);
   const auth = createIdentityAuth({
     db: c.env.DB,
