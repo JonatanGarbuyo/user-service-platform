@@ -334,6 +334,66 @@ describe('agent:ticket success orchestration', () => {
     expect(sequence.indexOf('gh pr create')).toBeLessThan(sequence.indexOf('worker npm'));
   });
 
+  it('emits one best-effort approval hint after PR creation without blocking READY (ticket #47)', async () => {
+    const script = successScript();
+    let headCalls = 0;
+    const fixture = scriptedDeps(script);
+    const dispatchCalls: string[] = [];
+    const execute: CommandExecutor = (command, args) => {
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
+        headCalls += 1;
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
+      }
+      if (command === 'gh' && args[0] === 'repo') {
+        return Promise.resolve({ stdout: 'o/r\n', stderr: '' });
+      }
+      if (command === 'gh' && args[0] === 'api' && args[1] === 'repos/o/r/dispatches') {
+        dispatchCalls.push(`${command} ${args.join(' ')}`);
+        return Promise.resolve({ stdout: '', stderr: '' });
+      }
+      return fixture.execute(command, args);
+    };
+
+    const result = await runAgentTicket('10', {
+      execute,
+      runWorker: fixture.runWorker,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(dispatchCalls).toHaveLength(1);
+    expect(dispatchCalls[0]).toContain('approve-agent-ci-request');
+    expect(dispatchCalls[0]).toContain('client_payload[pr]=42');
+  });
+
+  it('tolerates an approval-hint outage and still reaches READY via the backstop (ticket #47)', async () => {
+    const script = successScript();
+    let headCalls = 0;
+    const fixture = scriptedDeps(script);
+    const execute: CommandExecutor = (command, args) => {
+      if (command === 'git' && args.join(' ') === 'rev-parse HEAD') {
+        headCalls += 1;
+        return Promise.resolve({
+          stdout: headCalls === 1 ? `${MAIN_HEAD}\n` : `${NEXT_HEAD}\n`,
+          stderr: '',
+        });
+      }
+      if (command === 'gh' && args[0] === 'repo') {
+        return Promise.reject(new Error('network down'));
+      }
+      return fixture.execute(command, args);
+    };
+
+    const result = await runAgentTicket('10', {
+      execute,
+      runWorker: fixture.runWorker,
+    });
+
+    expect(result.exitCode).toBe(0);
+  });
+
   it('never merges, deploys, publishes or touches secrets', async () => {
     const script = successScript();
     let headCalls = 0;

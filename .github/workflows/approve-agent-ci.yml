@@ -4,6 +4,16 @@ on:
   workflow_run:
     workflows: ['ci']
     types: [completed]
+  # Ticket #47 liveness: the originating `agent-ticket`/review-cycle flow
+  # emits this narrow event immediately after PR creation and again on its
+  # first `action_required` observation. Unlike the missing `workflow_run`
+  # event for GITHUB_TOKEN-created PRs, GitHub delivers `repository_dispatch`
+  # even when it is created with `GITHUB_TOKEN` (which already holds the
+  # required `contents: write`). The payload is only a hint: the trusted job
+  # below still fetches canonical state and reruns the deterministic
+  # provenance/exact-HEAD/no-workflow-change evaluator before any approval.
+  repository_dispatch:
+    types: [approve-agent-ci-request]
   # Ticket #47 fallback: GitHub emits no `workflow_run` event for the
   # `action_required` CI run observed on PR #46, so the event-driven job never
   # runs for exactly the case it must handle. The scheduled poll discovers the
@@ -129,6 +139,107 @@ jobs:
             HEAD_SHA="$(printf '%s' "$LINE" | cut -d' ' -f2)"
             WORKFLOW_NAME="$(printf '%s' "$LINE" | cut -d' ' -f3)"
             PR_CSV="$(printf '%s' "$LINE" | cut -d' ' -f4)"
+            PR_ARGS=""
+            if [ -n "$PR_CSV" ]; then
+              OLDIFS="$IFS"
+              IFS=','
+              for PR in $PR_CSV; do
+                if [ -n "$PR" ]; then
+                  PR_ARGS="$PR_ARGS --pr $PR"
+                fi
+              done
+              IFS="$OLDIFS"
+            fi
+            # shellcheck disable=SC2086
+            npx tsx scripts/approve-agent-ci.ts \
+              --repo "$GITHUB_REPOSITORY" \
+              --run-id "$RUN_ID" \
+              --workflow "$WORKFLOW_NAME" \
+              --conclusion "action_required" \
+              --head-sha "$HEAD_SHA" \
+              $PR_ARGS || true
+          done
+
+  dispatch:
+    # Immediate liveness path for ticket #47: the originating flow emits a
+    # narrow `approve-agent-ci-request` dispatch right after PR creation and
+    # on its first `action_required` observation. The payload is only a hint
+    # (PR/HEAD/run); this job still lists the canonical narrow awaiting set
+    # and proves every #44 guard from GitHub-owned reads before any approval.
+    # The scheduled `poll` job above remains the fail-safe backstop.
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'approve-agent-ci-request' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: approve-agent-ci-dispatch-${{ github.event.client_payload.pr || 'all' }}-${{ github.event.client_payload.run_id || 'all' }}
+      cancel-in-progress: false
+    # Same least-privilege as the other trusted approver jobs; nothing here
+    # checks out or executes PR code, and no model/provider/production secret
+    # is available.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out trusted main (never PR code)
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Approve hinted awaiting CI runs after canonical provenance proof
+        run: |
+          set -euo pipefail
+          # Hint only: never approve from the payload itself. Empty hints fall
+          # back to the full narrow awaiting set (the scheduled backstop).
+          HINT_PR="$(jq -r '.client_payload.pr // empty' "$GITHUB_EVENT_PATH")"
+          HINT_SHA="$(jq -r '.client_payload.head_sha // empty' "$GITHUB_EVENT_PATH" | tr '[:upper:]' '[:lower:]')"
+          HINT_RUN="$(jq -r '.client_payload.run_id // empty' "$GITHUB_EVENT_PATH")"
+          CANDIDATES="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?status=action_required&per_page=50" --paginate --jq '.workflow_runs[] | "\(.id) \(.head_sha) \(.name) \(([.pull_requests[].number] | map(tostring) | join(",")))"' || true)"
+          if [ -z "$CANDIDATES" ]; then
+            echo "No action_required ci runs awaiting approval."
+            exit 0
+          fi
+          printf '%s\n' "$CANDIDATES" | while IFS= read -r LINE; do
+            if [ -z "$LINE" ]; then
+              continue
+            fi
+            RUN_ID="$(printf '%s' "$LINE" | cut -d' ' -f1)"
+            HEAD_SHA="$(printf '%s' "$LINE" | cut -d' ' -f2)"
+            WORKFLOW_NAME="$(printf '%s' "$LINE" | cut -d' ' -f3)"
+            PR_CSV="$(printf '%s' "$LINE" | cut -d' ' -f4)"
+            if [ -n "$HINT_RUN" ] && [ "$RUN_ID" != "$HINT_RUN" ]; then
+              continue
+            fi
+            if [ -n "$HINT_SHA" ] && [ "$(printf '%s' "$HEAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$HINT_SHA" ]; then
+              continue
+            fi
+            if [ -n "$HINT_PR" ]; then
+              FOUND="false"
+              OLDIFS_HINT="$IFS"
+              IFS=','
+              for CAND_PR in $PR_CSV; do
+                if [ "$CAND_PR" = "$HINT_PR" ]; then
+                  FOUND="true"
+                  break
+                fi
+              done
+              IFS="$OLDIFS_HINT"
+              if [ "$FOUND" != "true" ]; then
+                continue
+              fi
+            fi
             PR_ARGS=""
             if [ -n "$PR_CSV" ]; then
               OLDIFS="$IFS"

@@ -1,5 +1,6 @@
 import { notifyTerminalBell } from './review/bell.js';
 import { parseNoBellFlag, runWithFatalBoundary } from './review/fatal.js';
+import { parseTicketBranch, requestApprovalDispatch } from './review/approve-agent-ci.js';
 import {
   DEFAULT_MAX_CORRECTION_CYCLES,
   DEFAULT_MAX_MARKER_RETRIES,
@@ -620,6 +621,12 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       let checkDecision: CheckPollDecision = 'pending';
       let lastRuns: CommitCheckRun[] = [];
       let ciFetchError: string | undefined;
+      // Ticket #47 liveness: the first observation of `action_required`
+      // triggers one best-effort immediate approval request via
+      // `repository_dispatch` (which GitHub delivers even for
+      // GITHUB_TOKEN-created PRs). The scheduled 5-minute poll remains the
+      // backstop; the bounded 12-minute wait below is unchanged.
+      let approvalDispatchRequested = false;
       for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
         let runs: CommitCheckRun[];
         try {
@@ -642,6 +649,26 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
           console.log(
             `CI checks for ${head} are awaiting trusted approval (action_required); waiting for the approver before rechecking.`,
           );
+          if (!approvalDispatchRequested) {
+            approvalDispatchRequested = true;
+            try {
+              const ticket = parseTicketBranch(pr.headRefName);
+              await requestApprovalDispatch(
+                runCommand,
+                repoSlug,
+                ticket === null
+                  ? { pr: pr.number, headSha: head }
+                  : { pr: pr.number, headSha: head, ticket },
+              );
+              console.log(
+                `Requested trusted CI approval via repository_dispatch for PR #${String(pr.number)} at ${head}.`,
+              );
+            } catch (error) {
+              console.log(
+                `Approval dispatch request failed (scheduled backstop remains): ${errorMessage(error)}`,
+              );
+            }
+          }
         } else if (attempt < CHECK_POLL_ATTEMPTS - 1) {
           console.log(`CI checks for ${head} are pending; waiting before rechecking.`);
         }
