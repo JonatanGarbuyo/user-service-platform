@@ -4,9 +4,11 @@ import { resolveEffectiveConfig } from '../../config/index.js';
 import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
 import { createIdentityAuth } from './auth.js';
+import { bootstrapAdminUser } from './admin.js';
 import { resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
 import {
+  adminBootstrapRoute,
   currentUserRoute,
   loginRoute,
   registerRoute,
@@ -133,7 +135,7 @@ function scopedAuth(
 
 function problem(
   c: IdentityContext,
-  status: 400 | 401 | 403 | 500,
+  status: 400 | 401 | 403 | 409 | 500,
   code: ProblemCode,
   title: string,
   detail?: string,
@@ -407,6 +409,45 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       return problem(c, 500, 'internal-error', 'Internal Server Error');
     }
     return c.json({ status: 'ok' as const }, 200);
+  });
+
+  router.openapi(adminBootstrapRoute, async (c) => {
+    const { auth, policy } = scopedAuth(c, override);
+    // Bootstrap provisions an email/password credential, so it honors the
+    // credential-mechanism switch. It stays independent of the public
+    // registration switch: operators must be able to provision the first
+    // administrator of a closed deployment.
+    if (!policy.emailPasswordEnabled) {
+      return problem(c, 403, 'email-password-disabled', 'Email authentication is disabled');
+    }
+
+    const input = c.req.valid('json');
+    const outcome = await bootstrapAdminUser({
+      auth,
+      db: c.env.DB,
+      name: input.name,
+      email: input.email,
+      password: input.password,
+    });
+    if (outcome.status === 'created') {
+      return c.json(outcome.admin, 201);
+    }
+    if (outcome.status === 'already-bootstrapped') {
+      return problem(
+        c,
+        409,
+        'admin-already-bootstrapped',
+        'Administrator already bootstrapped',
+        'An administrative User already exists; bootstrap cannot create another.',
+      );
+    }
+    return problem(
+      c,
+      409,
+      'admin-email-conflict',
+      'Administrator email conflict',
+      'The email address is already registered; bootstrap cannot duplicate it.',
+    );
   });
 
   return router;
