@@ -170,6 +170,11 @@ no default admin password. The bootstrapped administrator remains subject
 to the deployment email-verification policy and completes verification
 before signing in.
 
+Bootstrap is intentionally independent of `AUTH_REGISTRATION_ENABLED`: a
+closed deployment must still be able to provision its first administrator.
+It does require email/password authentication to remain enabled because the
+operator-supplied bootstrap credential uses that mechanism.
+
 The operation is first-admin-wins: repeats or conflicting identities fail
 with explicit machine codes (`admin-already-bootstrapped`,
 `admin-email-conflict`, exit code 2) instead of duplicating privileged
