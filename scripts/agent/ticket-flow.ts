@@ -21,6 +21,8 @@ import {
   type CommandExecutor,
 } from '../review/runner.js';
 import { checkSafePush, type SafePushCheck } from '../review/safe-push.js';
+import { requestApprovalDispatch } from '../review/approve-agent-ci.js';
+import { getRepoSlug } from '../review/pr-checks.js';
 import { runWorkerStream } from '../review/worker-stream.js';
 import { isWorkerTimeout, timeoutForWorker, type WorkerLabel } from '../review/worker-timeout.js';
 import { publishStageStatus, type RunStatusOutcome, type StatusEnv } from '../review/run-status.js';
@@ -915,6 +917,26 @@ export async function runAgentTicket(
     `Draft PR #${String(prNumber)}${prUrl === undefined ? '' : `: ${prUrl}`} (base main).`,
   );
   completedStages.push('PR creation');
+
+  // Ticket #47 liveness: emit one immediate trusted-approver hint right after
+  // PR creation so approval does not wait for the 5-minute scheduled poll.
+  // Best-effort only: a hint failure degrades to the review-cycle emission
+  // plus the scheduled backstop and never blocks the delivery flow.
+  try {
+    const repoSlug = await getRepoSlug(execute);
+    await requestApprovalDispatch(execute, repoSlug, {
+      pr: prNumber,
+      headSha: headAfter,
+      ticket,
+    });
+    console.log(
+      `Requested trusted CI approval via repository_dispatch for PR #${String(prNumber)} at ${headAfter}.`,
+    );
+  } catch {
+    console.log(
+      'Approval dispatch hint skipped (review-cycle request and scheduled backstop remain).',
+    );
+  }
 
   let review: WorkerOutput;
   reportStage('review');

@@ -273,6 +273,125 @@ export function parsePollRunsOutput(stdout: string): PolledAgentCiRun[] {
   return runs;
 }
 
+// Narrow repository_dispatch event type for ticket #47 liveness. The
+// originating `agent-ticket`/review-cycle flow emits this event immediately
+// (it already holds `contents: write`, which is sufficient to create a
+// repository dispatch) so the trusted approver wakes without waiting for the
+// 5-minute scheduled poll. The payload is only a hint: the trusted job must
+// still fetch canonical GitHub state and rerun the deterministic
+// provenance/exact-HEAD/no-workflow-change evaluator before any approval.
+export const APPROVE_DISPATCH_EVENT = 'approve-agent-ci-request';
+
+export interface ApprovalDispatchHint {
+  pr: number;
+  headSha: string;
+  ticket?: number;
+  runId?: number;
+}
+
+export interface ParsedDispatchHint {
+  pr?: number;
+  headSha?: string;
+  ticket?: number;
+  runId?: number;
+}
+
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === 'string' && /^[1-9]\d*$/.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
+  }
+  return undefined;
+}
+
+export function buildApprovalDispatchArgs(
+  repoSlug: string,
+  hint: ApprovalDispatchHint,
+): readonly string[] {
+  const args: string[] = [
+    'api',
+    `repos/${repoSlug}/dispatches`,
+    '--method',
+    'POST',
+    '-F',
+    `event_type=${APPROVE_DISPATCH_EVENT}`,
+    '-F',
+    `client_payload[pr]=${String(hint.pr)}`,
+    '-F',
+    `client_payload[head_sha]=${hint.headSha}`,
+  ];
+  if (hint.ticket !== undefined) {
+    args.push('-F', `client_payload[ticket]=${String(hint.ticket)}`);
+  }
+  if (hint.runId !== undefined) {
+    args.push('-F', `client_payload[run_id]=${String(hint.runId)}`);
+  }
+  return args;
+}
+
+// Fail-closed hint parsing for the trusted dispatch job: only validated
+// fields survive; malformed payloads yield an empty hint so the job falls
+// back to the full narrow awaiting set instead of trusting attacker-shaped
+// data. Accepts the `client_payload` object (snake_case keys) directly.
+export function parseDispatchHint(payload: unknown): ParsedDispatchHint {
+  if (typeof payload !== 'object' || payload === null) {
+    return {};
+  }
+  const record = payload as Record<string, unknown>;
+  const hint: ParsedDispatchHint = {};
+  const pr = parsePositiveInt(record.pr);
+  if (pr !== undefined) {
+    hint.pr = pr;
+  }
+  const ticket = parsePositiveInt(record.ticket);
+  if (ticket !== undefined) {
+    hint.ticket = ticket;
+  }
+  const runId = parsePositiveInt(record.run_id ?? record.runId);
+  if (runId !== undefined) {
+    hint.runId = runId;
+  }
+  const rawHead = record.head_sha ?? record.headSha;
+  if (typeof rawHead === 'string' && isExactSha(rawHead)) {
+    hint.headSha = rawHead.trim().toLowerCase();
+  }
+  return hint;
+}
+
+// Narrow the canonical awaiting set to the hinted PR/HEAD/run when the hint
+// carries validated fields. An empty hint returns every candidate so a
+// malformed hint can never suppress the scheduled backstop.
+export function filterPolledRunsForHint(
+  runs: readonly PolledAgentCiRun[],
+  hint: ParsedDispatchHint,
+): PolledAgentCiRun[] {
+  return runs.filter((run) => {
+    if (hint.runId !== undefined && run.runId !== hint.runId) {
+      return false;
+    }
+    if (hint.pr !== undefined && !run.prNumbers.includes(hint.pr)) {
+      return false;
+    }
+    if (hint.headSha !== undefined && run.headSha.toLowerCase() !== hint.headSha.toLowerCase()) {
+      return false;
+    }
+    return true;
+  });
+}
+
+// Immediate liveness signal for ticket #47: best-effort only. Callers swallow
+// failures and keep polling, so a dispatch outage degrades to the scheduled
+// 5-minute backstop instead of failing the delivery flow.
+export async function requestApprovalDispatch(
+  execute: CommandExecutor,
+  repoSlug: string,
+  hint: ApprovalDispatchHint,
+): Promise<void> {
+  await execute('gh', buildApprovalDispatchArgs(repoSlug, hint));
+}
+
 export function buildPrFetchArgs(repoSlug: string, prNumber: number): readonly string[] {
   return ['api', `repos/${repoSlug}/pulls/${String(prNumber)}`];
 }

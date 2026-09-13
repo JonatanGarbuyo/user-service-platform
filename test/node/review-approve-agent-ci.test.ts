@@ -4,18 +4,23 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   APPROVE_BOT_LOGIN,
+  APPROVE_DISPATCH_EVENT,
   APPROVE_READY_LABEL,
   APPROVE_REQUIRED_CONCLUSION,
   APPROVE_TRUSTED_WORKFLOW_NAME,
+  buildApprovalDispatchArgs,
   buildApproveRunArgs,
   buildPollRunsArgs,
   decideAgentCiApproval,
   evaluateAgentCiApproval,
+  filterPolledRunsForHint,
+  parseDispatchHint,
   parsePollRunsOutput,
   parseTicketBranch,
   prBodyIdentifiesTicket,
   prIdentifiesTicket,
   prTitleIdentifiesTicket,
+  requestApprovalDispatch,
   type AgentCiProvenance,
 } from '../../scripts/review/approve-agent-ci.js';
 import type { CommandExecutor } from '../../scripts/review/runner.js';
@@ -441,6 +446,93 @@ describe('scheduled poll discovery (ticket #47)', () => {
   });
 });
 
+describe('immediate dispatch liveness (ticket #47 regression)', () => {
+  const HEAD_SHA = 'e0ee52f21ecd28279f3e0a9b0a8bbd2b4b87a039';
+
+  it('uses a narrow repository_dispatch event type', () => {
+    expect(APPROVE_DISPATCH_EVENT).toBe('approve-agent-ci-request');
+  });
+
+  it('builds a hint-only dispatch request without approval or secrets', () => {
+    const args = buildApprovalDispatchArgs('o/r', { pr: 61, headSha: HEAD_SHA, ticket: 57 });
+
+    expect(args).toEqual([
+      'api',
+      'repos/o/r/dispatches',
+      '--method',
+      'POST',
+      '-F',
+      'event_type=approve-agent-ci-request',
+      '-F',
+      'client_payload[pr]=61',
+      '-F',
+      `client_payload[head_sha]=${HEAD_SHA}`,
+      '-F',
+      'client_payload[ticket]=57',
+    ]);
+    expect(args.join(' ')).not.toMatch(/approve\/|actions: write|OPENCODE|CLOUDFLARE|RESEND/i);
+  });
+
+  it('includes an optional run hint without changing the narrow event', () => {
+    const args = buildApprovalDispatchArgs('o/r', {
+      pr: 61,
+      headSha: HEAD_SHA,
+      runId: 34748660226,
+    });
+
+    expect(args).toContain('event_type=approve-agent-ci-request');
+    expect(args).toContain('client_payload[run_id]=34748660226');
+  });
+
+  it('parses dispatch hints fail-closed and normalizes the head SHA', () => {
+    expect(parseDispatchHint({ pr: 61, head_sha: HEAD_SHA, ticket: 57 })).toEqual({
+      pr: 61,
+      headSha: HEAD_SHA,
+      ticket: 57,
+    });
+    expect(parseDispatchHint({ pr: '61', head_sha: HEAD_SHA.toUpperCase() })).toEqual({
+      pr: 61,
+      headSha: HEAD_SHA,
+    });
+    expect(parseDispatchHint(null)).toEqual({});
+    expect(parseDispatchHint('hint')).toEqual({});
+    expect(parseDispatchHint({ pr: 0, head_sha: 'abc', ticket: -1, run_id: 'x' })).toEqual({});
+  });
+
+  it('narrows canonical candidates to the hinted PR/HEAD/run', () => {
+    const runs = [
+      { runId: 1, headSha: HEAD_SHA, workflowName: 'ci', prNumbers: [61] },
+      { runId: 2, headSha: HEAD_SHA, workflowName: 'ci', prNumbers: [62] },
+      { runId: 3, headSha: 'a'.repeat(40), workflowName: 'ci', prNumbers: [61] },
+    ];
+
+    expect(filterPolledRunsForHint(runs, {})).toEqual(runs);
+    expect(filterPolledRunsForHint(runs, { pr: 61 }).map((run) => run.runId)).toEqual([1, 3]);
+    expect(filterPolledRunsForHint(runs, { headSha: HEAD_SHA }).map((run) => run.runId)).toEqual([
+      1, 2,
+    ]);
+    expect(
+      filterPolledRunsForHint(runs, { pr: 61, headSha: HEAD_SHA }).map((run) => run.runId),
+    ).toEqual([1]);
+    expect(filterPolledRunsForHint(runs, { runId: 2 }).map((run) => run.runId)).toEqual([2]);
+    expect(filterPolledRunsForHint(runs, { pr: 99 })).toEqual([]);
+  });
+
+  it('emits the dispatch through the injected executor seam', async () => {
+    const calls: string[] = [];
+    const execute: CommandExecutor = (command, args) => {
+      calls.push(`${command} ${args.join(' ')}`);
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+
+    await requestApprovalDispatch(execute, 'o/r', { pr: 61, headSha: HEAD_SHA });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('repos/o/r/dispatches');
+    expect(calls[0]).toContain('approve-agent-ci-request');
+  });
+});
+
 describe('workflow permission boundaries', () => {
   const workflowsDir = resolve(
     dirname(fileURLToPath(import.meta.url)),
@@ -510,6 +602,30 @@ describe('workflow permission boundaries', () => {
     expect(raw).toMatch(/scripts\/approve-agent-ci\.ts/);
     expect(raw).not.toMatch(/gh\s+pr\s+checkout/i);
     expect(raw).not.toMatch(/OPENCODE_ZEN_API_KEY/);
+  });
+
+  it('wakes immediately on the narrow dispatch hint but still proves provenance (ticket #47 regression)', async () => {
+    const raw = await readFile(resolve(workflowsDir, 'approve-agent-ci.yml'), 'utf8');
+
+    // Immediate path: repository_dispatch is delivered even for
+    // GITHUB_TOKEN-created PRs, unlike the missing workflow_run event.
+    expect(raw).toMatch(/repository_dispatch/);
+    expect(raw).toMatch(/approve-agent-ci-request/);
+    // The scheduled poll remains the fail-safe backstop, not the primary.
+    expect(raw).toMatch(/schedule/);
+    // Hint-only: the dispatch job reads client_payload as a locator, then
+    // lists the canonical awaiting set and reruns the deterministic
+    // evaluator per candidate instead of approving from the payload.
+    expect(raw).toMatch(/client_payload/);
+    expect(raw).toMatch(/status=action_required/);
+    expect(raw).toMatch(/scripts\/approve-agent-ci\.ts/);
+    // Trusted boundary preserved on the new job: main checkout only, narrow
+    // per-job permissions, no PR code execution or secrets.
+    expect(raw).toMatch(/ref:\s*main/);
+    expect(raw).not.toMatch(/gh\s+pr\s+checkout/i);
+    expect(raw).not.toMatch(/OPENCODE_ZEN_API_KEY/);
+    expect(raw).not.toMatch(/CLOUDFLARE/);
+    expect(raw).not.toMatch(/RESEND/);
   });
 
   it('keeps ci least-privilege and secret-free', async () => {
