@@ -167,6 +167,13 @@ jobs:
     # (PR/HEAD/run); this job still lists the canonical narrow awaiting set
     # and proves every #44 guard from GitHub-owned reads before any approval.
     # The scheduled `poll` job above remains the fail-safe backstop.
+    #
+    # Creation-race bound (live #59/PR#64 evidence): the post-creation dispatch
+    # can run before GitHub registers the CI run in the awaiting set, so a
+    # single-shot check exits success having approved nothing. A hinted wake
+    # therefore re-polls within bounded limits (24 attempts at 15s, about 6
+    # minutes) and stops early once a hinted candidate has been evaluated. An
+    # unhinted wake stays single-shot like the scheduled backstop.
     if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'approve-agent-ci-request' }}
     runs-on: ubuntu-latest
     concurrency:
@@ -206,57 +213,88 @@ jobs:
           HINT_PR="$(jq -r '.client_payload.pr // empty' "$GITHUB_EVENT_PATH")"
           HINT_SHA="$(jq -r '.client_payload.head_sha // empty' "$GITHUB_EVENT_PATH" | tr '[:upper:]' '[:lower:]')"
           HINT_RUN="$(jq -r '.client_payload.run_id // empty' "$GITHUB_EVENT_PATH")"
-          CANDIDATES="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?status=action_required&per_page=50" --paginate --jq '.workflow_runs[] | "\(.id) \(.head_sha) \(.name) \(([.pull_requests[].number] | map(tostring) | join(",")))"' || true)"
-          if [ -z "$CANDIDATES" ]; then
-            echo "No action_required ci runs awaiting approval."
-            exit 0
+          # Hinted wakes wait for the hinted run to appear; unhinted wakes stay
+          # single-shot so a stray dispatch cannot burn runner minutes.
+          DISPATCH_WAIT_ATTEMPTS=1
+          if [ -n "$HINT_PR$HINT_SHA$HINT_RUN" ]; then
+            DISPATCH_WAIT_ATTEMPTS=24
           fi
-          printf '%s\n' "$CANDIDATES" | while IFS= read -r LINE; do
-            if [ -z "$LINE" ]; then
-              continue
-            fi
-            RUN_ID="$(printf '%s' "$LINE" | cut -d' ' -f1)"
-            HEAD_SHA="$(printf '%s' "$LINE" | cut -d' ' -f2)"
-            WORKFLOW_NAME="$(printf '%s' "$LINE" | cut -d' ' -f3)"
-            PR_CSV="$(printf '%s' "$LINE" | cut -d' ' -f4)"
-            if [ -n "$HINT_RUN" ] && [ "$RUN_ID" != "$HINT_RUN" ]; then
-              continue
-            fi
-            if [ -n "$HINT_SHA" ] && [ "$(printf '%s' "$HEAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$HINT_SHA" ]; then
-              continue
-            fi
-            if [ -n "$HINT_PR" ]; then
-              FOUND="false"
-              OLDIFS_HINT="$IFS"
-              IFS=','
-              for CAND_PR in $PR_CSV; do
-                if [ "$CAND_PR" = "$HINT_PR" ]; then
-                  FOUND="true"
-                  break
-                fi
-              done
-              IFS="$OLDIFS_HINT"
-              if [ "$FOUND" != "true" ]; then
+          DISPATCH_WAIT_DELAY_SECONDS=15
+          EVALUATED_ANY="false"
+          for ((ATTEMPT=1; ATTEMPT<=DISPATCH_WAIT_ATTEMPTS; ATTEMPT+=1)); do
+            CANDIDATES="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?status=action_required&per_page=50" --paginate --jq '.workflow_runs[] | "\(.id) \(.head_sha) \(.name) \(([.pull_requests[].number] | map(tostring) | join(",")))"' || true)"
+            MATCHED="$(printf '%s\n' "$CANDIDATES" | while IFS= read -r LINE; do
+              if [ -z "$LINE" ]; then
                 continue
               fi
-            fi
-            PR_ARGS=""
-            if [ -n "$PR_CSV" ]; then
-              OLDIFS="$IFS"
-              IFS=','
-              for PR in $PR_CSV; do
-                if [ -n "$PR" ]; then
-                  PR_ARGS="$PR_ARGS --pr $PR"
+              RUN_ID="$(printf '%s' "$LINE" | cut -d' ' -f1)"
+              HEAD_SHA="$(printf '%s' "$LINE" | cut -d' ' -f2)"
+              PR_CSV="$(printf '%s' "$LINE" | cut -d' ' -f4)"
+              if [ -n "$HINT_RUN" ] && [ "$RUN_ID" != "$HINT_RUN" ]; then
+                continue
+              fi
+              if [ -n "$HINT_SHA" ] && [ "$(printf '%s' "$HEAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$HINT_SHA" ]; then
+                continue
+              fi
+              if [ -n "$HINT_PR" ]; then
+                FOUND="false"
+                OLDIFS_HINT="$IFS"
+                IFS=','
+                for CAND_PR in $PR_CSV; do
+                  if [ "$CAND_PR" = "$HINT_PR" ]; then
+                    FOUND="true"
+                    break
+                  fi
+                done
+                IFS="$OLDIFS_HINT"
+                if [ "$FOUND" != "true" ]; then
+                  continue
                 fi
+              fi
+              printf '%s\n' "$LINE"
+            done)"
+            if [ -n "$MATCHED" ]; then
+              printf '%s\n' "$MATCHED" | while IFS= read -r LINE; do
+                if [ -z "$LINE" ]; then
+                  continue
+                fi
+                RUN_ID="$(printf '%s' "$LINE" | cut -d' ' -f1)"
+                HEAD_SHA="$(printf '%s' "$LINE" | cut -d' ' -f2)"
+                WORKFLOW_NAME="$(printf '%s' "$LINE" | cut -d' ' -f3)"
+                PR_CSV="$(printf '%s' "$LINE" | cut -d' ' -f4)"
+                PR_ARGS=""
+                if [ -n "$PR_CSV" ]; then
+                  OLDIFS="$IFS"
+                  IFS=','
+                  for PR in $PR_CSV; do
+                    if [ -n "$PR" ]; then
+                      PR_ARGS="$PR_ARGS --pr $PR"
+                    fi
+                  done
+                  IFS="$OLDIFS"
+                fi
+                # shellcheck disable=SC2086
+                npx tsx scripts/approve-agent-ci.ts \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --run-id "$RUN_ID" \
+                  --workflow "$WORKFLOW_NAME" \
+                  --conclusion "action_required" \
+                  --head-sha "$HEAD_SHA" \
+                  $PR_ARGS || true
               done
-              IFS="$OLDIFS"
+              EVALUATED_ANY="true"
+              break
             fi
-            # shellcheck disable=SC2086
-            npx tsx scripts/approve-agent-ci.ts \
-              --repo "$GITHUB_REPOSITORY" \
-              --run-id "$RUN_ID" \
-              --workflow "$WORKFLOW_NAME" \
-              --conclusion "action_required" \
-              --head-sha "$HEAD_SHA" \
-              $PR_ARGS || true
+            if [ "$ATTEMPT" -lt "$DISPATCH_WAIT_ATTEMPTS" ]; then
+              echo "Hinted run not yet awaiting approval (attempt $ATTEMPT/$DISPATCH_WAIT_ATTEMPTS); waiting ${DISPATCH_WAIT_DELAY_SECONDS}s before rechecking."
+              sleep "$DISPATCH_WAIT_DELAY_SECONDS"
+            fi
           done
+          if [ "$EVALUATED_ANY" != "true" ]; then
+            if [ -n "$HINT_PR$HINT_SHA$HINT_RUN" ]; then
+              echo "Hinted run did not enter action_required within $DISPATCH_WAIT_ATTEMPTS attempts; exiting without approval (scheduled backstop remains)."
+            else
+              echo "No action_required ci runs awaiting approval."
+            fi
+            exit 0
+          fi
