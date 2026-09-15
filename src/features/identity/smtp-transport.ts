@@ -1,15 +1,17 @@
 import type { Env } from '../../env.js';
-import nodemailer, { type Transporter } from 'nodemailer';
+import { createWorkersSmtpSendMail } from './smtp-client.js';
 import { renderPasswordResetEmail, renderVerificationEmail } from './mail-templates.js';
 import type { AuthMailer, PasswordResetMessage, VerificationMessage } from './mailer.js';
 import { isAllowlisted, parseAllowlist } from './resend-transport.js';
 
-// Provider-neutral SMTP transactional-mail transport (ticket #58, ADR-0010).
-// This module is the only place that knows SMTP/Nodemailer exists: it speaks
-// SMTP through Nodemailer 10 ESM, renders message content through the
-// application-owned templates shared with the Resend adapter, and exposes the
-// result as the provider-independent `AuthMailer` boundary. Better Auth wiring
-// (`auth.ts`) and feature slices never import this module.
+// Provider-neutral SMTP transactional-mail transport (ticket #58, ADR-0010,
+// ticket #71 Workers runtime compatibility). This module is the only place
+// that knows SMTP exists: it speaks SMTP through the Workers-native client
+// (`smtp-client.ts`, built on the `cloudflare:sockets` TCP API), renders
+// message content through the application-owned templates shared with the
+// Resend adapter, and exposes the result as the provider-independent
+// `AuthMailer` boundary. Better Auth wiring (`auth.ts`) and feature slices
+// never import this module.
 //
 // The transport targets ordinary authenticated submission providers (Gmail,
 // Amazon SES SMTP, Exchange, client-owned SMTP services). There are no
@@ -30,12 +32,13 @@ import { isAllowlisted, parseAllowlist } from './resend-transport.js';
 //   `auth-mail.sandbox-skipped` telemetry and never reaches the provider.
 //
 // Transport security:
-// - every connection negotiates TLS: implicit TLS (`SMTP_SECURE=true`,
-//   typically port 465) or mandatory STARTTLS (`SMTP_SECURE=false`,
-//   typically port 587) via `requireTLS`;
-// - certificate verification is always enforced (`rejectUnauthorized: true`)
-//   and there is intentionally no supported configuration knob that disables
-//   it;
+// - every connection negotiates verified TLS: implicit TLS
+//   (`SMTP_SECURE=true`, typically port 465, `secureTransport: 'on'`) or
+//   mandatory STARTTLS (`SMTP_SECURE=false`, typically port 587,
+//   `secureTransport: 'starttls'` plus an explicit `startTls()` upgrade);
+// - certificate verification is always enforced by the Workers runtime TLS
+//   stack and there is intentionally no supported configuration knob that
+//   disables it;
 // - port 25 is rejected at configuration time: Cloudflare Workers cannot
 //   deliver through it and it implies unencrypted submission.
 //
@@ -94,8 +97,8 @@ type SmtpEnv = Pick<
 >;
 
 // Outbound message observed by the delivery seam. Tests inject a capturing
-// implementation; production builds a Nodemailer transporter lazily on first
-// send so importing this module never opens a connection.
+// implementation; production builds the Workers-native SMTP delivery lazily
+// on first send so importing this module never opens a connection.
 export interface SmtpOutboundMail {
   readonly from: string;
   readonly to: string;
@@ -203,32 +206,24 @@ function recipientDomain(to: string): string {
   return to.split('@')[1]?.toLowerCase() ?? 'invalid';
 }
 
-// Builds the production delivery seam from Nodemailer 10 ESM. The transporter
-// is created lazily so configuration resolution and module import never open
-// a connection; TLS is always negotiated and certificate verification can
-// never be disabled through supported application configuration.
-function createNodemailerSend(config: SmtpTransportConfig): SmtpSendMail {
-  let transporter: Transporter | null = null;
-  return async (mail) => {
-    transporter ??= nodemailer.createTransport({
-      host: config.host,
-      port: config.port,
-      secure: config.secure,
-      auth: { user: config.user, pass: config.pass },
-      requireTLS: !config.secure,
-      tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
-    });
-    const info = await transporter.sendMail({
-      from: mail.from,
-      to: mail.to,
-      subject: mail.subject,
-      html: mail.html,
-      text: mail.text,
-    });
-    return typeof info.messageId === 'string' && info.messageId.length > 0
-      ? { messageId: info.messageId }
-      : {};
-  };
+// Builds the production delivery seam from the Workers-native SMTP client.
+// The runtime `connect` is resolved lazily inside the first send so
+// configuration resolution and module import never open a connection; TLS is
+// always negotiated (implicit TLS or mandatory STARTTLS) and certificate
+// verification can never be disabled through supported application
+// configuration.
+//
+// Ticket #71: this replaced the previous Nodemailer 10 transport, whose
+// `node:tls` STARTTLS path the Workers runtime rejects. No Nodemailer
+// dependency remains.
+function createWorkersSmtpSend(config: SmtpTransportConfig): SmtpSendMail {
+  return createWorkersSmtpSendMail({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    user: config.user,
+    pass: config.pass,
+  });
 }
 
 export class SmtpAuthMailer implements AuthMailer {
@@ -238,7 +233,7 @@ export class SmtpAuthMailer implements AuthMailer {
 
   constructor(
     config: SmtpTransportConfig,
-    send: SmtpSendMail = createNodemailerSend(config),
+    send: SmtpSendMail = createWorkersSmtpSend(config),
     log: SmtpMailLogger = (record) => {
       console.log(JSON.stringify(record));
     },
