@@ -1,5 +1,6 @@
 import type { Env } from '../../env.js';
-import { createWorkersSmtpSendMail } from './smtp-client.js';
+import { createWorkersSmtpSendMail, SmtpDeliveryError } from './smtp-client.js';
+import type { SmtpFailurePhase } from './smtp-client.js';
 import { renderPasswordResetEmail, renderVerificationEmail } from './mail-templates.js';
 import type { AuthMailer, PasswordResetMessage, VerificationMessage } from './mailer.js';
 import { isAllowlisted, parseAllowlist } from './resend-transport.js';
@@ -52,6 +53,15 @@ export type SmtpMailPurpose = 'email-verification' | 'password-reset';
 // operational metadata: purpose, transport, recipient domain and provider
 // outcome. Recipient addresses, action URLs, tokens, bodies, usernames,
 // passwords and credentials are never fields of this record.
+//
+// Failure classification (ticket #73): `auth-mail.failed` records carry the
+// safe SMTP phase (`smtpPhase`, a closed set such as greeting, ehlo,
+// starttls, auth/username/password, mail-from, rcpt-to, data or message) and
+// the numeric SMTP reply code (`smtpReplyCode`) when the provider sent one.
+// Transport/network failures without an SMTP reply use `smtpPhase:
+// 'transport'` (or the phase where the connection dropped) with no reply
+// code, so they stay distinguishable without logging raw exception text.
+// `reason` keeps the stable `'send-failed'` value for compatibility.
 export interface SmtpMailLogRecord {
   readonly level: 'info' | 'warn' | 'error';
   readonly event: 'auth-mail.sent' | 'auth-mail.failed' | 'auth-mail.sandbox-skipped';
@@ -60,6 +70,8 @@ export interface SmtpMailLogRecord {
   readonly recipientDomain: string;
   readonly providerMessageId?: string;
   readonly reason?: string;
+  readonly smtpPhase?: SmtpFailurePhase;
+  readonly smtpReplyCode?: number;
 }
 
 // Narrow log sink seam: production defaults to structured console output
@@ -226,6 +238,20 @@ function createWorkersSmtpSend(config: SmtpTransportConfig): SmtpSendMail {
   });
 }
 
+// Maps a delivery throw to safe telemetry fields (ticket #73). Typed
+// `SmtpDeliveryError` values contribute their phase and reply code directly;
+// anything else (a rejected send seam, an unexpected throwable) is classified
+// as a `transport` failure with no reply code. Raw exception text is never
+// returned, so provider reply text and connection details cannot leak.
+function toSmtpFailure(error: unknown): { phase: SmtpFailurePhase; replyCode?: number } {
+  if (error instanceof SmtpDeliveryError) {
+    return error.replyCode === undefined
+      ? { phase: error.phase }
+      : { phase: error.phase, replyCode: error.replyCode };
+  }
+  return { phase: 'transport' };
+}
+
 export class SmtpAuthMailer implements AuthMailer {
   private readonly config: SmtpTransportConfig;
   private readonly send: SmtpSendMail;
@@ -299,7 +325,8 @@ export class SmtpAuthMailer implements AuthMailer {
         html: input.html,
         text: input.text,
       });
-    } catch {
+    } catch (error) {
+      const failure = toSmtpFailure(error);
       this.log({
         level: 'error',
         event: 'auth-mail.failed',
@@ -307,6 +334,8 @@ export class SmtpAuthMailer implements AuthMailer {
         transport: 'smtp',
         recipientDomain: domain,
         reason: 'send-failed',
+        smtpPhase: failure.phase,
+        ...(failure.replyCode === undefined ? {} : { smtpReplyCode: failure.replyCode }),
       });
       return;
     }

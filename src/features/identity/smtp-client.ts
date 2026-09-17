@@ -15,9 +15,11 @@
 // negotiates and verifies TLS and this module exposes no knob that disables
 // it. Port 25 stays rejected at configuration time (`smtp-transport.ts`).
 //
-// Redaction (ADR-0009): errors carry the SMTP phase and numeric reply code
-// only. Usernames, passwords, recipient addresses, action URLs, tokens and
-// message bodies never enter error messages or logs.
+// Redaction (ADR-0009): errors carry the typed SMTP phase and optional
+// numeric reply code only (ticket #73). Usernames, passwords, recipient
+// addresses, action URLs, tokens and message bodies never enter error messages
+// or logs. Telemetry consumers must read `phase`/`replyCode`, never parse
+// message strings.
 
 export interface WorkersSmtpConfig {
   readonly host: string;
@@ -65,10 +67,81 @@ export interface WorkersSmtpDelivery {
 
 const encoder = new TextEncoder();
 
-// Marker for errors that are already redacted (phase + numeric code only).
-// Anything else observed mid-delivery is wrapped in this type with a generic
-// message so transport internals can never leak secrets.
-export class SmtpDeliveryError extends Error {}
+// Closed SMTP failure phase for safe telemetry (ticket #73). This literal
+// union (`literalUnion`) identifies the SMTP operation that failed without
+// carrying provider reply text, usernames, passwords, addresses, URLs, tokens
+// or bodies. `transport` covers failures with no attributable operation
+// (unknown throwables, local stream setup); `connect` covers TCP/TLS
+// establishment before any SMTP reply; `quit` is best-effort today and kept
+// in the union so future surfacing stays typed.
+export type SmtpFailurePhase =
+  | 'connect'
+  | 'greeting'
+  | 'ehlo'
+  | 'starttls'
+  | 'auth'
+  | 'username'
+  | 'password'
+  | 'mail-from'
+  | 'rcpt-to'
+  | 'data'
+  | 'message'
+  | 'quit'
+  | 'envelope'
+  | 'transport';
+
+// Narrow safe cause for failures without an SMTP reply code. Every cause maps
+// to a hardcoded redacted message below; user-controlled values can never
+// become part of the message.
+export type SmtpFailureCause =
+  'transport-error' | 'connection-closed' | 'invalid-hostname' | 'invalid-address';
+
+export interface SmtpDeliveryErrorOptions {
+  readonly replyCode?: number;
+  readonly cause?: SmtpFailureCause;
+  // Address field for the `invalid-address` cause only; a closed safe set.
+  readonly field?: 'from' | 'to';
+}
+
+// Marker for errors that are already redacted (typed phase plus an optional
+// numeric reply code). Anything else observed mid-delivery is wrapped in this
+// type with a generic transport phase so transport internals can never leak
+// secrets. Prefer reading `phase`/`replyCode` over parsing `message`.
+export class SmtpDeliveryError extends Error {
+  readonly phase: SmtpFailurePhase;
+  readonly replyCode?: number;
+
+  constructor(phase: SmtpFailurePhase, options: SmtpDeliveryErrorOptions = {}) {
+    super(SmtpDeliveryError.redactedMessage(phase, options));
+    this.name = 'SmtpDeliveryError';
+    this.phase = phase;
+    if (options.replyCode !== undefined) {
+      this.replyCode = options.replyCode;
+    }
+  }
+
+  private static redactedMessage(
+    phase: SmtpFailurePhase,
+    options: SmtpDeliveryErrorOptions,
+  ): string {
+    if (options.replyCode !== undefined) {
+      return `SMTP delivery failed during ${phase}: reply code ${String(options.replyCode)}.`;
+    }
+    if (options.cause === 'connection-closed') {
+      return `SMTP delivery failed during ${phase}: connection closed unexpectedly.`;
+    }
+    if (options.cause === 'invalid-hostname') {
+      return `SMTP delivery failed during ${phase}: invalid client hostname.`;
+    }
+    if (options.cause === 'invalid-address') {
+      return `SMTP delivery failed during ${phase}: invalid ${options.field ?? 'from'} address.`;
+    }
+    if (phase === 'transport') {
+      return 'SMTP delivery failed: transport error.';
+    }
+    return `SMTP delivery failed during ${phase}: transport error.`;
+  }
+}
 
 function toBase64Utf8(value: string): string {
   const bytes = encoder.encode(value);
@@ -86,7 +159,7 @@ function sanitizeHeader(value: string): string {
 function sanitizeHelo(value: string): string {
   const cleaned = sanitizeHeader(value);
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$/.test(cleaned)) {
-    throw new SmtpDeliveryError('SMTP delivery failed during ehlo: invalid client hostname.');
+    throw new SmtpDeliveryError('ehlo', { cause: 'invalid-hostname' });
   }
   return cleaned;
 }
@@ -117,7 +190,7 @@ function extractEnvelopeAddress(value: string, field: 'from' | 'to'): string {
   const angled = /<([^<>\s@]+@[^<>\s@]+)>/.exec(value);
   const address = (angled?.[1] ?? value).trim();
   if (!/^[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+$/.test(address)) {
-    throw new SmtpDeliveryError(`SMTP delivery failed during envelope: invalid ${field} address.`);
+    throw new SmtpDeliveryError('envelope', { cause: 'invalid-address', field });
   }
   return address;
 }
@@ -184,34 +257,36 @@ class SmtpProtocolSession {
     this.writer = socket.writable.getWriter();
   }
 
-  async readReply(phase: string, expected: readonly number[]): Promise<void> {
+  async readReply(phase: SmtpFailurePhase, expected: readonly number[]): Promise<void> {
     for (;;) {
-      const read = await this.reader.read();
-      if (read.done) {
-        throw new SmtpDeliveryError(
-          `SMTP delivery failed during ${phase}: connection closed unexpectedly.`,
-        );
+      const read = await this.reader.read().then(
+        (result) => ({ ok: true as const, result }),
+        () => ({ ok: false as const }),
+      );
+      if (!read.ok) {
+        throw new SmtpDeliveryError(phase);
       }
-      this.buffer += this.textDecoder.decode(read.value, { stream: true });
+      if (read.result.done) {
+        throw new SmtpDeliveryError(phase, { cause: 'connection-closed' });
+      }
+      this.buffer += this.textDecoder.decode(read.result.value, { stream: true });
       const reply = parseCompleteReply(this.buffer);
       if (reply === null) {
         continue;
       }
       this.buffer = '';
       if (!expected.includes(reply.code)) {
-        throw new SmtpDeliveryError(
-          `SMTP delivery failed during ${phase}: reply code ${String(reply.code)}.`,
-        );
+        throw new SmtpDeliveryError(phase, { replyCode: reply.code });
       }
       return;
     }
   }
 
-  async command(phase: string, text: string, expected: readonly number[]): Promise<void> {
+  async command(phase: SmtpFailurePhase, text: string, expected: readonly number[]): Promise<void> {
     try {
       await this.writer.write(encoder.encode(`${text}\r\n`));
     } catch {
-      throw new SmtpDeliveryError(`SMTP delivery failed during ${phase}: transport error.`);
+      throw new SmtpDeliveryError(phase);
     }
     await this.readReply(phase, expected);
   }
@@ -220,17 +295,23 @@ class SmtpProtocolSession {
     try {
       await this.writer.write(encoder.encode(`${message}.\r\n`));
     } catch {
-      throw new SmtpDeliveryError('SMTP delivery failed during message: transport error.');
+      throw new SmtpDeliveryError('message');
     }
   }
 
   // Upgrades the STARTTLS plaintext connection to TLS. Existing readers and
   // writers stop working after `startTls()`, so locks are released first and
-  // fresh ones are acquired from the returned secure socket.
+  // fresh ones are acquired from the returned secure socket. An upgrade
+  // failure is typed to the `starttls` phase; the outer delivery handler
+  // closes the session.
   upgradeToTls(): void {
     this.reader.releaseLock();
     this.writer.releaseLock();
-    this.socket = this.socket.startTls();
+    try {
+      this.socket = this.socket.startTls();
+    } catch {
+      throw new SmtpDeliveryError('starttls');
+    }
     this.reader = this.socket.readable.getReader();
     this.writer = this.socket.writable.getWriter();
     this.buffer = '';
@@ -279,10 +360,15 @@ export async function deliverViaWorkersSmtp(
 ): Promise<{ messageId?: string }> {
   const { config, envelope } = delivery;
   const helo = sanitizeHelo(delivery.heloName ?? 'user-service.local');
-  const socket = delivery.connect(
-    { hostname: config.host, port: config.port },
-    { secureTransport: config.secure ? 'on' : 'starttls' },
-  );
+  let socket: WorkersSmtpSocket;
+  try {
+    socket = delivery.connect(
+      { hostname: config.host, port: config.port },
+      { secureTransport: config.secure ? 'on' : 'starttls' },
+    );
+  } catch {
+    throw new SmtpDeliveryError('connect');
+  }
   const session = new SmtpProtocolSession(socket);
   try {
     await session.readReply('greeting', [220]);
@@ -315,7 +401,7 @@ export async function deliverViaWorkersSmtp(
     if (error instanceof SmtpDeliveryError) {
       throw error;
     }
-    throw new SmtpDeliveryError('SMTP delivery failed: transport error.');
+    throw new SmtpDeliveryError('transport');
   }
 }
 
