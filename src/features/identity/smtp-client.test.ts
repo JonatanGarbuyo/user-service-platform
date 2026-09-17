@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createWorkersSmtpSendMail,
   deliverViaWorkersSmtp,
+  SmtpDeliveryError,
   type WorkersSmtpConnect,
   type WorkersSmtpEnvelope,
 } from './smtp-client.js';
@@ -257,6 +258,79 @@ describe('deliverViaWorkersSmtp failure redaction', () => {
     expect(failure ?? '').not.toContain('mailer@example.com');
     expect(failure ?? '').not.toContain('secret-token');
     expect(failure ?? '').not.toContain('ada@example.com');
+  });
+
+  it('exposes the typed SMTP phase and reply code on AUTH failure', async () => {
+    const script = greetingThen(
+      '250-smtp.example.com greets worker\r\n250 8BITMIME\r\n',
+      '220 2.0.0 Ready to start TLS\r\n',
+      '250-smtp.example.com greets worker\r\n250 AUTH LOGIN PLAIN\r\n',
+      '334 VXNlcm5hbWU6\r\n',
+      '334 UGFzc3dvcmQ6\r\n',
+      '535 5.7.8 Authentication credentials invalid\r\n',
+    );
+    const { connect } = fakeConnect(script);
+
+    const failure = await deliverViaWorkersSmtp({
+      config: {
+        host: 'smtp.example.com',
+        port: 587,
+        secure: false,
+        user: 'mailer@example.com',
+        pass: 's3cret-password-do-not-use',
+      },
+      envelope: ENVELOPE,
+      connect,
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(SmtpDeliveryError);
+    const deliveryError = failure as SmtpDeliveryError;
+    expect(deliveryError.phase).toBe('password');
+    expect(deliveryError.replyCode).toBe(535);
+    expect(deliveryError.message).toContain('535');
+    expect(deliveryError.message).not.toContain('s3cret-password-do-not-use');
+    expect(deliveryError.message).not.toContain('mailer@example.com');
+  });
+
+  it('exposes a transport phase without a reply code when the greeting closes', async () => {
+    const { connect } = fakeConnect([]);
+    const closedConnect: WorkersSmtpConnect = (address, options) => {
+      const socket = connect(address, options);
+      return {
+        ...socket,
+        readable: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+      };
+    };
+
+    const failure = await deliverViaWorkersSmtp({
+      config: {
+        host: 'smtp.example.com',
+        port: 587,
+        secure: false,
+        user: 'mailer@example.com',
+        pass: 's3cret-password-do-not-use',
+      },
+      envelope: ENVELOPE,
+      connect: closedConnect,
+    }).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(SmtpDeliveryError);
+    const deliveryError = failure as SmtpDeliveryError;
+    expect(deliveryError.phase).toBe('greeting');
+    expect(deliveryError.replyCode).toBeUndefined();
+    expect(deliveryError.message).not.toContain('s3cret-password-do-not-use');
+    expect(deliveryError.message).not.toContain('mailer@example.com');
+    expect(deliveryError.message).not.toContain('ada@example.com');
   });
 
   it('dot-stuffs body lines that begin with a dot', async () => {

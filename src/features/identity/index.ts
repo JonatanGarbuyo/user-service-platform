@@ -36,6 +36,7 @@ export type {
   SmtpSendResult,
   SmtpTransportConfig,
 } from './mailer.js';
+export type { SmtpFailurePhase } from './mailer.js';
 export type { AuthPolicy } from './policy.js';
 export { DEFAULT_AUTH_POLICY, resolveAuthPolicy } from './policy.js';
 export type { BootstrapAdminInput, BootstrapAdminOutcome } from './admin.js';

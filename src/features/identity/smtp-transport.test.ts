@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Env } from '../../env.js';
 import { InMemoryAuthMailer, resolveAuthMailer, SmtpAuthMailer } from './mailer.js';
+import { SmtpDeliveryError } from './smtp-client.js';
 import {
   resolveSmtpConfig,
   type SmtpMailLogRecord,
@@ -275,6 +276,81 @@ describe('SmtpAuthMailer', () => {
     expect(transcript).not.toContain('secret-token');
     expect(transcript).not.toContain('https://example.com/verify');
     expect(transcript).not.toContain('s3cret-password-do-not-use');
+  });
+
+  it('propagates the safe SMTP phase and reply code for AUTH failures', async () => {
+    const records: SmtpMailLogRecord[] = [];
+    const mailer = new SmtpAuthMailer(
+      resolveSmtpConfig(smtpEnv()),
+      () =>
+        Promise.reject(
+          new SmtpDeliveryError('password', {
+            replyCode: 535,
+          }),
+        ),
+      (record) => {
+        records.push(record);
+      },
+    );
+
+    await mailer.sendVerificationEmail({
+      to: 'ada@example.com',
+      url: 'https://example.com/verify?token=secret-token',
+      token: 'secret-token',
+    });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      level: 'error',
+      event: 'auth-mail.failed',
+      purpose: 'email-verification',
+      transport: 'smtp',
+      recipientDomain: 'example.com',
+      reason: 'send-failed',
+      smtpPhase: 'password',
+      smtpReplyCode: 535,
+    });
+    const transcript = JSON.stringify(records);
+    expect(transcript).not.toContain('secret-token');
+    expect(transcript).not.toContain('https://example.com/verify');
+    expect(transcript).not.toContain('s3cret-password-do-not-use');
+    expect(transcript).not.toContain('mailer@example.com');
+    expect(transcript).not.toContain('ada@example.com');
+  });
+
+  it('marks transport failures without an SMTP reply as transport phase', async () => {
+    const records: SmtpMailLogRecord[] = [];
+    const mailer = new SmtpAuthMailer(
+      resolveSmtpConfig(smtpEnv()),
+      () => Promise.reject(new Error('connection reset by 10.0.0.1: provider says bad thing')),
+      (record) => {
+        records.push(record);
+      },
+    );
+
+    await mailer.sendVerificationEmail({
+      to: 'ada@example.com',
+      url: 'https://example.com/verify?token=secret-token',
+      token: 'secret-token',
+    });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      level: 'error',
+      event: 'auth-mail.failed',
+      purpose: 'email-verification',
+      transport: 'smtp',
+      recipientDomain: 'example.com',
+      reason: 'send-failed',
+      smtpPhase: 'transport',
+    });
+    expect(records[0]).not.toHaveProperty('smtpReplyCode');
+    const transcript = JSON.stringify(records);
+    expect(transcript).not.toContain('connection reset');
+    expect(transcript).not.toContain('10.0.0.1');
+    expect(transcript).not.toContain('secret-token');
+    expect(transcript).not.toContain('https://example.com/verify');
+    expect(transcript).not.toContain('ada@example.com');
   });
 });
 

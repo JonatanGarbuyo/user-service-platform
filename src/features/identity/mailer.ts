@@ -158,3 +158,5 @@ export type {
   SmtpSendResult,
   SmtpTransportConfig,
 } from './smtp-transport.js';
+export type { SmtpFailureCause, SmtpFailurePhase } from './smtp-client.js';
+export { SmtpDeliveryError } from './smtp-client.js';
