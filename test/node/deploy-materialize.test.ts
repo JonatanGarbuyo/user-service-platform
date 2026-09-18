@@ -12,6 +12,10 @@ import {
   writeTempWranglerConfig,
 } from '../../scripts/deploy/materialize.js';
 import type { ResolvedDeployment } from '../../scripts/deploy/targets.js';
+import {
+  CONTRACT_PRODUCTION_DATABASE_ID,
+  CONTRACT_SANDBOX_DATABASE_ID,
+} from './deploy-test-utils.js';
 
 const SANDBOX_RESOLVED: ResolvedDeployment = {
   targetKey: 'rch-rugbychampagne',
@@ -21,7 +25,7 @@ const SANDBOX_RESOLVED: ResolvedDeployment = {
   environment: 'sandbox',
   workerName: 'rch-rugbychampagne-user-service-sandbox',
   databaseName: 'rch-rugbychampagne-user-service-sandbox-db',
-  databaseId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+  databaseId: CONTRACT_SANDBOX_DATABASE_ID,
   vars: {
     AUTH_MAIL_TRANSPORT: 'resend',
     AUTH_MAIL_FROM: 'User Service <jg@ingalatech.com>',
@@ -52,7 +56,7 @@ describe('wrangler config materialization', () => {
       {
         binding: 'DB',
         database_name: 'rch-rugbychampagne-user-service-sandbox-db',
-        database_id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        database_id: CONTRACT_SANDBOX_DATABASE_ID,
         migrations_dir: 'drizzle',
       },
     ]);
@@ -78,7 +82,7 @@ describe('wrangler config materialization', () => {
       environment: 'production',
       workerName: 'rch-rugbychampagne-user-service-production',
       databaseName: 'rch-rugbychampagne-user-service-production-db',
-      databaseId: 'b2c3d4e5f60718293a4b5c6d7e8f90a1',
+      databaseId: CONTRACT_PRODUCTION_DATABASE_ID,
       vars: { AUTH_MAIL_TRANSPORT: 'resend' },
     });
     const sandboxDatabases = (configOf(buildTargetWranglerConfig(SANDBOX_RESOLVED)) ?? []) as {

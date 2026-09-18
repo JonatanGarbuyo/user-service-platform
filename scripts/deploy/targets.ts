@@ -215,16 +215,21 @@ export function loadTargetsFile(data: unknown): TargetsFile {
   return { version: 1, service, targets };
 }
 
-const DATABASE_ID_PATTERN = /^[0-9a-fA-F]{32}$/;
+const DATABASE_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-// Provisioned database ids are 32 hex characters. Uniform ids (`aaaa…`,
-// `bbbb…`) match the repository placeholder convention and are never real
-// Cloudflare-issued identifiers, so they fail closed like an empty slot.
+// Provisioned database ids are canonical Cloudflare D1 identifiers in UUID
+// form (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) as emitted by Wrangler.
+// Uniform ids (`aaaa…`, `bbbb…`, nil UUID, …) match the repository
+// placeholder convention and are never real Cloudflare-issued identifiers,
+// so they fail closed like an empty slot. Unhyphenated 32-hex strings are
+// synthetic test fixtures, not Wrangler-issued ids, and are rejected.
 export function isProvisionedDatabaseId(databaseId: string): boolean {
   if (!DATABASE_ID_PATTERN.test(databaseId)) {
     return false;
   }
-  return !databaseId.split('').every((char) => char === databaseId[0]);
+  const hex = databaseId.replace(/-/g, '').toLowerCase();
+  return !hex.split('').every((char) => char === hex[0]);
 }
 
 // Provisioning gate: an empty, malformed or placeholder database id means the

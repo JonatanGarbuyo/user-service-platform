@@ -7,6 +7,10 @@ import {
   type DeployIo,
 } from '../../scripts/deploy/orchestrate.js';
 import type { ResolvedDeployment } from '../../scripts/deploy/targets.js';
+import {
+  CONTRACT_PRODUCTION_DATABASE_ID,
+  CONTRACT_SANDBOX_DATABASE_ID,
+} from './deploy-test-utils.js';
 
 const SANDBOX: ResolvedDeployment = {
   targetKey: 'rch-rugbychampagne',
@@ -16,7 +20,7 @@ const SANDBOX: ResolvedDeployment = {
   environment: 'sandbox',
   workerName: 'rch-rugbychampagne-user-service-sandbox',
   databaseName: 'rch-rugbychampagne-user-service-sandbox-db',
-  databaseId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+  databaseId: CONTRACT_SANDBOX_DATABASE_ID,
   vars: { AUTH_MAIL_TRANSPORT: 'resend' },
 };
 
@@ -25,7 +29,7 @@ const PRODUCTION: ResolvedDeployment = {
   environment: 'production',
   workerName: 'rch-rugbychampagne-user-service-production',
   databaseName: 'rch-rugbychampagne-user-service-production-db',
-  databaseId: 'b2c3d4e5f60718293a4b5c6d7e8f90a1',
+  databaseId: CONTRACT_PRODUCTION_DATABASE_ID,
 };
 
 const CANARY = 'canary-deploy-secret-abcdef123456';
