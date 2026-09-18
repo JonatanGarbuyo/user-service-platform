@@ -29,8 +29,10 @@
 //
 // When the runner reaches each mail stage it prints a prompt naming the
 // expected token variable; paste the `token` query parameter from the
-// delivered action URL. Pre-supplying `ACCEPTANCE_VERIFICATION_TOKEN` and/or
-// `ACCEPTANCE_RESET_TOKEN` in the environment skips the corresponding prompt.
+// delivered action URL. Terminal echo stays disabled while pasting, so token
+// contents never appear in the visible transcript. Pre-supplying
+// `ACCEPTANCE_VERIFICATION_TOKEN` and/or `ACCEPTANCE_RESET_TOKEN` in the
+// environment skips the corresponding prompt.
 //
 // Redaction (ADR-0009, ADR-0010): this script logs only HTTP method, path,
 // status and stable problem codes plus the non-secret evidence summary
@@ -40,7 +42,11 @@
 // in-memory transport; this operational runner is distinct from ordinary CI
 // tests and never runs there.
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { Writable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 
 // Ordered runner stages (ticket #60). The reset/migrations/boot prerequisites
 // (`npm run db:local:reset` reapplies the canonical migrations;
@@ -157,10 +163,57 @@ export function requireEmailActionToken(
   return token;
 }
 
+export interface HiddenPromptStreams {
+  readonly input?: NodeJS.ReadableStream;
+  readonly output?: NodeJS.WritableStream;
+}
+
+function isTtyInput(input: unknown): boolean {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    (input as { readonly isTTY?: unknown }).isTTY === true
+  );
+}
+
+// Reads one line without echoing its contents to the terminal. The prompt is
+// written to `output`, while readline's own echo goes to a muted sink so
+// pasted token contents never appear in the visible transcript. Terminal mode
+// keeps the terminal emulator's own echo disabled while reading, which is the
+// defect the previous `output: process.stdout` prompt had: the terminal
+// echoed every pasted character. Callers must still check for a TTY before
+// prompting; this helper only performs the hidden read.
+export async function readHiddenLine(
+  prompt: string,
+  streams: HiddenPromptStreams = {},
+): Promise<string> {
+  const input = streams.input ?? process.stdin;
+  const output = streams.output ?? process.stdout;
+  output.write(prompt);
+  const muted = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const rl = createInterface({ input, output: muted, terminal: true });
+  try {
+    return (await rl.question('')).trim();
+  } finally {
+    rl.close();
+    output.write('\n');
+  }
+}
+
 // Prompts the operator for a delivered email-action token mid-run. The prompt
-// names only the variable; the pasted value is never echoed into logs.
-async function promptForEmailActionToken(name: EmailActionTokenName): Promise<string> {
-  if (!process.stdin.isTTY) {
+// names only the variable; terminal echo stays disabled while the value is
+// pasted, so token contents never appear in the visible transcript, and the
+// pasted value is never written into logs.
+export function promptForEmailActionToken(
+  name: EmailActionTokenName,
+  streams: HiddenPromptStreams = {},
+): Promise<string> {
+  const input = streams.input ?? process.stdin;
+  if (!isTtyInput(input)) {
     throw new Error(
       `${name} is required (token from the delivered email); re-run with it set in the environment.`,
     );
@@ -168,14 +221,9 @@ async function promptForEmailActionToken(name: EmailActionTokenName): Promise<st
   const prompt =
     `Open the delivered email, extract the token query parameter from its action URL, ` +
     `and paste it as ${name}: `;
-  process.stdout.write(prompt);
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question('')).trim();
-    return requireEmailActionToken(answer.length > 0 ? answer : undefined, name);
-  } finally {
-    rl.close();
-  }
+  return readHiddenLine(prompt, streams).then((answer) =>
+    requireEmailActionToken(answer.length > 0 ? answer : undefined, name),
+  );
 }
 
 // Returns the pre-supplied token when present, otherwise prompts mid-run so a
@@ -287,9 +335,74 @@ function resolveTestedCommit(): string {
   }
 }
 
-function resolveTransportName(env: AcceptanceEnv = process.env): string {
-  const transport = readEnv(env, 'AUTH_MAIL_TRANSPORT');
-  return transport.length > 0 ? transport : 'unknown';
+// Minimal dotenv lookup for the ignored local overrides file (ticket #75).
+// The documented local procedure keeps `AUTH_MAIL_TRANSPORT` (and local
+// secrets) in the root `.env` consumed by `npm run dev:local` via
+// `wrangler dev --env-file .env`; the separate `tsx` acceptance process does
+// not inherit that file, so transport provenance falls back to reading it
+// here. Only the requested non-secret name is ever returned; every other
+// entry (notably secrets) is skipped, and no value is ever logged.
+export function parseDotEnvValue(content: string, name: string): string | undefined {
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue;
+    }
+    const assignment = trimmed.startsWith('export ')
+      ? trimmed.slice('export '.length).trim()
+      : trimmed;
+    const separator = assignment.indexOf('=');
+    if (separator < 0) {
+      continue;
+    }
+    if (assignment.slice(0, separator).trim() !== name) {
+      continue;
+    }
+    let value = assignment.slice(separator + 1).trim();
+    const quote = value.charAt(0);
+    if (quote === '"' || quote === "'") {
+      const closing = value.indexOf(quote, 1);
+      value = closing > 0 ? value.slice(1, closing) : value.slice(1);
+    } else {
+      const comment = value.indexOf('#');
+      value = (comment >= 0 ? value.slice(0, comment) : value).trim();
+    }
+    return value.length > 0 ? value : undefined;
+  }
+  return undefined;
+}
+
+const acceptanceRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Resolves the real mail transport name for the acceptance summary. The
+// process environment wins so explicit overrides keep working; otherwise the
+// documented ignored local overrides file (`<repo>/.env`, the same file
+// `npm run dev:local` loads) supplies the name, so the documented command
+// works from a clean clone without duplicating the variable. Only the
+// transport name crosses this boundary; every other entry from that file
+// is discarded, and no secret is ever retained or logged. A
+// missing/unreadable file falls through to `unknown` rather than failing
+// the run.
+export function resolveTransportName(
+  env: AcceptanceEnv = process.env,
+  rootDir: string = acceptanceRepoRoot,
+): string {
+  const direct = readEnv(env, 'AUTH_MAIL_TRANSPORT');
+  if (direct.length > 0) {
+    return direct;
+  }
+  try {
+    const fromFile = parseDotEnvValue(
+      readFileSync(resolve(rootDir, '.env'), 'utf8'),
+      'AUTH_MAIL_TRANSPORT',
+    );
+    if (fromFile !== undefined && fromFile.length > 0) {
+      return fromFile;
+    }
+  } catch {
+    // No readable overrides file; fall through to unknown.
+  }
+  return 'unknown';
 }
 
 function logStep(label: string, status: number, detail: string): void {

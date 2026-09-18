@@ -104,10 +104,11 @@ corresponding token variable.
    verification email delivered to `ACCEPTANCE_EMAIL` through your selected
    transport.
 2. Extract the `token` query parameter from the verification action URL and
-   paste it at the prompt; the runner continues through sign-in, sign-out,
-   and password recovery.
+   paste it at the prompt; terminal echo stays disabled while pasting, so the
+   token contents never appear in the visible transcript. The runner continues
+   through sign-in, sign-out, and password recovery.
 3. When the runner prompts for `ACCEPTANCE_RESET_TOKEN`, repeat the same
-   interaction with the reset email.
+   interaction with the reset email (also with hidden input).
 
 Registration and password recovery each produce a real message through the
 selected transport; verification and reset complete through the real
@@ -156,7 +157,12 @@ The runner logs one JSON line per stage (method, path, status, stable
 `pass`/problem-code outcome) plus a final `acceptance-summary` record with
 the exact tested commit (`git rev-parse HEAD`), the selected transport by
 name, per-stage outcomes (stage name, HTTP status, and stable outcome), and
-`eligibility: eligible | ineligible`. The machine `acceptance-summary`
+`eligibility: eligible | ineligible`. The transport name resolves from the
+runner environment, falling back to the documented ignored root `.env` (the
+same file `npm run dev:local` loads), so the documented command records
+`smtp` or `resend` without extra environment duplication; it is recorded by
+name only and every other entry from that file is discarded — no secret is
+ever retained or logged. The machine `acceptance-summary`
 covers exactly the runner stages listed in section 5. Keep the full terminal
 transcript — including the `db:local:reset` completion output and the Worker
 boot log — as the evidence record: together they show the
