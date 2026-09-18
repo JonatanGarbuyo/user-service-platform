@@ -6,11 +6,11 @@ import { loadTargetsFile, type TargetsFile } from '../../scripts/deploy/targets.
 // resolve a provisioned copy of the same versioned file, so naming and
 // isolation assertions track `deploy/targets.json` from one place.
 
-// Deterministic non-uniform ids standing in for the out-of-band provisioned
+// Deterministic non-uniform UUIDs standing in for the out-of-band provisioned
 // database ids recorded in `deploy/targets.json` during first-time target
 // provisioning (see docs/operations/sandbox-release-runbook.md).
-export const CONTRACT_SANDBOX_DATABASE_ID = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
-export const CONTRACT_PRODUCTION_DATABASE_ID = 'b2c3d4e5f60718293a4b5c6d7e8f90a1';
+export const CONTRACT_SANDBOX_DATABASE_ID = 'a1b2c3d4-e5f6-4789-a3b5-c6d7e8f90a1b';
+export const CONTRACT_PRODUCTION_DATABASE_ID = 'b2c3d4e5-f607-4828-b4c5-d6e7f90a1b2c';
 
 export function loadTargetsFromRepo(): TargetsFile {
   const raw = readFileSync('deploy/targets.json', 'utf8');

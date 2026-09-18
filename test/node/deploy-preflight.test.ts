@@ -7,6 +7,7 @@ import {
   type PreflightDeps,
 } from '../../scripts/deploy/preflight.js';
 import type { ResolvedDeployment } from '../../scripts/deploy/targets.js';
+import { CONTRACT_SANDBOX_DATABASE_ID } from './deploy-test-utils.js';
 
 const RESOLVED: ResolvedDeployment = {
   targetKey: 'rch-rugbychampagne',
@@ -16,7 +17,7 @@ const RESOLVED: ResolvedDeployment = {
   environment: 'sandbox',
   workerName: 'rch-rugbychampagne-user-service-sandbox',
   databaseName: 'rch-rugbychampagne-user-service-sandbox-db',
-  databaseId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+  databaseId: CONTRACT_SANDBOX_DATABASE_ID,
   vars: { AUTH_MAIL_TRANSPORT: 'resend' },
 };
 

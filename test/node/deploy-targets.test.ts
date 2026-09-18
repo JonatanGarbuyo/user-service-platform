@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isProvisionedDatabaseId,
   loadTargetsFile,
   resolveTargetDeployment,
   type TargetsFile,
@@ -146,25 +147,82 @@ describe('deployment targets', () => {
 
   it('rejects placeholder database ids rather than deploying against them', () => {
     const file = readTargetsFile();
-    const placeholder: TargetsFile = {
-      ...file,
-      targets: file.targets.map((entry) => ({
-        ...entry,
-        environments: {
-          ...entry.environments,
-          sandbox: {
-            ...entry.environments.sandbox,
-            databaseId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    for (const databaseId of [
+      // Legacy synthetic 32-hex fixture (ticket #78 era, never Wrangler-issued).
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      // Uniform UUID placeholders (never real Cloudflare-issued identifiers).
+      'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      '00000000-0000-0000-0000-000000000000',
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    ]) {
+      const placeholder: TargetsFile = {
+        ...file,
+        targets: file.targets.map((entry) => ({
+          ...entry,
+          environments: {
+            ...entry.environments,
+            sandbox: {
+              ...entry.environments.sandbox,
+              databaseId,
+            },
           },
-        },
-      })),
-    };
-    expect(() =>
-      resolveTargetDeployment(placeholder, {
-        target: 'rch-rugbychampagne',
-        environment: 'sandbox',
-      }),
-    ).toThrow(/provision|placeholder/i);
+        })),
+      };
+      expect(() =>
+        resolveTargetDeployment(placeholder, {
+          target: 'rch-rugbychampagne',
+          environment: 'sandbox',
+        }),
+      ).toThrow(/provision|placeholder/i);
+    }
+  });
+
+  // Ticket #83: the deployer must accept the canonical Wrangler-provisioned
+  // D1 identifier shape while failing closed for empty, malformed,
+  // placeholder or obviously synthetic ids (never arbitrary strings).
+  it('accepts the real provisioned Cloudflare D1 UUID shape', () => {
+    expect(isProvisionedDatabaseId('5a35dea8-f472-4760-b8ee-c4cbbd56ef06')).toBe(true);
+  });
+
+  it('rejects empty, malformed, placeholder and synthetic database ids', () => {
+    for (const databaseId of [
+      '',
+      'not-a-uuid',
+      'provision-later',
+      'YOUR_DATABASE_ID',
+      // Legacy synthetic 32-hex: never a Wrangler-issued id.
+      'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      // Wrong UUID group lengths / non-hex / missing hyphens / padding.
+      '5a35dea8f4724760b8eec4cbbd56ef06',
+      '5a35dea8-f472-4760-b8ee-c4cbbd56ef0',
+      '5a35dea8-f472-4760-b8ee-c4cbbd56ef060',
+      'ga35dea8-f472-4760-b8ee-c4cbbd56ef06',
+      '5a35dea8_f472_4760_b8ee_c4cbbd56ef06',
+      ' 5a35dea8-f472-4760-b8ee-c4cbbd56ef06',
+      '5a35dea8-f472-4760-b8ee-c4cbbd56ef06 ',
+      // Uniform placeholders in UUID form.
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      '00000000-0000-0000-0000-000000000000',
+      'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF',
+    ]) {
+      expect(isProvisionedDatabaseId(databaseId)).toBe(false);
+    }
+  });
+
+  it('resolves the versioned RCH sandbox target with its recorded real D1 id', () => {
+    const file = readTargetsFile();
+    const recorded = file.targets.find((entry) => entry.key === 'rch-rugbychampagne')?.environments
+      .sandbox.databaseId;
+    expect(recorded).toBe('5a35dea8-f472-4760-b8ee-c4cbbd56ef06');
+    const resolved = resolveTargetDeployment(file, {
+      target: 'rch-rugbychampagne',
+      environment: 'sandbox',
+    });
+    expect(resolved.workerName).toBe('rch-rugbychampagne-user-service-sandbox');
+    expect(resolved.databaseName).toBe('rch-rugbychampagne-user-service-sandbox-db');
+    expect(resolved.databaseId).toBe('5a35dea8-f472-4760-b8ee-c4cbbd56ef06');
   });
 
   it('rejects malformed target files', () => {
