@@ -3,15 +3,28 @@ name: promote-production
 on:
   # Explicit human-controlled promotion only (ADR-0008, ticket #14). This
   # workflow intentionally has no push or pull_request trigger: merging to main
-  # deploys sandbox via deploy-sandbox.yml and must never mutate production.
+  # deploys the configured sandbox target via deploy-sandbox.yml and must
+  # never mutate production.
+  #
+  # Target-aware promotion (ticket #78): this workflow invokes the same
+  # repository deploy boundary as a local operator
+  # (`npm run deploy:production`) for the selected target. Production proceeds
+  # only when `confirm_production` exactly equals the target production Worker
+  # name (enforced by the deployer before any remote mutation); the workflow
+  # itself refuses an empty confirmation first.
   workflow_dispatch:
     inputs:
       source_commit:
         description: 'Git SHA on main to promote to production'
         required: true
         type: string
+      target:
+        description: 'Deployment target key from deploy/targets.json'
+        required: true
+        default: 'rch-rugbychampagne'
+        type: string
       confirm_production:
-        description: 'Type PROMOTE to confirm a production mutation'
+        description: 'Target production Worker name to confirm a production mutation'
         required: true
         type: string
 
@@ -38,8 +51,8 @@ jobs:
           CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
         run: |
           set -euo pipefail
-          if [ "$CONFIRM_PRODUCTION" != "PROMOTE" ]; then
-            echo "Refusing production promotion without explicit PROMOTE confirmation."
+          if [ -z "$CONFIRM_PRODUCTION" ]; then
+            echo "Refusing production promotion without an explicit Worker-name confirmation."
             exit 1
           fi
 
@@ -66,16 +79,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply D1 migrations to production
-        run: npx wrangler d1 migrations apply DB --env production --remote
-
-      - name: Deploy Worker to production
-        run: npx wrangler deploy --env production
-
-      - name: Record production deployment
+      - name: Promote the target to production
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
+          TARGET: ${{ inputs.target }}
+          CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
         run: |
           set -euo pipefail
           echo "source_commit=$SOURCE_COMMIT"
-          npx wrangler deployments list --env production
+          npm run deploy:production -- --target "$TARGET" --confirm "$CONFIRM_PRODUCTION" --non-interactive

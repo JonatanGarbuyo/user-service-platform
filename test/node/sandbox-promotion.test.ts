@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { buildTargetWranglerConfig } from '../../scripts/deploy/materialize.js';
+import { resolveTargetDeployment, type TargetsFile } from '../../scripts/deploy/targets.js';
+import { loadTargetsFromRepo, provisionedTargetsForContract } from './deploy-test-utils.js';
 import {
   assertSafeSmokeTarget,
   assertSandboxSmokeEmail,
@@ -8,11 +11,11 @@ import {
 } from '../../scripts/smoke-sandbox.js';
 import { resolveAuthSecret } from '../../src/features/identity/secret.js';
 
-// Seam under test (ticket #14): static deployment-contract assertions plus the
-// sandbox smoke-script guards. These tests pin the ADR-0008/ADR-0009/ADR-0010
+// Seam under test (tickets #14, #78): static deployment-contract assertions plus
+// the sandbox smoke-script guards. These tests pin the ADR-0008/ADR-0009/ADR-0010
 // invariants that must hold before the identity service is operable in
-// sandbox: isolated sandbox resources, version-controlled config without
-// secrets, Cloudflare-native observability, sandbox-only mail, and an explicit
+// sandbox: isolated per-target resources, version-controlled secret-free
+// config, Cloudflare-native observability, sandbox-only mail, and an explicit
 // (manual) production promotion step. They read the same version-controlled
 // files the operator and CI consume; they never touch Cloudflare credentials
 // or provisioned resources.
@@ -93,6 +96,16 @@ function loadWrangler(): WranglerConfig {
   return readJsonc('wrangler.jsonc') as WranglerConfig;
 }
 
+function loadTargets(): TargetsFile {
+  return loadTargetsFromRepo();
+}
+
+// Real database ids are provisioned out-of-band and recorded in
+// deploy/targets.json; contract tests resolve a provisioned copy so naming
+// and isolation hold independently of provisioning state.
+function provisionedTargets(): TargetsFile {
+  return provisionedTargetsForContract(loadTargets());
+}
 // Returns the shell bodies of every `run: |` block in a workflow so
 // assertions can pin shell-input hardening without constraining `with:` or
 // `env:` mappings that legitimately reference workflow inputs.
@@ -146,60 +159,76 @@ function readTriggerBlock(path: string): string {
   return block.join('\n');
 }
 
-describe('sandbox worker configuration (ticket #14)', () => {
-  it('declares a canonical sandbox environment instead of legacy staging', () => {
+describe('target-aware worker configuration (ticket #78)', () => {
+  it('keeps wrangler.jsonc as a local base config without remote env shortcuts', () => {
     const config = loadWrangler();
-    expect(Object.keys(config.env ?? {})).toContain('sandbox');
-    expect(Object.keys(config.env ?? {})).not.toContain('staging');
-    expect(config.env?.sandbox?.vars?.ENVIRONMENT).toBe('sandbox');
+    expect(config.env ?? {}).toEqual({});
+    expect(config.vars?.ENVIRONMENT).toBe('local');
+    expect(readFileSync('wrangler.jsonc', 'utf8')).not.toMatch(/staging/);
   });
 
-  it('isolates mutable resources per environment', () => {
+  it('isolates mutable resources per target environment', () => {
     const config = loadWrangler();
-    const names = [
-      config.d1_databases?.[0]?.database_name,
-      config.env?.sandbox?.d1_databases?.[0]?.database_name,
-      config.env?.production?.d1_databases?.[0]?.database_name,
-    ];
-    expect(names).toEqual([
-      'user-service-local',
-      'user-service-sandbox',
-      'user-service-production',
-    ]);
-    const ids = [
-      config.d1_databases?.[0]?.database_id,
-      config.env?.sandbox?.d1_databases?.[0]?.database_id,
-      config.env?.production?.d1_databases?.[0]?.database_id,
-    ];
-    expect(new Set(ids).size).toBe(3);
+    expect(config.d1_databases?.[0]?.database_name).toBe('user-service-local');
+    const file = provisionedTargets();
+    const sandbox = resolveTargetDeployment(file, {
+      target: 'rch-rugbychampagne',
+      environment: 'sandbox',
+    });
+    const production = resolveTargetDeployment(file, {
+      target: 'rch-rugbychampagne',
+      environment: 'production',
+    });
+    expect(sandbox.workerName).toBe('rch-rugbychampagne-user-service-sandbox');
+    expect(production.workerName).toBe('rch-rugbychampagne-user-service-production');
+    expect(sandbox.databaseName).toBe('rch-rugbychampagne-user-service-sandbox-db');
+    expect(production.databaseName).toBe('rch-rugbychampagne-user-service-production-db');
+    expect(sandbox.databaseId).not.toBe(production.databaseId);
+  });
+
+  it('keeps the stable DB binding on materialized target configs', () => {
+    const file = provisionedTargets();
+    for (const environment of ['sandbox', 'production'] as const) {
+      const resolved = resolveTargetDeployment(file, {
+        target: 'rch-rugbychampagne',
+        environment,
+      });
+      const materialized = buildTargetWranglerConfig(resolved);
+      expect(materialized.d1_databases).toHaveLength(1);
+      expect(materialized.d1_databases[0].binding).toBe('DB');
+      expect(materialized.d1_databases[0].migrations_dir).toBe('drizzle');
+    }
   });
 
   it('points every environment at the same versioned migrations directory', () => {
     const config = loadWrangler();
     expect(config.d1_databases?.[0]?.migrations_dir).toBe('drizzle');
-    expect(config.env?.sandbox?.d1_databases?.[0]?.migrations_dir).toBe('drizzle');
-    expect(config.env?.production?.d1_databases?.[0]?.migrations_dir).toBe('drizzle');
   });
 
-  it('commits no secrets in worker configuration', () => {
+  it('commits no secrets in worker or target configuration', () => {
     const config = loadWrangler();
-    const varScopes = [
-      config.vars ?? {},
-      ...Object.values(config.env ?? {}).map((env) => env.vars ?? {}),
-    ];
-    for (const vars of varScopes) {
-      expect(vars).not.toHaveProperty('RESEND_API_KEY');
-      expect(vars).not.toHaveProperty('BETTER_AUTH_SECRET');
-    }
+    expect(config.vars ?? {}).not.toHaveProperty('RESEND_API_KEY');
+    expect(config.vars ?? {}).not.toHaveProperty('BETTER_AUTH_SECRET');
     const raw = readFileSync('wrangler.jsonc', 'utf8');
     expect(raw).not.toMatch(/"RESEND_API_KEY"\s*:/);
     expect(raw).not.toMatch(/"BETTER_AUTH_SECRET"\s*:/);
+    const targetsRaw = readFileSync('deploy/targets.json', 'utf8');
+    for (const secret of [
+      'BETTER_AUTH_SECRET',
+      'RESEND_API_KEY',
+      'SMTP_USER',
+      'SMTP_PASSWORD',
+      'CLOUDFLARE_API_TOKEN',
+    ]) {
+      expect(targetsRaw).not.toMatch(new RegExp(`"${secret}"\\s*:`));
+    }
   });
 
-  it('enforces the sandbox recipient allowlist in sandbox configuration', () => {
-    const config = loadWrangler();
-    expect(config.env?.sandbox?.vars).toHaveProperty('AUTH_MAIL_ALLOWLIST');
-    expect(config.env?.production?.vars).not.toHaveProperty('AUTH_MAIL_ALLOWLIST');
+  it('enforces the sandbox recipient allowlist in target configuration', () => {
+    const file = loadTargets();
+    const sandbox = file.targets.find((entry) => entry.key === 'rch-rugbychampagne');
+    expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_ALLOWLIST).toContain('jg@ingalatech.com');
+    expect(sandbox?.environments.production.vars.AUTH_MAIL_ALLOWLIST ?? '').toBe('');
   });
 
   it('enables the Cloudflare-native observability baseline', () => {
@@ -215,7 +244,7 @@ describe('sandbox worker configuration (ticket #14)', () => {
   });
 });
 
-describe('sandbox runbook (ticket #14)', () => {
+describe('sandbox runbook (ticket #14, #78)', () => {
   it('documents release, rollback, recovery, and promotion procedures', () => {
     const runbook = readFileSync('docs/operations/sandbox-release-runbook.md', 'utf8');
     for (const heading of [
@@ -228,19 +257,35 @@ describe('sandbox runbook (ticket #14)', () => {
     ]) {
       expect(runbook.toLowerCase()).toContain(heading.toLowerCase());
     }
-    expect(runbook).toMatch(/--env sandbox/);
-    expect(runbook).toMatch(/--env production/);
+  });
+
+  it('documents the target-aware deploy boundary and first-target provisioning', () => {
+    const runbook = readFileSync('docs/operations/sandbox-release-runbook.md', 'utf8');
+    expect(runbook).toMatch(/npm run deploy/);
+    expect(runbook).toMatch(/rch-rugbychampagne-user-service-sandbox/);
+    expect(runbook).toMatch(/deploy\/targets\.json/);
+    expect(runbook).toMatch(/--write-config/);
+    expect(runbook).toMatch(/secret put/);
   });
 });
 
-describe('deployment promotion gates (ticket #14, ADR-0008)', () => {
-  it('deploys sandbox automatically from main', () => {
+describe('deployment promotion gates (ticket #14, #78, ADR-0008)', () => {
+  it('deploys the configured sandbox target automatically from main', () => {
     const triggers = readTriggerBlock('.github/workflows/deploy-sandbox.yml');
     expect(triggers).toMatch(/push/);
     expect(triggers).toMatch(/main/);
     const workflow = readFileSync('.github/workflows/deploy-sandbox.yml', 'utf8');
+    expect(workflow).toMatch(/npm run deploy/);
+    expect(workflow).toMatch(/--target rch-rugbychampagne/);
     expect(workflow).toMatch(/--env sandbox/);
-    expect(workflow).toMatch(/d1 migrations apply/);
+    expect(workflow).toMatch(/--non-interactive/);
+  });
+
+  it('keeps resource naming in the deploy boundary instead of the workflow', () => {
+    const workflow = readFileSync('.github/workflows/deploy-sandbox.yml', 'utf8');
+    expect(workflow).not.toMatch(/wrangler d1 migrations apply/);
+    expect(workflow).not.toMatch(/wrangler deploy /);
+    expect(workflow).not.toMatch(/wrangler deployments list/);
   });
 
   it('keeps production promotion an explicit manual step', () => {
@@ -249,7 +294,8 @@ describe('deployment promotion gates (ticket #14, ADR-0008)', () => {
     expect(triggers).not.toMatch(/push\s*:/);
     expect(triggers).not.toMatch(/pull_request/);
     const workflow = readFileSync('.github/workflows/promote-production.yml', 'utf8');
-    expect(workflow).toMatch(/--env production/);
+    expect(workflow).toMatch(/npm run deploy:production/);
+    expect(workflow).toMatch(/--confirm/);
   });
 
   it('routes workflow_dispatch inputs through env in shell run blocks', () => {
@@ -260,8 +306,10 @@ describe('deployment promotion gates (ticket #14, ADR-0008)', () => {
     for (const block of runBlocks) {
       expect(block).not.toMatch(/\$\{\{\s*inputs\./);
     }
+    expect(workflow).toMatch(/TARGET:\s*\$\{\{\s*inputs\.target\s*\}\}/);
     expect(workflow).toMatch(/CONFIRM_PRODUCTION:\s*\$\{\{\s*inputs\.confirm_production\s*\}\}/);
     expect(workflow).toMatch(/SOURCE_COMMIT:\s*\$\{\{\s*inputs\.source_commit\s*\}\}/);
+    expect(workflow).toMatch(/\$TARGET/);
     expect(workflow).toMatch(/\$CONFIRM_PRODUCTION/);
     expect(workflow).toMatch(/\$SOURCE_COMMIT/);
   });
