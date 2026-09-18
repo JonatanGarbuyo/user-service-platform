@@ -1,11 +1,19 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   ACCEPTANCE_STAGES,
   assertSafeLocalAcceptanceTarget,
   formatAcceptanceSummary,
+  parseDotEnvValue,
+  promptForEmailActionToken,
+  readHiddenLine,
   requireEmailActionToken,
   resolveEmailActionToken,
   resolveLocalAcceptanceConfig,
+  resolveTransportName,
 } from '../../scripts/local-acceptance.js';
 
 // Seam under test (ticket #60, spec #8): pure operator-input resolution,
@@ -165,5 +173,84 @@ describe('local acceptance evidence', () => {
     });
     expect(summary.success).toBe(false);
     expect(summary.eligibility).toBe('ineligible');
+  });
+});
+
+describe('hidden interactive token input', () => {
+  function captureOutput(into: string[]): Writable {
+    return new Writable({
+      write(
+        chunk: string,
+        _encoding: BufferEncoding,
+        callback: (error?: Error | null) => void,
+      ): void {
+        into.push(chunk);
+        callback();
+      },
+    });
+  }
+
+  it('returns the pasted token without echoing its contents to the terminal output', async () => {
+    const input = new PassThrough();
+    const written: string[] = [];
+    const output = captureOutput(written);
+    const prompt = 'paste it as ACCEPTANCE_VERIFICATION_TOKEN: ';
+    const pending = readHiddenLine(prompt, { input, output });
+    input.write('super-secret-token\n');
+    const answer = await pending;
+    expect(answer).toBe('super-secret-token');
+    const transcript = written.join('');
+    expect(transcript).toContain(prompt);
+    expect(transcript).not.toContain('super-secret-token');
+  });
+
+  it('fails closed for interactive entry without a TTY and never echoes values', async () => {
+    const input = new PassThrough();
+    const written: string[] = [];
+    const output = captureOutput(written);
+    let message = '';
+    try {
+      await promptForEmailActionToken('ACCEPTANCE_VERIFICATION_TOKEN', { input, output });
+    } catch (error) {
+      message = error instanceof Error ? error.message : '';
+    }
+    expect(message).toContain('ACCEPTANCE_VERIFICATION_TOKEN');
+    expect(message).not.toContain('super-secret-token');
+    expect(written.join('')).not.toContain('super-secret-token');
+  });
+});
+
+describe('acceptance transport provenance', () => {
+  it('parses the transport name from dotenv content without exposing other values', () => {
+    expect(
+      parseDotEnvValue('AUTH_MAIL_TRANSPORT=smtp\nSMTP_PASSWORD=hunter2\n', 'AUTH_MAIL_TRANSPORT'),
+    ).toBe('smtp');
+    expect(
+      parseDotEnvValue(
+        '# AUTH_MAIL_TRANSPORT=smtp\nAUTH_MAIL_TRANSPORT="resend"\n',
+        'AUTH_MAIL_TRANSPORT',
+      ),
+    ).toBe('resend');
+    expect(parseDotEnvValue("export AUTH_MAIL_TRANSPORT='smtp'\n", 'AUTH_MAIL_TRANSPORT')).toBe(
+      'smtp',
+    );
+    expect(parseDotEnvValue('OTHER=1\n', 'AUTH_MAIL_TRANSPORT')).toBeUndefined();
+  });
+
+  it('prefers the process environment over the ignored local overrides file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acceptance-transport-'));
+    writeFileSync(join(dir, '.env'), 'AUTH_MAIL_TRANSPORT=resend\n');
+    expect(resolveTransportName({ AUTH_MAIL_TRANSPORT: 'smtp' }, dir)).toBe('smtp');
+  });
+
+  it('falls back to the documented local overrides file instead of unknown', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acceptance-transport-'));
+    writeFileSync(join(dir, '.env'), 'AUTH_MAIL_TRANSPORT=smtp\nSMTP_PASSWORD=hunter2\n');
+    expect(resolveTransportName({}, dir)).toBe('smtp');
+  });
+
+  it('records unknown only when neither source names a transport', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acceptance-transport-'));
+    expect(resolveTransportName({}, dir)).toBe('unknown');
   });
 });
