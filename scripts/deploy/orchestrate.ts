@@ -10,8 +10,10 @@ import type { ResolvedDeployment } from './targets.js';
 // record the deployment without smoke and require an explicit confirmation.
 //
 // Production safety: a production deployment proceeds only when `confirm`
-// exactly equals the materialized Worker name. The check runs before any
-// remote mutation, and no push/merge path can supply it implicitly. The
+// exactly equals the materialized Worker name. The check runs before
+// preflight and any remote mutation, and no push/merge path can supply it
+// implicitly. A dry run executes the read-only preflight and then returns
+// without running any mutating deployment command. The
 // temporary config is removed in `finally`, even when deployment fails.
 //
 // Secret boundary: the orchestrator passes Cloudflare credentials through by
@@ -103,6 +105,7 @@ export async function runDeployment(
   const configPath = io.materialize(request.resolved);
   try {
     assertProductionConfirmed(request);
+    await io.preflight(request.resolved);
     const steps = planDeploymentSteps(request);
     if (request.dryRun === true) {
       io.log(
@@ -110,7 +113,6 @@ export async function runDeployment(
       );
       return { workerName: request.resolved.workerName, steps };
     }
-    await io.preflight(request.resolved);
     io.log(
       `deploy target=${request.resolved.targetKey} environment=${request.resolved.environment} worker=${request.resolved.workerName}`,
     );
