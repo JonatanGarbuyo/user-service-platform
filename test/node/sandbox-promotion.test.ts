@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { basename, isAbsolute } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildTargetWranglerConfig } from '../../scripts/deploy/materialize.js';
 import { resolveTargetDeployment, type TargetsFile } from '../../scripts/deploy/targets.js';
@@ -196,7 +197,12 @@ describe('target-aware worker configuration (ticket #78)', () => {
       const materialized = buildTargetWranglerConfig(resolved);
       expect(materialized.d1_databases).toHaveLength(1);
       expect(materialized.d1_databases[0].binding).toBe('DB');
-      expect(materialized.d1_databases[0].migrations_dir).toBe('drizzle');
+      // Ticket #85: temp configs carry the absolute repository drizzle path
+      // (Wrangler resolves relative entries from the temp config location).
+      const migrationsDir = materialized.d1_databases[0].migrations_dir;
+      expect(isAbsolute(migrationsDir)).toBe(true);
+      expect(basename(migrationsDir)).toBe('drizzle');
+      expect(isAbsolute(materialized.main)).toBe(true);
     }
   });
 
