@@ -9,6 +9,14 @@ on:
 # through repository secrets and are never printed or committed. This workflow
 # must never target production (ADR-0008, ticket #14); production promotion is
 # the explicit manual `.github/workflows/promote-production.yml` workflow.
+#
+# Target-aware deploys (ticket #78): this workflow invokes the same repository
+# deploy boundary as a local operator (`npm run deploy`) for the configured
+# sandbox target instead of duplicating Worker/D1 resource naming. Canonical
+# Worker/D1 names derive from `<company>-<site>-<service>-<environment>` in
+# `deploy/targets.json`; the deployer materializes a temporary Wrangler
+# config, runs preflight, applies D1 migrations before Worker deployment,
+# records the deployment and runs the smoke test.
 permissions:
   contents: read
 
@@ -18,7 +26,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: migrate and deploy sandbox
+    name: deploy the configured sandbox target
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -37,20 +45,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate D1 migrations against local D1
-        run: npx wrangler d1 migrations apply DB --local
-
-      - name: Apply D1 migrations to sandbox
-        run: npx wrangler d1 migrations apply DB --env sandbox --remote
-
-      - name: Deploy Worker to sandbox
-        run: npx wrangler deploy --env sandbox
-
-      - name: Record sandbox deployment
-        run: npx wrangler deployments list --env sandbox
-
-      - name: Sandbox smoke test
+      - name: Deploy to the RCH sandbox target
         env:
           SMOKE_SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
           SMOKE_SANDBOX_EMAIL_DOMAIN: ${{ secrets.SANDBOX_SMOKE_EMAIL_DOMAIN }}
-        run: npm run smoke:sandbox
+        run: npm run deploy -- --target rch-rugbychampagne --env sandbox --non-interactive

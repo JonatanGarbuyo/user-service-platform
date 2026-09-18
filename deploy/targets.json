@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "service": "user-service",
+  "targets": [
+    {
+      "key": "rch-rugbychampagne",
+      "company": "rch",
+      "site": "rugbychampagne",
+      "service": "user-service",
+      "displayName": "RugbyChampagne (RCH)",
+      "environments": {
+        "sandbox": {
+          "databaseId": "",
+          "vars": {
+            "AUTH_MAIL_TRANSPORT": "resend",
+            "AUTH_MAIL_FROM": "User Service <jg@ingalatech.com>",
+            "AUTH_MAIL_ALLOWLIST": "jonatangarbuyo@gmail.com,jg@ingalatech.com"
+          }
+        },
+        "production": {
+          "databaseId": "",
+          "vars": {
+            "AUTH_MAIL_TRANSPORT": "resend"
+          }
+        }
+      }
+    }
+  ]
+}

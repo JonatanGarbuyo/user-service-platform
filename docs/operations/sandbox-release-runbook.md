@@ -1,56 +1,93 @@
 # Sandbox release, rollback, and recovery runbook
 
 Operates the verified-email identity service in sandbox and promotes it to
-production (ticket #14, ADR-0008, ADR-0009, ADR-0010). Written so a maintainer
-other than the original author can provision sandbox, deploy, inspect
-failures, roll back Worker code, and initiate D1 recovery.
+production (tickets #14, #78, ADR-0008, ADR-0009, ADR-0010). Written so a
+maintainer other than the original author can provision sandbox, deploy,
+inspect failures, roll back Worker code, and initiate D1 recovery.
 
 Canonical environments are **local / sandbox / production**. Any historical
 `staging` reference elsewhere in planning history means `sandbox`.
 Application code still accepts the legacy `staging` `ENVIRONMENT` value as a
-sandbox context, but Wrangler configuration and this runbook use `sandbox`
-only.
+sandbox context, but deployment tooling uses `sandbox` only and never offers
+`staging` as a selection.
 
 ## 1. Isolation model
 
-Sandbox and production are separate Cloudflare Worker environments with
-separate resources. They must never share:
+Each deployment target owns a company slug, a site slug, the service slug and
+a canonical environment. The canonical deployment key is
+`<company>-<site>-<service>-<environment>`; the site is part of the isolation
+boundary because one company may own multiple sites with fully separate
+login/session/user stores. Physical Cloudflare resource names derive from
+that key with explicit suffixes, while application binding names stay short
+and stable.
 
-- D1 databases (`user-service-sandbox` vs `user-service-production`);
+First target (`rch-rugbychampagne` in `deploy/targets.json`):
+
+| Resource | Sandbox                                      | Production                                      |
+| -------- | -------------------------------------------- | ----------------------------------------------- |
+| Worker   | `rch-rugbychampagne-user-service-sandbox`    | `rch-rugbychampagne-user-service-production`    |
+| D1       | `rch-rugbychampagne-user-service-sandbox-db` | `rch-rugbychampagne-user-service-production-db` |
+| Binding  | `DB`                                         | `DB`                                            |
+
+Targets must never share:
+
+- D1 databases (per company + site + environment);
 - R2 buckets (when user files land; relational rows stay in D1, binaries in
   object storage per ADR-0003);
 - secrets (`BETTER_AUTH_SECRET`, `RESEND_API_KEY`, provider credentials);
 - routes/domains and environment-specific vars (notably `AUTH_MAIL_ALLOWLIST`).
 
-`wrangler.jsonc` is version controlled and contains **no secrets**: only
-binding names, database names/ids, and non-secret vars. Secrets are set
-out-of-band (section 2) and travel to CI only as repository secrets.
+`wrangler.jsonc` is the version-controlled **local base config only** and
+contains **no secrets** and no remote `env` sections: remote deploys go
+through `npm run deploy` (ticket #78), which selects a target from the
+versioned secret-free `deploy/targets.json` and materializes a temporary
+target-specific Wrangler config (removed after the deployment, even on
+failure). Worker secrets remain configured directly in Cloudflare for the
+selected target Worker (section 2) and travel to CI only as repository
+secrets.
 
-## 2. First-time sandbox provisioning
+## 2. First-time target provisioning
 
 Prerequisites: a Cloudflare account with Workers Paid (D1 Time Travel
 retention beyond Free), `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
-stored as repository secrets, and a verified Resend sender domain for sandbox.
+stored as repository secrets, and a mail-provider-authorized sender for the
+target environment.
 
 ```bash
-# 1. Create the sandbox database (run once; do not reuse the production one).
-npx wrangler d1 create user-service-sandbox
+# 1. Create the client-scoped sandbox database (run once per target; never
+#    share a database across companies, sites or environments).
+npx wrangler d1 create rch-rugbychampagne-user-service-sandbox-db
 
-# 2. Record the returned database_id in wrangler.jsonc under env.sandbox.
-#    Database ids are not secrets and are committed to source control.
+# 2. Record the returned database_id in deploy/targets.json under the
+#    target's sandbox environment, then commit. Database ids are not secrets
+#    and are version controlled. The deployer refuses to run while the slot
+#    is empty or a placeholder.
 
-# 3. Set sandbox secrets (never commit these; never reuse production values).
-npx wrangler secret put BETTER_AUTH_SECRET --env sandbox
-npx wrangler secret put RESEND_API_KEY --env sandbox
+# 3. Materialize the target config (no remote mutation; also used for every
+#    targeted wrangler command below).
+npm run deploy -- --target rch-rugbychampagne --env sandbox \
+  --write-config /tmp/rch-sandbox.json
+
+# 4. Set sandbox secrets against the target Worker (never commit these; never
+#    reuse production values; never copy them from local files — type or paste
+#    each value at the prompt).
+npx wrangler secret put BETTER_AUTH_SECRET --config /tmp/rch-sandbox.json
+npx wrangler secret put RESEND_API_KEY --config /tmp/rch-sandbox.json
 # Only when the sandbox deployment selects the SMTP transport
 # (AUTH_MAIL_TRANSPORT=smtp, ticket #58):
-npx wrangler secret put SMTP_USER --env sandbox
-npx wrangler secret put SMTP_PASSWORD --env sandbox
+npx wrangler secret put SMTP_USER --config /tmp/rch-sandbox.json
+npx wrangler secret put SMTP_PASSWORD --config /tmp/rch-sandbox.json
 
-# 4. Set the sandbox sender/allowlist to sandbox-only values, e.g. via the
-#    Cloudflare dashboard or wrangler vars, then confirm:
-npx wrangler deploy --env sandbox --dry-run
+# 5. Confirm preflight passes without mutating anything.
+npm run deploy -- --target rch-rugbychampagne --env sandbox --dry-run
 ```
+
+Sandbox non-secret mail values are versioned per target in
+`deploy/targets.json` (RCH sandbox: `AUTH_MAIL_TRANSPORT=resend`,
+`AUTH_MAIL_FROM=User Service <jg@ingalatech.com>`,
+`AUTH_MAIL_ALLOWLIST=jonatangarbuyo@gmail.com,jg@ingalatech.com`).
+`AUTH_MAIL_FROM` must correspond to a sender authorized by the selected mail
+provider.
 
 Repository secrets required for automation:
 
@@ -71,25 +108,58 @@ transports. The concrete transport is deployment configuration
 secrets); switching transports never changes Identity semantics, templates,
 or public contracts (ticket #58).
 
+### 2.1 Cleaning up obsolete bootstrap resources
+
+The first provisioning pass created a temporary generic D1 database
+`user-service-sandbox` (id `d37249ce-90cc-4e86-b7a3-36d2f9d1ed02`) and a
+generic `user-service-sandbox` Worker name. Those generic names are not the
+multi-client convention and must be removed after the target-specific
+deployment succeeds:
+
+```bash
+# Only after the RCH sandbox deployment + smoke test pass (section 3.1):
+# 1. Confirm the serving target deployment.
+npm run deploy -- --target rch-rugbychampagne --env sandbox \
+  --write-config /tmp/rch-sandbox.json
+npx wrangler deployments list --config /tmp/rch-sandbox.json
+npm run smoke:sandbox
+
+# 2. Delete the obsolete bootstrap database (it never served traffic).
+npx wrangler d1 delete user-service-sandbox
+
+# 3. Remove the obsolete generic Worker (dashboard or CLI) once nothing
+#    references its workers.dev origin.
+```
+
 ## 3. Release procedure
 
 ### 3.1 Sandbox release (automatic)
 
-Merging to `main` triggers `.github/workflows/deploy-sandbox.yml`, which in
-order:
+Merging to `main` triggers `.github/workflows/deploy-sandbox.yml`, which
+invokes the same deploy boundary a local operator uses:
 
-1. validates D1 migrations against a disposable local D1
+```bash
+npm run deploy -- --target rch-rugbychampagne --env sandbox --non-interactive
+```
+
+The deployer, in order:
+
+1. runs preflight (Node/Wrangler/auth/account access, clean worktree, target
+   config, Worker-name and D1 checks) before any remote mutation;
+2. validates D1 migrations against a disposable local D1
    (`wrangler d1 migrations apply DB --local`);
-2. applies versioned migrations to sandbox
-   (`wrangler d1 migrations apply DB --env sandbox --remote`);
-3. deploys the Worker (`wrangler deploy --env sandbox`);
-4. records the deployment (`wrangler deployments list --env sandbox`);
-5. runs the sandbox smoke test (`npm run smoke:sandbox`).
+3. applies versioned migrations to the target database
+   (`wrangler d1 migrations apply DB --remote --config <generated>`);
+4. deploys the Worker (`wrangler deploy --config <generated>`);
+5. records the deployment (`wrangler deployments list --config <generated>`);
+6. runs the sandbox smoke test (`npm run smoke:sandbox`).
 
 Identify the serving version at any time with:
 
 ```bash
-npx wrangler deployments list --env sandbox
+npm run deploy -- --target rch-rugbychampagne --env sandbox \
+  --write-config /tmp/rch-sandbox.json
+npx wrangler deployments list --config /tmp/rch-sandbox.json
 ```
 
 ### 3.2 Worker code rollback (code only, never data)
@@ -100,9 +170,12 @@ state the old code understands; migrations must stay compatible with at
 least the immediately preceding Worker version (section 4).
 
 ```bash
-# List versions, then roll back sandbox code to a known-good version.
-npx wrangler deployments list --env sandbox
-npx wrangler rollback --env sandbox
+# Materialize the target config, list versions, then roll back sandbox code
+# to a known-good version.
+npm run deploy -- --target rch-rugbychampagne --env sandbox \
+  --write-config /tmp/rch-sandbox.json
+npx wrangler deployments list --config /tmp/rch-sandbox.json
+npx wrangler rollback --config /tmp/rch-sandbox.json
 ```
 
 After rollback, re-run the smoke test (section 6) and confirm the
@@ -113,29 +186,44 @@ newer data shape can produce errors instead of silently succeeding.
 
 Production is never deployed by merging, by the sandbox workflow, or by any
 push trigger. Promotion runs only via `.github/workflows/promote-production.yml`
-(`workflow_dispatch`) with two inputs: the `source_commit` SHA (must be an
-ancestor of `main`, verified in-workflow) and `confirm_production` set to the
-literal `PROMOTE`. The workflow applies production D1 migrations, deploys
-`--env production`, and prints the source commit plus the resulting
-deployment list as the release record. Record both identifiers in the
-release notes.
+(`workflow_dispatch`) with three inputs: the `source_commit` SHA (must be an
+ancestor of `main`, verified in-workflow), the `target` key (default
+`rch-rugbychampagne`), and `confirm_production` set to the exact target
+production Worker name (e.g.
+`rch-rugbychampagne-user-service-production`). The deployer enforces that
+confirmation before any remote mutation. The equivalent local command is:
+
+```bash
+npm run deploy:production -- --target rch-rugbychampagne \
+  --confirm rch-rugbychampagne-user-service-production
+```
+
+The promotion applies production D1 migrations, deploys the production
+Worker, and prints the source commit plus the resulting deployment list as
+the release record. Record both identifiers in the release notes.
 
 ## 4. D1 migrations
 
 Migrations live versioned under `./drizzle` (generated by
 `npm run db:generate` from `src/features/identity/schema.ts`) and are
 consumed unchanged by local tests, sandbox, and production
-(`migrations_dir: drizzle` in every `wrangler.jsonc` environment).
+(`migrations_dir: drizzle` in the base config and in every materialized
+target config).
 
 ```bash
-# Inspect what would apply (repeat per environment).
-npx wrangler d1 migrations list DB --env sandbox --remote
+# Materialize the target config once per session.
+npm run deploy -- --target rch-rugbychampagne --env sandbox \
+  --write-config /tmp/rch-sandbox.json
 
-# Validate against disposable local state before merge (also runs in CI deploy).
+# Inspect what would apply.
+npx wrangler d1 migrations list DB --remote --config /tmp/rch-sandbox.json
+
+# Validate against disposable local state before merge (also runs in the
+# deployer and in CI).
 npx wrangler d1 migrations apply DB --local
 
-# Apply to an environment (sandbox is automated; production via promotion).
-npx wrangler d1 migrations apply DB --env sandbox --remote
+# Apply to the target (sandbox is automated; production via promotion).
+npx wrangler d1 migrations apply DB --remote --config /tmp/rch-sandbox.json
 ```
 
 Schema evolution follows **expand -> deploy -> contract** whenever rollback
@@ -159,14 +247,14 @@ confirmation and a recorded restore point.
 ```bash
 # 1. Identify the restore point (bookmark id) preceding the incident.
 #    See https://developers.cloudflare.com/d1/reference/time-travel/
-npx wrangler d1 time-travel info user-service-sandbox
+npx wrangler d1 time-travel info rch-rugbychampagne-user-service-sandbox-db
 
-# 2. Confirm the incident scope, the bookmark, and that sandbox (not
-#    production) is the target. Get a second maintainer to acknowledge for
-#    production restores.
+# 2. Confirm the incident scope, the bookmark, and that the sandbox database
+#    (not production) is the target. Get a second maintainer to acknowledge
+#    for production restores.
 
 # 3. Restore the target database to the bookmark.
-npx wrangler d1 time-travel restore user-service-sandbox --bookmark <bookmark-id>
+npx wrangler d1 time-travel restore rch-rugbychampagne-user-service-sandbox-db --bookmark <bookmark-id>
 
 # 4. Verify: re-run the smoke test (section 6) and inspect logs/traces for
 #    the affected request ids (section 7).
@@ -186,7 +274,7 @@ Notes:
 ## 6. Sandbox smoke test
 
 ```bash
-export SMOKE_SANDBOX_BASE_URL="https://<sandbox-worker>.workers.dev"
+export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.workers.dev"
 export SMOKE_SANDBOX_EMAIL_DOMAIN="ops.example.org"  # sandbox-allowlisted only
 # Optional: complete the full verify -> sign-in path with a token pasted from
 # the allowlisted mailbox. Without it the smoke proves the verification gate.
@@ -206,9 +294,11 @@ deploy, Worker rollback, and D1 recovery.
 ## 7. Logs, traces, and metrics
 
 Cloudflare-native observability is the baseline (ADR-0009), enabled via the
-top-level `observability.enabled` flag in `wrangler.jsonc`:
+top-level `observability.enabled` flag in `wrangler.jsonc` (inherited by
+every materialized target config):
 
-- **Logs**: `npx wrangler tail --env sandbox` for live logs, or the
+- **Logs**: materialize the target config (`--write-config`), then
+  `npx wrangler tail --config /tmp/rch-sandbox.json` for live logs, or the
   Cloudflare dashboard Workers Logs for persisted queries. Correlate with
   the `requestId` field every application log record carries.
 - **Traces**: automatic request traces in the dashboard show the Worker and
@@ -226,10 +316,12 @@ are not logged by application code.
 ## 8. Secret rotation
 
 ```bash
-# Rotate without committing: set the new value, redeploy, verify.
-npx wrangler secret put BETTER_AUTH_SECRET --env sandbox
-npx wrangler secret put RESEND_API_KEY --env sandbox
-npx wrangler deploy --env sandbox
+# Materialize the target config, rotate without committing, redeploy, verify.
+npm run deploy -- --target rch-rugbychampagne --env sandbox \
+  --write-config /tmp/rch-sandbox.json
+npx wrangler secret put BETTER_AUTH_SECRET --config /tmp/rch-sandbox.json
+npx wrangler secret put RESEND_API_KEY --config /tmp/rch-sandbox.json
+npm run deploy -- --target rch-rugbychampagne --env sandbox --non-interactive
 npm run smoke:sandbox
 ```
 
@@ -242,9 +334,10 @@ spike for the allowlisted domain.
 
 After any deploy, rollback, migration, or restore:
 
-1. `npx wrangler deployments list --env sandbox` identifies the serving version;
+1. `npx wrangler deployments list --config /tmp/rch-sandbox.json` identifies
+   the serving version;
 2. `npm run smoke:sandbox` proves health plus the verified-email gate;
 3. Workers Logs/traces for the smoke `requestId`s show no `error` records
    and no redaction violations;
-4. `npx wrangler d1 migrations list DB --env sandbox --remote` shows no
-   unapplied migrations.
+4. `npx wrangler d1 migrations list DB --remote --config /tmp/rch-sandbox.json`
+   shows no unapplied migrations.

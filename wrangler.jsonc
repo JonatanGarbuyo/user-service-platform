@@ -1,16 +1,24 @@
 {
   // Cloudflare Worker configuration. Local, sandbox and production are separate
   // operational contexts (ADR-0008): sandbox/production use distinct databases and
-  // are never provisioned or mutated by local tests. The database_id values below are
-  // local/test placeholders; real sandbox/production resources are provisioned
-  // out-of-band as documented in docs/operations/sandbox-release-runbook.md
-  // (ticket #14).
+  // are never provisioned or mutated by local tests.
+  //
+  // This file is the local base config only. Remote deploys never use static
+  // `env` sections here: `npm run deploy` (ticket #78) selects a deployment
+  // target from `deploy/targets.json` and materializes a temporary
+  // target-specific Wrangler config (deterministic Worker name
+  // `<company>-<site>-<service>-<environment>`, isolated D1, non-secret
+  // deployment vars) that is removed after the deployment. Do not reintroduce
+  // generic `user-service-*` env sections: Cloudflare resources are
+  // target-specific, while the application binding name stays the stable `DB`.
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "user-service",
   "main": "src/index.ts",
   // Must not exceed the newest compatibility date supported by the workerd
   // binary bundled with the installed test toolchain (currently 2026-08-22);
   // newer dates fail to boot under Miniflare/vitest-pool-workers.
+  // `scripts/deploy/materialize.ts` mirrors this date into generated configs;
+  // `deploy-materialize.test.ts` fails on drift.
   "compatibility_date": "2026-08-22",
   // Better Auth relies on AsyncLocalStorage and Node.js crypto (scrypt) for
   // password hashing; both require the Node.js compatibility flag on Workers
@@ -22,10 +30,12 @@
   // runtime overrides. Wrangler carries only the ENVIRONMENT selector and
   // Cloudflare infrastructure/runtime bindings here. Local overrides come from
   // the ignored root `.env` (`npm run dev:local`); sandbox/production
-  // overrides (if ever needed) are set out-of-band in Cloudflare. Secrets
-  // (`BETTER_AUTH_SECRET`, `RESEND_API_KEY`, and `SMTP_USER`/`SMTP_PASSWORD`
-  // when the SMTP transport is selected) are always runtime secrets
-  // (`wrangler secret put ... --env sandbox`) and never appear here.
+  // non-secret deployment vars come from `deploy/targets.json` via the
+  // deployer. Secrets (`BETTER_AUTH_SECRET`, `RESEND_API_KEY`, and
+  // `SMTP_USER`/`SMTP_PASSWORD` when the SMTP transport is selected) are
+  // always runtime secrets configured directly in Cloudflare for the selected
+  // target Worker (see docs/operations/sandbox-release-runbook.md) and never
+  // appear here.
   "vars": {
     "ENVIRONMENT": "local",
   },
@@ -47,49 +57,4 @@
       "migrations_dir": "drizzle",
     },
   ],
-  "env": {
-    // Canonical sandbox environment (ADR-0008, ticket #14). Application code
-    // still accepts the legacy "staging" ENVIRONMENT value as a sandbox
-    // context, but Wrangler configuration uses "sandbox" only.
-    "sandbox": {
-      // Sandbox non-secret defaults come from SANDBOX_PROFILE (spec #8,
-      // ticket #57, PR #61 review). Only the ENVIRONMENT selector and the
-      // deployment-specific recipient-allowlist slot stay here; every other
-      // application default is read from the versioned profile. The real
-      // allowlist value is set out-of-band during provisioning (ticket #14);
-      // an empty value fails closed with an explicit configuration error.
-      "vars": {
-        "ENVIRONMENT": "sandbox",
-        // Sandbox recipient allowlist (ticket #13, ADR-0010): sandbox deliveries
-        // outside this list are skipped before reaching the provider. The real
-        // value is set out-of-band during sandbox provisioning (ticket #14);
-        // an empty value fails closed with an explicit configuration error.
-        "AUTH_MAIL_ALLOWLIST": "",
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "user-service-sandbox",
-          "database_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "migrations_dir": "drizzle",
-        },
-      ],
-    },
-    "production": {
-      // Production non-secret defaults come from PRODUCTION_PROFILE (spec #8,
-      // ticket #57, PR #61 review). Only the ENVIRONMENT selector stays here;
-      // any differing non-secret override is set out-of-band in Cloudflare.
-      "vars": {
-        "ENVIRONMENT": "production",
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "user-service-production",
-          "database_id": "cccccccccccccccccccccccccccccccc",
-          "migrations_dir": "drizzle",
-        },
-      ],
-    },
-  },
 }

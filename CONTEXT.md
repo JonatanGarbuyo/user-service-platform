@@ -89,6 +89,20 @@ Traffic/product analytics is a separate service or third-party platform. This se
 
 ## Architectural vocabulary
 
+### Deployment target
+
+A company + site pair (plus the service) that owns isolated Cloudflare
+resources per canonical environment. The first target is RCH RugbyChampagne.
+The site is part of the isolation boundary: one company may own multiple
+sites with fully separate login/session/user stores.
+
+### Deployment key
+
+The canonical `<company>-<site>-<service>-<environment>` identifier from
+which Worker and resource names derive with explicit resource suffixes
+(`-db`, future `-session`, future `-files`). Application binding names stay
+short and stable (`DB`, future `SESSION`, future `FILES`).
+
 ### Feature slice
 
 A vertical unit that owns an externally observable capability across contract, domain behaviour, persistence and tests.
