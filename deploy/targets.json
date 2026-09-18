@@ -10,7 +10,7 @@
       "displayName": "RugbyChampagne (RCH)",
       "environments": {
         "sandbox": {
-          "databaseId": "",
+          "databaseId": "5a35dea8-f472-4760-b8ee-c4cbbd56ef06",
           "vars": {
             "AUTH_MAIL_TRANSPORT": "resend",
             "AUTH_MAIL_FROM": "User Service <jg@ingalatech.com>",
