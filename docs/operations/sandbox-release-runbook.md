@@ -91,12 +91,20 @@ provider.
 
 Repository secrets required for automation:
 
-| Secret                       | Purpose                                            |
-| ---------------------------- | -------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`       | Wrangler deploys and D1 migration applies          |
-| `CLOUDFLARE_ACCOUNT_ID`      | Account scope for Wrangler                         |
-| `SANDBOX_BASE_URL`           | Deployed sandbox origin for the smoke test         |
-| `SANDBOX_SMOKE_EMAIL_DOMAIN` | Sandbox-allowlisted domain for smoke registrations |
+| Secret                       | Purpose                                                              |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`       | Wrangler deploys and D1 migration applies                            |
+| `CLOUDFLARE_ACCOUNT_ID`      | Account scope for Wrangler                                           |
+| `SANDBOX_BASE_URL`           | Deployed sandbox origin for the smoke test                           |
+| `SANDBOX_SMOKE_EMAIL`        | Explicit allowlisted recipient for smoke registrations (ticket #87)  |
+| `SANDBOX_SMOKE_EMAIL_DOMAIN` | Sandbox-allowlisted domain for smoke registrations (domain fallback) |
+
+When the sandbox `AUTH_MAIL_ALLOWLIST` holds exact emails rather than a
+domain (RCH sandbox: `jonatangarbuyo@gmail.com,jg@ingalatech.com`), configure
+`SANDBOX_SMOKE_EMAIL` with one of those exact allowlisted recipients. The
+smoke then registers that address directly (`SMOKE_SANDBOX_EMAIL` at runtime)
+instead of generating a per-run domain address. Never broaden
+`AUTH_MAIL_ALLOWLIST` merely to make the smoke pass.
 
 Sandbox mail must stay allowlisted: `AUTH_MAIL_ALLOWLIST` covers only
 operator/test domains, and any delivery outside it is skipped with
@@ -274,9 +282,29 @@ Notes:
 
 ## 6. Sandbox smoke test
 
+Recipient selection (ticket #87):
+
+- **Exact-recipient mode** — set `SMOKE_SANDBOX_EMAIL` to one explicit
+  allowlisted recipient. The smoke registers that address directly; nothing is
+  generated or inferred, and the address is never logged. Use this mode when
+  the sandbox `AUTH_MAIL_ALLOWLIST` holds exact emails (RCH sandbox).
+- **Domain-generated mode** — set `SMOKE_SANDBOX_EMAIL_DOMAIN` to a
+  sandbox-allowlisted domain. Each run registers a unique
+  `smoke-<run-id>@<domain>` address. Retained as the fallback when no exact
+  recipient is configured.
+
+When `SMOKE_SANDBOX_EMAIL` is set it takes precedence; an invalid value fails
+closed instead of falling back to domain mode. Either variable must cover an
+address the sandbox mail guard will actually deliver — otherwise the smoke
+proves the verification gate but cannot prove externally delivered
+transactional mail.
+
 ```bash
 export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.workers.dev"
-export SMOKE_SANDBOX_EMAIL_DOMAIN="ops.example.org"  # sandbox-allowlisted only
+# Exact-recipient mode (RCH sandbox allowlist holds exact emails):
+export SMOKE_SANDBOX_EMAIL="jg@ingalatech.com"  # exact allowlisted recipient only
+# Domain-generated fallback (only when no exact recipient is configured):
+# export SMOKE_SANDBOX_EMAIL_DOMAIN="ops.example.org"  # sandbox-allowlisted only
 # Optional: complete the full verify -> sign-in path with a token pasted from
 # the allowlisted mailbox. Without it the smoke proves the verification gate.
 export SMOKE_VERIFICATION_TOKEN="<token-from-allowlisted-mailbox>"
@@ -287,10 +315,11 @@ The smoke verifies, in order: `GET /v1/health`, anonymous `GET /v1/me`
 (`401 unauthenticated`), registration (`201`, unverified), pre-verification
 login rejected (`403 email-verification-required`), resend accepted (`202`),
 and — with the token — verification, sign-in, and authenticated
-`GET /v1/me` (`200`). It refuses non-sandbox recipients, non-HTTP(S)
-targets, and localhost (unless `SMOKE_ALLOW_LOCALHOST=true`), and logs only
-method, path, status, and stable problem codes. Run it after every sandbox
-deploy, Worker rollback, and D1 recovery.
+`GET /v1/me` (`200`). It refuses invalid exact recipients and non-sandbox
+domain recipients, non-HTTP(S) targets, and localhost (unless
+`SMOKE_ALLOW_LOCALHOST=true`), and logs only method, path, status, and
+stable problem codes — never the recipient address. Run it after every
+sandbox deploy, Worker rollback, and D1 recovery.
 
 ## 7. Logs, traces, and metrics
 
