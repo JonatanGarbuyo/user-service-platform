@@ -1,5 +1,6 @@
 import { rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ResolvedDeployment } from './targets.js';
 
 // Temporary Wrangler materialization (ticket #78, ADR-0008).
@@ -20,16 +21,43 @@ export const BASE_COMPATIBILITY_DATE = '2026-08-22';
 export const BASE_COMPATIBILITY_FLAGS: readonly string[] = ['nodejs_compat'];
 export const BASE_OBSERVABILITY: { readonly enabled: true } = { enabled: true };
 
+// Repository-anchored file resolution (ticket #85, ADR-0008).
+//
+// Wrangler resolves `main` and `migrations_dir` relative to the Wrangler
+// config file. The deployer materializes a target-specific config into an OS
+// temporary directory, so relative entries would resolve under that temp
+// directory (`/tmp/user-service-deploy-.../drizzle`) instead of the versioned
+// repository source. Materialized configs therefore carry absolute paths
+// derived deterministically from this module's location (never from
+// `process.cwd()` or the temp directory), pointing at the single versioned
+// source under `./drizzle`. No migration files are copied, rewritten, or
+// generated.
+export function resolveRepoRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+}
+
+export function resolveRepoMigrationsDir(repoRoot: string = resolveRepoRoot()): string {
+  return join(resolve(repoRoot), 'drizzle');
+}
+
+export function resolveRepoWorkerMain(repoRoot: string = resolveRepoRoot()): string {
+  return join(resolve(repoRoot), BASE_WORKER_MAIN);
+}
+
+export interface MaterializeOptions {
+  readonly repoRoot?: string;
+}
+
 export interface TargetD1Binding {
   readonly binding: 'DB';
   readonly database_name: string;
   readonly database_id: string;
-  readonly migrations_dir: 'drizzle';
+  readonly migrations_dir: string;
 }
 
 export interface TargetWranglerConfig {
   readonly name: string;
-  readonly main: typeof BASE_WORKER_MAIN;
+  readonly main: string;
   readonly compatibility_date: typeof BASE_COMPATIBILITY_DATE;
   readonly compatibility_flags: readonly string[];
   readonly vars: Record<string, string>;
@@ -37,10 +65,19 @@ export interface TargetWranglerConfig {
   readonly d1_databases: readonly [TargetD1Binding];
 }
 
-export function buildTargetWranglerConfig(resolved: ResolvedDeployment): TargetWranglerConfig {
+export function buildTargetWranglerConfig(
+  resolved: ResolvedDeployment,
+  options: MaterializeOptions = {},
+): TargetWranglerConfig {
+  const repoRoot = options.repoRoot === undefined ? resolveRepoRoot() : resolve(options.repoRoot);
+  const main = resolveRepoWorkerMain(repoRoot);
+  const migrationsDir = resolveRepoMigrationsDir(repoRoot);
+  if (!isAbsolute(main) || !isAbsolute(migrationsDir)) {
+    throw new Error('Materialized Wrangler paths must be absolute.');
+  }
   return {
     name: resolved.workerName,
-    main: BASE_WORKER_MAIN,
+    main,
     compatibility_date: BASE_COMPATIBILITY_DATE,
     compatibility_flags: [...BASE_COMPATIBILITY_FLAGS],
     vars: { ENVIRONMENT: resolved.environment, ...resolved.vars },
@@ -50,7 +87,7 @@ export function buildTargetWranglerConfig(resolved: ResolvedDeployment): TargetW
         binding: 'DB',
         database_name: resolved.databaseName,
         database_id: resolved.databaseId,
-        migrations_dir: 'drizzle',
+        migrations_dir: migrationsDir,
       },
     ],
   };
@@ -58,9 +95,17 @@ export function buildTargetWranglerConfig(resolved: ResolvedDeployment): TargetW
 
 // Writes the materialized config into an operator-provided directory (the
 // orchestrator creates an OS temporary directory) and returns its path.
-export function writeTempWranglerConfig(resolved: ResolvedDeployment, directory: string): string {
+export function writeTempWranglerConfig(
+  resolved: ResolvedDeployment,
+  directory: string,
+  options: MaterializeOptions = {},
+): string {
   const path = join(directory, `wrangler.${resolved.workerName}.json`);
-  writeFileSync(path, `${JSON.stringify(buildTargetWranglerConfig(resolved), null, 2)}\n`, 'utf8');
+  writeFileSync(
+    path,
+    `${JSON.stringify(buildTargetWranglerConfig(resolved, options), null, 2)}\n`,
+    'utf8',
+  );
   return path;
 }
 

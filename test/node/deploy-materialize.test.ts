@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   BASE_COMPATIBILITY_DATE,
@@ -9,6 +9,9 @@ import {
   BASE_WORKER_MAIN,
   buildTargetWranglerConfig,
   removeTempWranglerConfig,
+  resolveRepoMigrationsDir,
+  resolveRepoRoot,
+  resolveRepoWorkerMain,
   writeTempWranglerConfig,
 } from '../../scripts/deploy/materialize.js';
 import type { ResolvedDeployment } from '../../scripts/deploy/targets.js';
@@ -51,13 +54,16 @@ describe('wrangler config materialization', () => {
 
   it('materializes a target-specific config with the stable DB binding', () => {
     const config = buildTargetWranglerConfig(SANDBOX_RESOLVED);
+    const expectedMigrationsDir = resolveRepoMigrationsDir();
+    const expectedMain = resolveRepoWorkerMain();
     expect(config.name).toBe('rch-rugbychampagne-user-service-sandbox');
+    expect(config.main).toBe(expectedMain);
     expect(config.d1_databases).toEqual([
       {
         binding: 'DB',
         database_name: 'rch-rugbychampagne-user-service-sandbox-db',
         database_id: CONTRACT_SANDBOX_DATABASE_ID,
-        migrations_dir: 'drizzle',
+        migrations_dir: expectedMigrationsDir,
       },
     ]);
     expect(config.vars).toMatchObject({
@@ -66,6 +72,21 @@ describe('wrangler config materialization', () => {
       AUTH_MAIL_FROM: 'User Service <jg@ingalatech.com>',
       AUTH_MAIL_ALLOWLIST: 'jonatangarbuyo@gmail.com,jg@ingalatech.com',
     });
+  });
+
+  it('anchors repository files to absolute repo paths, not the temp config directory', () => {
+    // Ticket #85: Wrangler resolves `main` and `migrations_dir` relative to
+    // the config file, so a temp config must carry absolute repository paths.
+    const config = buildTargetWranglerConfig(SANDBOX_RESOLVED);
+    const migrationsDir = config.d1_databases[0].migrations_dir;
+    expect(isAbsolute(migrationsDir)).toBe(true);
+    expect(isAbsolute(config.main)).toBe(true);
+    expect(basename(migrationsDir)).toBe('drizzle');
+    expect(config.main.endsWith(BASE_WORKER_MAIN)).toBe(true);
+    expect(resolve(config.main)).toBe(config.main);
+    expect(resolve(migrationsDir)).toBe(migrationsDir);
+    expect(migrationsDir).toBe(resolveRepoMigrationsDir(resolveRepoRoot()));
+    expect(config.main).toBe(resolveRepoWorkerMain(resolveRepoRoot()));
   });
 
   it('never materializes secret keys into the generated config', () => {
@@ -103,6 +124,56 @@ describe('wrangler config materialization', () => {
       expect(() => readFileSync(path, 'utf8')).toThrow();
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the versioned drizzle source from an OS-temp config location', () => {
+    // Ticket #85 acceptance: a config materialized into an OS temp directory
+    // must still resolve the repository `./drizzle` files without copying
+    // them, independent of the temp directory.
+    const first = mkdtempSync(join(tmpdir(), 'deploy-materialize-temp-a-'));
+    const second = mkdtempSync(join(tmpdir(), 'deploy-materialize-temp-b-'));
+    try {
+      const firstPath = writeTempWranglerConfig(SANDBOX_RESOLVED, first);
+      const secondPath = writeTempWranglerConfig(SANDBOX_RESOLVED, second);
+      try {
+        const firstConfig = JSON.parse(readFileSync(firstPath, 'utf8')) as {
+          main?: unknown;
+          d1_databases?: { migrations_dir?: unknown }[];
+        };
+        const secondConfig = JSON.parse(readFileSync(secondPath, 'utf8')) as {
+          d1_databases?: { migrations_dir?: unknown }[];
+        };
+        const firstMigrationsDir = firstConfig.d1_databases?.[0]?.migrations_dir;
+        const secondMigrationsDir = secondConfig.d1_databases?.[0]?.migrations_dir;
+        expect(typeof firstMigrationsDir).toBe('string');
+        expect(firstMigrationsDir).toBe(secondMigrationsDir);
+        if (typeof firstMigrationsDir !== 'string') {
+          throw new Error('Materialized migrations_dir must be a string.');
+        }
+        // The temp directory itself carries no drizzle copy: relative
+        // resolution from the config location would fail.
+        expect(existsSync(join(first, 'drizzle'))).toBe(false);
+        expect(join(dirname(firstPath), 'drizzle')).not.toBe(firstMigrationsDir);
+        // The absolute entry points at the single versioned source.
+        expect(isAbsolute(firstMigrationsDir)).toBe(true);
+        expect(basename(firstMigrationsDir)).toBe('drizzle');
+        expect(existsSync(join(firstMigrationsDir, 'meta', '_journal.json'))).toBe(true);
+        expect(existsSync(firstMigrationsDir)).toBe(true);
+        // The worker entry is anchored the same way.
+        expect(typeof firstConfig.main).toBe('string');
+        if (typeof firstConfig.main !== 'string') {
+          throw new Error('Materialized main must be a string.');
+        }
+        expect(isAbsolute(firstConfig.main)).toBe(true);
+        expect(existsSync(firstConfig.main)).toBe(true);
+      } finally {
+        removeTempWranglerConfig(firstPath);
+        removeTempWranglerConfig(secondPath);
+      }
+    } finally {
+      rmSync(first, { recursive: true, force: true });
+      rmSync(second, { recursive: true, force: true });
     }
   });
 

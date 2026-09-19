@@ -151,7 +151,7 @@ async function main(): Promise<void> {
     mkdirSync(dirname(destination), { recursive: true });
     writeFileSync(
       destination,
-      `${JSON.stringify(buildTargetWranglerConfig(resolved), null, 2)}\n`,
+      `${JSON.stringify(buildTargetWranglerConfig(resolved, { repoRoot: repoRoot() }), null, 2)}\n`,
       'utf8',
     );
     console.log(
@@ -161,8 +161,10 @@ async function main(): Promise<void> {
   }
 
   const directory = mkdtempSync(join(tmpdir(), 'user-service-deploy-'));
+  const deployRepoRoot = repoRoot();
   const io: DeployIo = {
-    materialize: (target) => writeTempWranglerConfig(target, directory),
+    materialize: (target) =>
+      writeTempWranglerConfig(target, directory, { repoRoot: deployRepoRoot }),
     cleanup: (path) => {
       removeTempWranglerConfig(path);
       try {
