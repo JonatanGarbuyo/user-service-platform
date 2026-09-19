@@ -1,23 +1,37 @@
-// Sandbox smoke test (ticket #14, ADR-0008).
+// Sandbox smoke test (tickets #14, #87, ADR-0008).
 //
 // Proves the deployed sandbox Worker serves the health and verified-email
 // identity path without touching production accounts or production email
-// recipients. Registration always uses an address inside the operator-provided
-// sandbox domain (`SMOKE_SANDBOX_EMAIL_DOMAIN`), which must itself be covered
-// by the sandbox `AUTH_MAIL_ALLOWLIST` so deliveries can never reach arbitrary
-// recipients. The full verify -> sign-in transition needs a human to paste the
-// token from the allowlisted mailbox (`SMOKE_VERIFICATION_TOKEN`); without it
-// the smoke proves the deployed verification gate (register -> login rejected
-// with `email-verification-required` -> resend accepted) and the integration
-// suite remains the authority for the token transition.
+// recipients. Two recipient modes select the registration address:
+//
+// - exact-recipient mode (`SMOKE_SANDBOX_EMAIL`): the explicit address is used
+//   directly as the registration recipient. It must be syntactically valid and
+//   is never logged. This is the mode for sandbox targets whose
+//   `AUTH_MAIL_ALLOWLIST` holds exact emails rather than a domain.
+// - domain-generated mode (`SMOKE_SANDBOX_EMAIL_DOMAIN`): each run registers a
+//   unique `smoke-<run-id>@<domain>` address. The domain must itself be covered
+//   by the sandbox `AUTH_MAIL_ALLOWLIST` so deliveries can never reach arbitrary
+//   recipients.
+//
+// Exact mode takes precedence when `SMOKE_SANDBOX_EMAIL` is set; nothing is
+// generated or inferred in that mode. The full verify -> sign-in transition
+// needs a human to paste the token from the allowlisted mailbox
+// (`SMOKE_VERIFICATION_TOKEN`); without it the smoke proves the deployed
+// verification gate (register -> login rejected with
+// `email-verification-required` -> resend accepted) and the integration suite
+// remains the authority for the token transition.
 //
 // Redaction (ADR-0009): this script logs only HTTP method, path, status and
 // stable problem codes. Passwords, tokens, cookies, action URLs, message
 // bodies and raw email addresses never enter its output.
 
+export type SmokeRecipient =
+  | { readonly kind: 'exact'; readonly email: string }
+  | { readonly kind: 'domain'; readonly emailDomain: string };
+
 export interface SmokeConfig {
   readonly baseUrl: string;
-  readonly emailDomain: string;
+  readonly recipient: SmokeRecipient;
   readonly allowLocalhost: boolean;
   readonly password: string;
   readonly verificationToken: string | undefined;
@@ -25,6 +39,7 @@ export interface SmokeConfig {
 
 type SmokeEnv = Pick<NodeJS.ProcessEnv, string> & {
   readonly SMOKE_SANDBOX_BASE_URL?: string;
+  readonly SMOKE_SANDBOX_EMAIL?: string;
   readonly SMOKE_SANDBOX_EMAIL_DOMAIN?: string;
   readonly SMOKE_ALLOW_LOCALHOST?: string;
   readonly SMOKE_PASSWORD?: string;
@@ -41,6 +56,30 @@ function isTruthy(value: string): boolean {
 
 export function buildSmokeEmail(domain: string, runId: string): string {
   return `smoke-${runId}@${domain.toLowerCase()}`;
+}
+
+// Parses the explicit exact-recipient address (`SMOKE_SANDBOX_EMAIL`),
+// returning the normalized recipient. Fails closed on anything that is not a
+// syntactically valid explicit email; callers must not fall back to another
+// recipient mode when this throws.
+export function parseExactSmokeEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error(
+      'Refusing sandbox smoke without a syntactically valid SMOKE_SANDBOX_EMAIL (an explicit allowlisted recipient).',
+    );
+  }
+  return email;
+}
+
+// Resolves the registration recipient for a smoke run: the exact address is
+// used directly, while domain mode generates a unique per-run address. Exact
+// mode never generates or infers an address from the run id.
+export function resolveSmokeEmail(config: SmokeConfig, runId: string): string {
+  if (config.recipient.kind === 'exact') {
+    return config.recipient.email;
+  }
+  return buildSmokeEmail(config.recipient.emailDomain, runId);
 }
 
 function emailDomainOf(email: string): string | undefined {
@@ -95,16 +134,26 @@ export function resolveSmokeConfig(env: SmokeEnv = process.env): SmokeConfig {
   if (baseUrl.length === 0) {
     throw new Error('SMOKE_SANDBOX_BASE_URL is required (the deployed sandbox Worker origin).');
   }
-  const emailDomain = readEnv(env, 'SMOKE_SANDBOX_EMAIL_DOMAIN');
-  if (emailDomain.length === 0) {
-    throw new Error(
-      'SMOKE_SANDBOX_EMAIL_DOMAIN is required (a sandbox-allowlisted domain; never a production recipient domain).',
-    );
+  const exactRaw = readEnv(env, 'SMOKE_SANDBOX_EMAIL');
+  let recipient: SmokeRecipient;
+  if (exactRaw.length > 0) {
+    // Exact-recipient mode takes precedence: the address is used directly and
+    // nothing is generated or inferred. An invalid value fails closed here
+    // rather than silently falling back to domain-generated mode.
+    recipient = { kind: 'exact', email: parseExactSmokeEmail(exactRaw) };
+  } else {
+    const emailDomain = readEnv(env, 'SMOKE_SANDBOX_EMAIL_DOMAIN');
+    if (emailDomain.length === 0) {
+      throw new Error(
+        'SMOKE_SANDBOX_EMAIL or SMOKE_SANDBOX_EMAIL_DOMAIN is required (an explicit allowlisted recipient, or a sandbox-allowlisted domain; never a production recipient or domain).',
+      );
+    }
+    recipient = { kind: 'domain', emailDomain: emailDomain.toLowerCase() };
   }
   const password = readEnv(env, 'SMOKE_PASSWORD');
   return {
     baseUrl,
-    emailDomain: emailDomain.toLowerCase(),
+    recipient,
     allowLocalhost: isTruthy(readEnv(env, 'SMOKE_ALLOW_LOCALHOST')),
     password: password.length > 0 ? password : `smoke-${crypto.randomUUID()}`,
     verificationToken: (() => {
@@ -175,8 +224,10 @@ async function main(): Promise<void> {
   assertSafeSmokeTarget(config.baseUrl, { allowLocalhost: config.allowLocalhost });
   const base = config.baseUrl.replace(/\/+$/, '');
   const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  const email = buildSmokeEmail(config.emailDomain, runId);
-  assertSandboxSmokeEmail(email, config.emailDomain);
+  const email = resolveSmokeEmail(config, runId);
+  if (config.recipient.kind === 'domain') {
+    assertSandboxSmokeEmail(email, config.recipient.emailDomain);
+  }
 
   const request = async (
     label: string,

@@ -48,5 +48,6 @@ jobs:
       - name: Deploy to the RCH sandbox target
         env:
           SMOKE_SANDBOX_BASE_URL: ${{ secrets.SANDBOX_BASE_URL }}
+          SMOKE_SANDBOX_EMAIL: ${{ secrets.SANDBOX_SMOKE_EMAIL }}
           SMOKE_SANDBOX_EMAIL_DOMAIN: ${{ secrets.SANDBOX_SMOKE_EMAIL_DOMAIN }}
         run: npm run deploy -- --target rch-rugbychampagne --env sandbox --non-interactive
