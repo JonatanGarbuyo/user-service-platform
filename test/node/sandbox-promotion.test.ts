@@ -8,7 +8,9 @@ import {
   assertSafeSmokeTarget,
   assertSandboxSmokeEmail,
   buildSmokeEmail,
+  parseExactSmokeEmail,
   resolveSmokeConfig,
+  resolveSmokeEmail,
 } from '../../scripts/smoke-sandbox.js';
 import { resolveAuthSecret } from '../../src/features/identity/secret.js';
 
@@ -333,6 +335,106 @@ describe('sandbox smoke guards (ticket #14)', () => {
     expect(() => {
       assertSandboxSmokeEmail('smoke-x@ops.example.org', 'ops.example.org');
     }).not.toThrow();
+  });
+
+  it('prefers the exact allowlisted recipient without requiring an email domain', () => {
+    const config = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL: 'Smoke-Contact@ops.example.org',
+    });
+    expect(config.recipient).toEqual({ kind: 'exact', email: 'smoke-contact@ops.example.org' });
+  });
+
+  it('rejects a syntactically invalid exact recipient instead of falling back', () => {
+    for (const bad of ['not-an-email', 'smoke@', '@ops.example.org', 'smoke@ops', '']) {
+      expect(() => parseExactSmokeEmail(bad)).toThrow(/SMOKE_SANDBOX_EMAIL/);
+    }
+    for (const bad of ['not-an-email', 'smoke@', '@ops.example.org', 'smoke@ops']) {
+      expect(() =>
+        resolveSmokeConfig({
+          SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+          SMOKE_SANDBOX_EMAIL: bad,
+          SMOKE_SANDBOX_EMAIL_DOMAIN: 'ops.example.org',
+        }),
+      ).toThrow(/SMOKE_SANDBOX_EMAIL/);
+    }
+  });
+
+  it('treats an empty exact recipient as unset and keeps domain mode', () => {
+    const config = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL: '',
+      SMOKE_SANDBOX_EMAIL_DOMAIN: 'ops.example.org',
+    });
+    expect(config.recipient).toEqual({ kind: 'domain', emailDomain: 'ops.example.org' });
+  });
+
+  it('normalizes a valid exact recipient without logging it', () => {
+    expect(parseExactSmokeEmail('  Smoke-Contact@Ops.Example.Org  ')).toBe(
+      'smoke-contact@ops.example.org',
+    );
+  });
+
+  it('never generates or infers a recipient in exact mode', () => {
+    const config = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL: 'smoke-contact@ops.example.org',
+    });
+    expect(resolveSmokeEmail(config, 'abc123')).toBe('smoke-contact@ops.example.org');
+    expect(resolveSmokeEmail(config, 'zzz999')).toBe('smoke-contact@ops.example.org');
+  });
+
+  it('keeps domain-generated mode when no exact recipient is configured', () => {
+    const config = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL_DOMAIN: 'ops.example.org',
+    });
+    expect(config.recipient).toEqual({ kind: 'domain', emailDomain: 'ops.example.org' });
+    expect(resolveSmokeEmail(config, 'abc123')).toBe('smoke-abc123@ops.example.org');
+  });
+
+  it('still fails closed when neither recipient mode is configured', () => {
+    expect(() =>
+      resolveSmokeConfig({
+        SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      }),
+    ).toThrow(/SMOKE_SANDBOX_EMAIL/);
+  });
+
+  it('never logs the explicit recipient, password, or token', () => {
+    const source = readFileSync('scripts/smoke-sandbox.ts', 'utf8');
+    const logLines = source.split('\n').filter((line) => {
+      const text = line.trim();
+      if (text.startsWith('//')) {
+        return false;
+      }
+      return text.includes('logStep(') || text.includes('console.log(') || text.includes('fail(');
+    });
+    expect(logLines.length).toBeGreaterThan(0);
+    for (const line of logLines) {
+      const code = line
+        .replace(/'[^']*'/g, '')
+        .replace(/"[^"]*"/g, '')
+        .replace(/`[^`]*`/g, '');
+      expect(code).not.toMatch(/\bemail\b/i);
+      expect(code).not.toMatch(/\bpassword\b/i);
+      expect(code).not.toMatch(/\btoken\b/i);
+    }
+  });
+
+  it('wires the exact-recipient secret through env without exposing it in run blocks', () => {
+    const workflow = readFileSync('.github/workflows/deploy-sandbox.yml', 'utf8');
+    expect(workflow).toMatch(/SMOKE_SANDBOX_EMAIL:\s*\$\{\{\s*secrets\.SANDBOX_SMOKE_EMAIL\s*\}\}/);
+    for (const block of readRunBlocks('.github/workflows/deploy-sandbox.yml')) {
+      expect(block).not.toMatch(/SANDBOX_SMOKE_EMAIL/);
+      expect(block).not.toMatch(/SMOKE_SANDBOX_EMAIL/);
+    }
+  });
+
+  it('documents exact-recipient sandbox acceptance in the runbook', () => {
+    const runbook = readFileSync('docs/operations/sandbox-release-runbook.md', 'utf8');
+    expect(runbook).toMatch(/SANDBOX_SMOKE_EMAIL(?!_DOMAIN)/);
+    expect(runbook).toMatch(/SMOKE_SANDBOX_EMAIL(?!_DOMAIN)/);
   });
 
   it('requires explicit smoke configuration and refuses localhost by default', () => {
