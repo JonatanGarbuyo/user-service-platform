@@ -233,9 +233,16 @@ describe('target-aware worker configuration (ticket #78)', () => {
   });
 
   it('enforces the sandbox recipient allowlist in target configuration', () => {
+    // Ticket #88: RCH sandbox mail no longer depends on ingalatech.com; the
+    // allowlist holds only the Gmail acceptance recipient.
     const file = loadTargets();
     const sandbox = file.targets.find((entry) => entry.key === 'rch-rugbychampagne');
-    expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_ALLOWLIST).toContain('jg@ingalatech.com');
+    expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_TRANSPORT).toBe('smtp');
+    expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_ALLOWLIST).toBe('jonatangarbuyo@gmail.com');
+    expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_FROM).toBe(
+      'User Service <jonatangarbuyo@gmail.com>',
+    );
+    expect(JSON.stringify(sandbox?.environments.sandbox.vars)).not.toContain('ingalatech.com');
     expect(sandbox?.environments.production.vars.AUTH_MAIL_ALLOWLIST ?? '').toBe('');
   });
 

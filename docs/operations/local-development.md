@@ -128,6 +128,26 @@ AUTH_MAIL_ALLOWLIST=<local test domain, e.g. @example.com>
 
 Non-production deliveries are allowlist-guarded for both transports, so the
 allowlist must cover the local test address before anything is delivered.
+The local default stays credential-free on the metadata-only development
+sink; opt into real delivery only by setting the SMTP variables below in
+the ignored root `.env`.
+
+The current RCH sandbox acceptance uses Gmail submission through the same
+provider-neutral SMTP variables (ticket #88). The equivalent optional local
+real-mail setup selects the same transport with operator-owned credentials;
+there is no Gmail-specific application branch:
+
+```bash
+# in .env, optional Gmail SMTP real-delivery acceptance only:
+AUTH_MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=<local Gmail address>
+SMTP_PASSWORD=<local-only Google App Password, never the normal password>
+AUTH_MAIL_FROM=User Service <<local Gmail address>>
+AUTH_MAIL_ALLOWLIST=<local Gmail address>
+```
 
 ```bash
 npm run dev:local
