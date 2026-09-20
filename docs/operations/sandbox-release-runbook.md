@@ -305,7 +305,7 @@ proves the verification gate but cannot prove externally delivered
 transactional mail.
 
 ```bash
-export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.workers.dev"
+export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.jonatangarbuyo.workers.dev"
 # Exact-recipient mode (RCH sandbox allowlist holds the exact Gmail recipient):
 export SMOKE_SANDBOX_EMAIL="jonatangarbuyo@gmail.com"  # exact allowlisted recipient only
 # Domain-generated fallback (only when no exact recipient is configured):
