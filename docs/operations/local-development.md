@@ -145,7 +145,7 @@ SMTP_PORT=587
 SMTP_SECURE=false
 SMTP_USER=<local Gmail address>
 SMTP_PASSWORD=<local-only Google App Password, never the normal password>
-AUTH_MAIL_FROM=User Service <<local Gmail address>>
+AUTH_MAIL_FROM="User Service <user@gmail.com>"
 AUTH_MAIL_ALLOWLIST=<local Gmail address>
 ```
 
