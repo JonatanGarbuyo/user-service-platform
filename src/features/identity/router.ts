@@ -27,7 +27,7 @@ export interface IdentityRouterOptions {
   readonly authMailer?: AuthMailer;
 }
 
-type IdentityContext = Context<{ Bindings: Env }>;
+type IdentityContext = Context<{ Bindings: Env; Variables: { requestId: string } }>;
 
 // Better Auth failure surfaced either as an error Response (asResponse mode)
 // or as a thrown APIError. Only the numeric status and string code cross
@@ -167,7 +167,7 @@ function forwardSessionCookies(c: IdentityContext, source: Response): void {
 // application-owned contracts; no Better Auth, session-token or D1 row type
 // crosses the handler boundary.
 export function createIdentityRouter(options: IdentityRouterOptions = {}) {
-  const router = new OpenAPIHono<{ Bindings: Env }>();
+  const router = new OpenAPIHono<{ Bindings: Env; Variables: { requestId: string } }>();
   const override = options.authMailer;
 
   router.openapi(registerRoute, async (c) => {
@@ -375,6 +375,7 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       baseURL: new URL(c.req.url).origin,
       authMailer: override,
       background: backgroundScheduler(c),
+      requestId: c.get('requestId'),
     });
     if (session === null) {
       return problem(c, 401, 'unauthenticated', 'Unauthenticated');

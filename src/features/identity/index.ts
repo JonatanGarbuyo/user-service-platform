@@ -41,5 +41,10 @@ export type { AuthPolicy } from './policy.js';
 export { DEFAULT_AUTH_POLICY, resolveAuthPolicy } from './policy.js';
 export type { BootstrapAdminInput, BootstrapAdminOutcome } from './admin.js';
 export { bootstrapAdminUser } from './admin.js';
-export type { AuthenticatedUser, ResolveSessionInput, SessionContext } from './session.js';
+export type {
+  AuthenticatedUser,
+  ResolveSessionInput,
+  SessionContext,
+  SessionResolvePhase,
+} from './session.js';
 export { resolveSessionContext, toAuthenticatedUser, toSessionContext } from './session.js';
