@@ -70,11 +70,11 @@ npm run deploy -- --target rch-rugbychampagne --env sandbox \
 
 # 4. Set sandbox secrets against the target Worker (never commit these; never
 #    reuse production values; never copy them from local files — type or paste
-#    each value at the prompt).
+#    each value at the prompt). The RCH sandbox selects the SMTP transport
+#    (ticket #88), so it needs the SMTP credential pair, not a Resend key.
+#    `SMTP_USER` is the Gmail address and `SMTP_PASSWORD` is a Google App
+#    Password, never the normal Google password.
 npx wrangler secret put BETTER_AUTH_SECRET --config /tmp/rch-sandbox.json
-npx wrangler secret put RESEND_API_KEY --config /tmp/rch-sandbox.json
-# Only when the sandbox deployment selects the SMTP transport
-# (AUTH_MAIL_TRANSPORT=smtp, ticket #58):
 npx wrangler secret put SMTP_USER --config /tmp/rch-sandbox.json
 npx wrangler secret put SMTP_PASSWORD --config /tmp/rch-sandbox.json
 
@@ -83,11 +83,16 @@ npm run deploy -- --target rch-rugbychampagne --env sandbox --dry-run
 ```
 
 Sandbox non-secret mail values are versioned per target in
-`deploy/targets.json` (RCH sandbox: `AUTH_MAIL_TRANSPORT=resend`,
-`AUTH_MAIL_FROM=User Service <jg@ingalatech.com>`,
-`AUTH_MAIL_ALLOWLIST=jonatangarbuyo@gmail.com,jg@ingalatech.com`).
-`AUTH_MAIL_FROM` must correspond to a sender authorized by the selected mail
-provider.
+`deploy/targets.json` (RCH sandbox, ticket #88: `AUTH_MAIL_TRANSPORT=smtp`,
+`SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, `SMTP_SECURE=false`,
+`AUTH_MAIL_FROM=User Service <jonatangarbuyo@gmail.com>`,
+`AUTH_MAIL_ALLOWLIST=jonatangarbuyo@gmail.com`). Gmail submission is
+represented only through these ordinary provider-neutral SMTP settings;
+there is no Gmail-specific application branch. `AUTH_MAIL_FROM` must
+correspond to a sender authorized by the selected mail provider, and the
+RCH sandbox sender/allowlist no longer depend on `ingalatech.com`. The
+SMTP credentials (`SMTP_USER`/`SMTP_PASSWORD`) stay runtime secrets
+configured directly on the Worker and never enter versioned config.
 
 Repository secrets required for automation:
 
@@ -100,8 +105,8 @@ Repository secrets required for automation:
 | `SANDBOX_SMOKE_EMAIL_DOMAIN` | Sandbox-allowlisted domain for smoke registrations (domain fallback) |
 
 When the sandbox `AUTH_MAIL_ALLOWLIST` holds exact emails rather than a
-domain (RCH sandbox: `jonatangarbuyo@gmail.com,jg@ingalatech.com`), configure
-`SANDBOX_SMOKE_EMAIL` with one of those exact allowlisted recipients. The
+domain (RCH sandbox: `jonatangarbuyo@gmail.com`), configure
+`SANDBOX_SMOKE_EMAIL` with that exact allowlisted recipient. The
 smoke then registers that address directly (`SMOKE_SANDBOX_EMAIL` at runtime)
 instead of generating a per-run domain address. Never broaden
 `AUTH_MAIL_ALLOWLIST` merely to make the smoke pass.
@@ -300,9 +305,9 @@ proves the verification gate but cannot prove externally delivered
 transactional mail.
 
 ```bash
-export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.workers.dev"
-# Exact-recipient mode (RCH sandbox allowlist holds exact emails):
-export SMOKE_SANDBOX_EMAIL="jg@ingalatech.com"  # exact allowlisted recipient only
+export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.jonatangarbuyo.workers.dev"
+# Exact-recipient mode (RCH sandbox allowlist holds the exact Gmail recipient):
+export SMOKE_SANDBOX_EMAIL="jonatangarbuyo@gmail.com"  # exact allowlisted recipient only
 # Domain-generated fallback (only when no exact recipient is configured):
 # export SMOKE_SANDBOX_EMAIL_DOMAIN="ops.example.org"  # sandbox-allowlisted only
 # Optional: complete the full verify -> sign-in path with a token pasted from
@@ -350,15 +355,20 @@ are not logged by application code.
 npm run deploy -- --target rch-rugbychampagne --env sandbox \
   --write-config /tmp/rch-sandbox.json
 npx wrangler secret put BETTER_AUTH_SECRET --config /tmp/rch-sandbox.json
-npx wrangler secret put RESEND_API_KEY --config /tmp/rch-sandbox.json
+# RCH sandbox mail uses SMTP (ticket #88); production keeps its own provider
+# credential. Rotate the credential matching the environment's transport:
+npx wrangler secret put SMTP_USER --config /tmp/rch-sandbox.json
+npx wrangler secret put SMTP_PASSWORD --config /tmp/rch-sandbox.json
 npm run deploy -- --target rch-rugbychampagne --env sandbox --non-interactive
 npm run smoke:sandbox
 ```
 
-Rotate `BETTER_AUTH_SECRET` and `RESEND_API_KEY` independently; sandbox and
+Rotate `BETTER_AUTH_SECRET` and the environment's mail credential
+(`SMTP_USER`/`SMTP_PASSWORD` for the RCH sandbox, `RESEND_API_KEY` where a
+deployment selects Resend) independently; sandbox and
 production values are distinct and rotated separately. After rotation,
 confirm the smoke passes and that `auth-mail.failed` telemetry does not
-spike for the allowlisted domain.
+spike for the allowlisted recipient.
 
 ## 9. Post-deploy and post-recovery verification
 

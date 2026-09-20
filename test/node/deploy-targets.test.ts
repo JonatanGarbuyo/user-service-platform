@@ -37,9 +37,14 @@ describe('deployment targets', () => {
     });
     expect(resolved.workerName).toBe('rch-rugbychampagne-user-service-sandbox');
     expect(resolved.environment).toBe('sandbox');
-    expect(resolved.vars.AUTH_MAIL_TRANSPORT).toBe('resend');
-    expect(resolved.vars.AUTH_MAIL_FROM).toBe('User Service <jg@ingalatech.com>');
-    expect(resolved.vars.AUTH_MAIL_ALLOWLIST).toBe('jonatangarbuyo@gmail.com,jg@ingalatech.com');
+    // Ticket #88: current RCH sandbox acceptance uses provider-neutral SMTP
+    // (Gmail submission via ordinary SMTP configuration, no Gmail branch).
+    expect(resolved.vars.AUTH_MAIL_TRANSPORT).toBe('smtp');
+    expect(resolved.vars.SMTP_HOST).toBe('smtp.gmail.com');
+    expect(resolved.vars.SMTP_PORT).toBe('587');
+    expect(resolved.vars.SMTP_SECURE).toBe('false');
+    expect(resolved.vars.AUTH_MAIL_FROM).toBe('User Service <jonatangarbuyo@gmail.com>');
+    expect(resolved.vars.AUTH_MAIL_ALLOWLIST).toBe('jonatangarbuyo@gmail.com');
   });
 
   it('resolves the RCH production worker name deterministically', () => {
