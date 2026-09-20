@@ -96,13 +96,14 @@ configured directly on the Worker and never enter versioned config.
 
 Repository secrets required for automation:
 
-| Secret                       | Purpose                                                              |
-| ---------------------------- | -------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`       | Wrangler deploys and D1 migration applies                            |
-| `CLOUDFLARE_ACCOUNT_ID`      | Account scope for Wrangler                                           |
-| `SANDBOX_BASE_URL`           | Deployed sandbox origin for the smoke test                           |
-| `SANDBOX_SMOKE_EMAIL`        | Explicit allowlisted recipient for smoke registrations (ticket #87)  |
-| `SANDBOX_SMOKE_EMAIL_DOMAIN` | Sandbox-allowlisted domain for smoke registrations (domain fallback) |
+| Secret                       | Purpose                                                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`       | Wrangler deploys and D1 migration applies                                                                                                     |
+| `CLOUDFLARE_ACCOUNT_ID`      | Account scope for Wrangler                                                                                                                    |
+| `SANDBOX_BASE_URL`           | Deployed sandbox origin for the smoke test                                                                                                    |
+| `SANDBOX_SMOKE_EMAIL`        | Explicit allowlisted recipient for smoke registrations (ticket #87)                                                                           |
+| `SANDBOX_SMOKE_EMAIL_DOMAIN` | Sandbox-allowlisted domain for smoke registrations (domain fallback)                                                                          |
+| `SANDBOX_SMOKE_PASSWORD`     | Stable operator-owned smoke credential for exact-recipient mode (ticket #91; wired as `SMOKE_PASSWORD` at runtime, never committed or logged) |
 
 When the sandbox `AUTH_MAIL_ALLOWLIST` holds exact emails rather than a
 domain (RCH sandbox: `jonatangarbuyo@gmail.com`), configure
@@ -308,23 +309,71 @@ transactional mail.
 export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.jonatangarbuyo.workers.dev"
 # Exact-recipient mode (RCH sandbox allowlist holds the exact Gmail recipient):
 export SMOKE_SANDBOX_EMAIL="jonatangarbuyo@gmail.com"  # exact allowlisted recipient only
+# Exact-recipient mode requires a stable operator-owned credential (never
+# committed or logged; automation provides it from SANDBOX_SMOKE_PASSWORD):
+export SMOKE_PASSWORD="<operator-owned-sandbox-smoke-password>"
 # Domain-generated fallback (only when no exact recipient is configured):
 # export SMOKE_SANDBOX_EMAIL_DOMAIN="ops.example.org"  # sandbox-allowlisted only
 # Optional: complete the full verify -> sign-in path with a token pasted from
-# the allowlisted mailbox. Without it the smoke proves the verification gate.
+# the allowlisted mailbox while reusing the same SMOKE_PASSWORD. Without it
+# the smoke proves the verification gate.
 export SMOKE_VERIFICATION_TOKEN="<token-from-allowlisted-mailbox>"
 npm run smoke:sandbox
 ```
 
+### 6.1 Exact-recipient repeatability (ticket #91)
+
+Exact-recipient smoke is repeatable against the same persistent sandbox D1
+without a fresh database and without a new recipient. Routine smoke behavior
+stays at the public application HTTP boundary: no D1 SQL, no sandbox-only
+application endpoint, no allowlist change, and no Gmail plus-address
+rewriting. The same explicit address is used directly every run; nothing is
+generated or inferred in exact mode.
+
+Exact-recipient mode requires an explicit stable operator-owned smoke
+credential (`SMOKE_PASSWORD`; automation provides it from the
+`SANDBOX_SMOKE_PASSWORD` repository secret, never committed or logged).
+Domain-generated mode keeps a random per-run password. The smoke never
+silently generates a credential in exact mode: a missing `SMOKE_PASSWORD`
+fails closed before any HTTP request.
+
+The sandbox D1 keeps the same mailbox identity across deploys, so the smoke
+models the persisted login state explicitly instead of assuming freshness:
+
+- **Fresh (`pass-fresh`)** — the stable credential matches an unverified
+  identity. The smoke proves health, anonymous `GET /v1/me` (`401`),
+  registration (`201`, unverified), the verification gate (`403
+email-verification-required`), resend accepted (`202`), and — with the
+  token — the full verify -> sign-in -> authenticated `GET /v1/me` path.
+  This is the one-time full acceptance.
+- **`already-verified` (`pass-already-verified`)** — the stable credential
+  matches an already-verified identity (repeat after a prior token
+  verification). The smoke proves session (`200` login plus `200` me) and
+  resend acceptance without claiming a fresh gate.
+- **Credential mismatch (fail closed)** — `401 invalid-credentials` means
+  the configured smoke credential does not own the persisted identity. The
+  smoke fails closed rather than reporting a pass; a credential collision is
+  never masked as a successful smoke.
+
+Any other login outcome fails closed. Domain-generated mode is unchanged:
+each run registers a unique address and still requires the fresh gate.
+
+Two-step human acceptance for the exact recipient: first run with the stable
+credential sends the real email; after receiving the token, rerun the smoke
+with the **same** `SMOKE_PASSWORD` plus `SMOKE_VERIFICATION_TOKEN` to prove
+verify -> login -> authenticated `GET /v1/me`. Later repeats with the same
+stable credential remain `pass-fresh` while unverified and
+`pass-already-verified` after the one-time verification.
+
 The smoke verifies, in order: `GET /v1/health`, anonymous `GET /v1/me`
-(`401 unauthenticated`), registration (`201`, unverified), pre-verification
-login rejected (`403 email-verification-required`), resend accepted (`202`),
-and — with the token — verification, sign-in, and authenticated
-`GET /v1/me` (`200`). It refuses invalid exact recipients and non-sandbox
-domain recipients, non-HTTP(S) targets, and localhost (unless
-`SMOKE_ALLOW_LOCALHOST=true`), and logs only method, path, status, and
-stable problem codes — never the recipient address. Run it after every
-sandbox deploy, Worker rollback, and D1 recovery.
+(`401 unauthenticated`), registration (`201`, unverified), the classified
+login state above, resend accepted (`202`), and — on the fresh path with
+the token — verification, sign-in, and authenticated `GET /v1/me` (`200`).
+It refuses invalid exact recipients and non-sandbox domain recipients,
+non-HTTP(S) targets, and localhost (unless `SMOKE_ALLOW_LOCALHOST=true`),
+and logs only method, path, status, and stable problem codes — never the
+recipient address. Run it after every sandbox deploy, Worker rollback, and
+D1 recovery.
 
 ## 7. Logs, traces, and metrics
 
