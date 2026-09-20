@@ -16,13 +16,16 @@
 // Exact mode takes precedence when `SMOKE_SANDBOX_EMAIL` is set; nothing is
 // generated or inferred in that mode. Exact mode is repeatable at the public
 // HTTP boundary: the persistent sandbox D1 keeps the same mailbox identity
-// across deploys, so the login attempt observes one stable state per run
-// (`unverified` fresh gate, `already-registered` repeat with a different run
-// password, `already-verified` stable-password repeat after prior
-// verification). Repeats never claim a fresh gate they did not observe; the
-// full verify -> sign-in transition
+// across deploys, so the smoke uses a stable operator-owned credential
+// (`SMOKE_PASSWORD`, automated as `SANDBOX_SMOKE_PASSWORD`) and the login
+// attempt observes one stable state per run (`unverified` fresh or repeated
+// gate, `already-verified` repeat after prior verification). A credential
+// mismatch (`401 invalid-credentials`) means the configured smoke credential
+// does not own the persisted identity and fails closed. Repeats never claim
+// a fresh gate they did not observe; the full verify -> sign-in transition
 // needs a human to paste the token from the allowlisted mailbox
-// (`SMOKE_VERIFICATION_TOKEN`); without it the smoke proves the deployed
+// (`SMOKE_VERIFICATION_TOKEN`) while reusing the same `SMOKE_PASSWORD`;
+// without it the smoke proves the deployed
 // verification gate (register -> login rejected with
 // `email-verification-required` -> resend accepted) and the integration suite
 // remains the authority for the token transition.
@@ -88,35 +91,30 @@ export function resolveSmokeEmail(config: SmokeConfig, runId: string): string {
   return buildSmokeEmail(config.recipient.emailDomain, runId);
 }
 
-// Persisted exact-recipient login state (ticket #91, architecture guard).
+// Persisted exact-recipient login state (ticket #91, architecture guard and
+// final acceptance: exact mode uses a stable operator-owned credential).
 //
 // The sandbox D1 keeps the same allowlisted mailbox identity across deploys,
 // so an exact-recipient smoke cannot assume every run starts fresh. Routine
 // smoke behavior stays at the public application HTTP boundary: the login
-// attempt with the run's password observes one of three stable states, and
+// attempt with the stable credential observes one of two stable states, and
 // unexpected states fail closed rather than producing a false PASS.
 //
-// - `unverified`: the run's credential matches an unverified identity, so
+// - `unverified`: the stable credential matches an unverified identity, so
 //   the deployed verification gate (`403 email-verification-required`) is
-//   proven again. Fresh runs and stable-password repeats land here.
-// - `already-registered`: the run's credential does not match the stored
-//   one (random-password repeat). The gate cannot be proven this run, so the
-//   repeat proves persistence (generic duplicate `201`), resend acceptance
-//   (`202`), health and anonymous identity without claiming the gate or
-//   delivery.
-// - `already-verified`: the run's credential matches an already-verified
-//   identity (stable-password repeat after prior verification). The repeat
-//   proves session (`200` login + `200` me) and resend acceptance without
-//   claiming a fresh gate.
-export type ExactSmokeLoginState =
-  'unverified' | 'already-registered' | 'already-verified' | 'unexpected';
+//   proven again. Fresh runs and stable-credential repeats land here.
+// - `already-verified`: the stable credential matches an already-verified
+//   identity (repeat after prior verification). The repeat proves session
+//   (`200` login + `200` me) and resend acceptance without claiming a fresh
+//   gate.
+// - any `401 invalid-credentials` means the configured smoke credential does
+//   not own the persisted identity (credential collision) and fails closed;
+//   it is never reported as a successful smoke.
+export type ExactSmokeLoginState = 'unverified' | 'already-verified' | 'unexpected';
 
 export function classifyExactSmokeLogin(status: number, code: string): ExactSmokeLoginState {
   if (status === 403 && code === 'email-verification-required') {
     return 'unverified';
-  }
-  if (status === 401 && code === 'invalid-credentials') {
-    return 'already-registered';
   }
   // Successful logins carry the application-owned user payload with no
   // problem `code`; any problem code on a 200 is an unexpected shape and
@@ -181,11 +179,13 @@ export function resolveSmokeConfig(env: SmokeEnv = process.env): SmokeConfig {
   }
   const exactRaw = readEnv(env, 'SMOKE_SANDBOX_EMAIL');
   let recipient: SmokeRecipient;
+  let exactMode = false;
   if (exactRaw.length > 0) {
     // Exact-recipient mode takes precedence: the address is used directly and
     // nothing is generated or inferred. An invalid value fails closed here
     // rather than silently falling back to domain-generated mode.
     recipient = { kind: 'exact', email: parseExactSmokeEmail(exactRaw) };
+    exactMode = true;
   } else {
     const emailDomain = readEnv(env, 'SMOKE_SANDBOX_EMAIL_DOMAIN');
     if (emailDomain.length === 0) {
@@ -195,12 +195,17 @@ export function resolveSmokeConfig(env: SmokeEnv = process.env): SmokeConfig {
     }
     recipient = { kind: 'domain', emailDomain: emailDomain.toLowerCase() };
   }
-  const password = readEnv(env, 'SMOKE_PASSWORD');
+  const passwordRaw = readEnv(env, 'SMOKE_PASSWORD');
+  if (exactMode && passwordRaw.length === 0) {
+    throw new Error(
+      'SMOKE_PASSWORD is required in exact-recipient mode (configure SANDBOX_SMOKE_PASSWORD for automation; never commit or log it).',
+    );
+  }
   return {
     baseUrl,
     recipient,
     allowLocalhost: isTruthy(readEnv(env, 'SMOKE_ALLOW_LOCALHOST')),
-    password: password.length > 0 ? password : `smoke-${crypto.randomUUID()}`,
+    password: passwordRaw.length > 0 ? passwordRaw : `smoke-${crypto.randomUUID()}`,
     verificationToken: (() => {
       const token = readEnv(env, 'SMOKE_VERIFICATION_TOKEN');
       return token.length > 0 ? token : undefined;
@@ -315,10 +320,11 @@ async function main(): Promise<void> {
   // 4. The login attempt observes the persisted recipient state. Domain
   // mode always starts fresh, so it still requires the verification gate.
   // Exact mode (ticket #91) classifies the stable outcome instead of
-  // assuming freshness: `unverified` proves the gate, `already-registered`
-  // proves persistence + resend acceptance without claiming the gate or
-  // delivery, `already-verified` proves session + resend acceptance without
-  // claiming a fresh gate. Anything else fails closed.
+  // assuming freshness: `unverified` proves the gate, `already-verified`
+  // proves session + resend acceptance without claiming a fresh gate. A
+  // `401 invalid-credentials` means the configured stable credential does
+  // not own the persisted identity and fails closed. Anything else fails
+  // closed.
   const gated = await request('login-unverified', '/v1/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -330,37 +336,6 @@ async function main(): Promise<void> {
     }
   } else {
     const state = classifyExactSmokeLogin(gated.res.status, problemCode(gated.payload));
-    if (state === 'already-registered') {
-      // Repeat with a different run password: the stored credential is the
-      // first run's value, so the gate cannot be proven this run. Prove
-      // resend acceptance through the sandbox mail boundary instead, then
-      // finish without claiming the gate, delivery, or a session.
-      const resend = await request('request-verification', '/v1/auth/request-verification', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      if (resend.res.status !== 202 || stringField(resend.payload, 'status') !== 'ok') {
-        fail('request-verification', resend.res.status, 'expected 202 {status:"ok"}');
-      }
-      console.log(
-        JSON.stringify({
-          level: 'info',
-          step: 'verify-email',
-          status: 0,
-          detail: 'skipped-already-registered',
-        }),
-      );
-      console.log(
-        JSON.stringify({
-          level: 'info',
-          step: 'smoke',
-          status: 200,
-          detail: 'pass-already-registered',
-        }),
-      );
-      return;
-    }
     if (state === 'already-verified') {
       // Stable-password repeat after prior verification: prove the session
       // and resend acceptance without claiming a fresh gate.
@@ -402,7 +377,7 @@ async function main(): Promise<void> {
       fail(
         'login-unverified',
         gated.res.status,
-        'expected unverified, already-registered, or already-verified',
+        'expected unverified or already-verified (a 401 means the configured smoke credential does not own the persisted identity)',
       );
     }
   }
@@ -418,10 +393,12 @@ async function main(): Promise<void> {
   }
 
   // 6. Full verify -> sign-in only when the operator supplies the token from
-  // the allowlisted mailbox; otherwise the gate evidence above stands.
-  // This explicit token path is the one-time full acceptance: repeats with a
-  // different run password take the `already-registered` branch above and
-  // never reach this transition, so a stale credential cannot create a
+  // the allowlisted mailbox while reusing the same stable credential;
+  // otherwise the gate evidence above stands.
+  // This explicit token path is the one-time full acceptance: the first run
+  // with the stable credential sends the real email, and the rerun with the
+  // same credential plus the token proves verify -> sign-in. A credential
+  // mismatch fails closed above, so a stale credential cannot create a
   // false PASS.
   if (config.verificationToken !== undefined) {
     const verify = await request('verify-email', '/v1/auth/verify-email', {

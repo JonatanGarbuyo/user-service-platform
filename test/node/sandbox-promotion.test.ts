@@ -349,8 +349,10 @@ describe('sandbox smoke guards (ticket #14)', () => {
     const config = resolveSmokeConfig({
       SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
       SMOKE_SANDBOX_EMAIL: 'Smoke-Contact@ops.example.org',
+      SMOKE_PASSWORD: 'operator-owned-stable-secret',
     });
     expect(config.recipient).toEqual({ kind: 'exact', email: 'smoke-contact@ops.example.org' });
+    expect(config.password).toBe('operator-owned-stable-secret');
   });
 
   it('rejects a syntactically invalid exact recipient instead of falling back', () => {
@@ -387,9 +389,36 @@ describe('sandbox smoke guards (ticket #14)', () => {
     const config = resolveSmokeConfig({
       SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
       SMOKE_SANDBOX_EMAIL: 'smoke-contact@ops.example.org',
+      SMOKE_PASSWORD: 'operator-owned-stable-secret',
     });
     expect(resolveSmokeEmail(config, 'abc123')).toBe('smoke-contact@ops.example.org');
     expect(resolveSmokeEmail(config, 'zzz999')).toBe('smoke-contact@ops.example.org');
+  });
+
+  it('requires an explicit stable credential in exact mode and keeps random passwords for domain mode', () => {
+    expect(() =>
+      resolveSmokeConfig({
+        SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+        SMOKE_SANDBOX_EMAIL: 'smoke-contact@ops.example.org',
+      }),
+    ).toThrow(/SMOKE_PASSWORD/);
+    const first = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL_DOMAIN: 'ops.example.org',
+    });
+    const second = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL_DOMAIN: 'ops.example.org',
+    });
+    expect(first.password.length).toBeGreaterThan(0);
+    expect(second.password.length).toBeGreaterThan(0);
+    expect(first.password).not.toBe(second.password);
+    const stable = resolveSmokeConfig({
+      SMOKE_SANDBOX_BASE_URL: 'https://sandbox.example.workers.dev',
+      SMOKE_SANDBOX_EMAIL: 'smoke-contact@ops.example.org',
+      SMOKE_PASSWORD: 'operator-owned-stable-secret',
+    });
+    expect(stable.password).toBe('operator-owned-stable-secret');
   });
 
   it('keeps domain-generated mode when no exact recipient is configured', () => {
@@ -433,9 +462,12 @@ describe('sandbox smoke guards (ticket #14)', () => {
   it('wires the exact-recipient secret through env without exposing it in run blocks', () => {
     const workflow = readFileSync('.github/workflows/deploy-sandbox.yml', 'utf8');
     expect(workflow).toMatch(/SMOKE_SANDBOX_EMAIL:\s*\$\{\{\s*secrets\.SANDBOX_SMOKE_EMAIL\s*\}\}/);
+    expect(workflow).toMatch(/SMOKE_PASSWORD:\s*\$\{\{\s*secrets\.SANDBOX_SMOKE_PASSWORD\s*\}\}/);
     for (const block of readRunBlocks('.github/workflows/deploy-sandbox.yml')) {
       expect(block).not.toMatch(/SANDBOX_SMOKE_EMAIL/);
       expect(block).not.toMatch(/SMOKE_SANDBOX_EMAIL/);
+      expect(block).not.toMatch(/SANDBOX_SMOKE_PASSWORD/);
+      expect(block).not.toMatch(/SMOKE_PASSWORD/);
     }
   });
 
@@ -463,14 +495,14 @@ describe('sandbox smoke guards (ticket #14)', () => {
   });
 
   it('models persisted exact-recipient login state without a false gate PASS (ticket #91)', () => {
-    // Fresh (or stable-password existing-unverified): the verification gate.
+    // Stable-credential unverified: the verification gate.
     expect(classifyExactSmokeLogin(403, 'email-verification-required')).toBe('unverified');
-    // Random-password repeat: stored credential differs, gate cannot be
-    // proven this run; the repeat proves persistence + resend acceptance.
-    expect(classifyExactSmokeLogin(401, 'invalid-credentials')).toBe('already-registered');
-    // Stable-password repeat after prior verification: session + resend
+    // Stable-credential repeat after prior verification: session + resend
     // acceptance, never claimed as a fresh gate.
     expect(classifyExactSmokeLogin(200, '<missing-code>')).toBe('already-verified');
+    // Credential mismatch: the configured stable credential does not own the
+    // persisted identity and must fail closed, never pass.
+    expect(classifyExactSmokeLogin(401, 'invalid-credentials')).toBe('unexpected');
   });
 
   it('fails closed on unexpected exact-recipient login states (ticket #91)', () => {
@@ -478,6 +510,7 @@ describe('sandbox smoke guards (ticket #14)', () => {
       [500, 'internal-error'],
       [403, 'invalid-credentials'],
       [401, 'email-verification-required'],
+      [401, 'invalid-credentials'],
       [200, 'email-verification-required'],
       [404, '<missing-code>'],
     ] as const) {
@@ -487,8 +520,11 @@ describe('sandbox smoke guards (ticket #14)', () => {
 
   it('documents fresh versus repeatable exact-recipient semantics in the runbook (ticket #91)', () => {
     const runbook = readFileSync('docs/operations/sandbox-release-runbook.md', 'utf8');
-    expect(runbook).toMatch(/already-registered/i);
     expect(runbook).toMatch(/already-verified/i);
+    expect(runbook).toMatch(/SANDBOX_SMOKE_PASSWORD/);
+    expect(runbook).toMatch(/same.*SMOKE_PASSWORD.*SMOKE_VERIFICATION_TOKEN/s);
+    expect(runbook).toMatch(/401 invalid-credentials/i);
+    expect(runbook).toMatch(/fails closed/i);
     expect(runbook).toMatch(/without a fresh database/i);
     expect(runbook).toMatch(/without a new recipient/i);
     expect(runbook).toMatch(/Never broaden/);
