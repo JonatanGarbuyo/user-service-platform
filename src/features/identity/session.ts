@@ -1,7 +1,12 @@
 import type { Env } from '../../env.js';
 import { resolveEffectiveConfig } from '../../config/index.js';
 import { createIdentityAuth } from './auth.js';
-import { resolveAuthMailer, type AuthMailer } from './mailer.js';
+import {
+  resolveAuthMailer,
+  type AuthMailer,
+  type PasswordResetMessage,
+  type VerificationMessage,
+} from './mailer.js';
 import { resolveAuthPolicy } from './policy.js';
 import { resolveAuthSecret } from './secret.js';
 
@@ -34,6 +39,61 @@ export interface ResolveSessionInput {
   // fall back to supervised fire-and-forget. Session reads never trigger
   // mail, so this only preserves consistent wiring.
   readonly background?: (task: Promise<unknown>) => void;
+  // Correlation id for failure telemetry (ADR-0009). The `/v1/me` handler
+  // forwards the request id set by the composition-root middleware so session
+  // failures join the same request trace as the request/error logs.
+  readonly requestId?: string;
+}
+
+// Stable session-resolution failure phase (ticket #93, ADR-0009). Every
+// unexpected session defect is logged with one of these phases before it
+// reaches the 500 boundary so operators can distinguish configuration,
+// auth-construction and session-store failures without raw exception text.
+export type SessionResolvePhase = 'config' | 'auth' | 'session';
+
+type MailerEnv = Parameters<typeof resolveAuthMailer>[0];
+
+// Defers provider-transport construction until an actual mail send (ticket
+// #93). Session reads never send transactional mail, so resolving the
+// configured SMTP/Resend transport eagerly would make `GET /v1/me` depend on
+// mail-provider configuration for no functional reason. An explicitly
+// injected mailer (in-memory in tests) still takes precedence; otherwise the
+// configured transport resolves lazily and keeps its fail-closed validation
+// if a send is ever attempted on this path.
+function deferredSessionMailer(mailEnv: MailerEnv, override?: AuthMailer): AuthMailer {
+  let resolved: AuthMailer | null = null;
+  const current = (): AuthMailer => {
+    if (override !== undefined) {
+      return override;
+    }
+    resolved ??= resolveAuthMailer(mailEnv);
+    return resolved;
+  };
+  return {
+    sendVerificationEmail: (message: VerificationMessage): Promise<void> =>
+      current().sendVerificationEmail(message),
+    sendPasswordResetEmail: (message: PasswordResetMessage): Promise<void> =>
+      current().sendPasswordResetEmail(message),
+  };
+}
+
+// Redacted failure telemetry (ADR-0009): stable level/event/phase plus safe
+// correlation metadata only. Exception messages, credentials, cookies,
+// tokens, email addresses and action URLs never enter this record.
+function logSessionResolveFailure(input: {
+  readonly phase: SessionResolvePhase;
+  readonly requestId?: string;
+  readonly environment?: string;
+}): void {
+  console.log(
+    JSON.stringify({
+      level: 'error',
+      event: 'session.resolve-failed',
+      phase: input.phase,
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.environment === undefined ? {} : { environment: input.environment }),
+    }),
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -71,7 +131,15 @@ export function toSessionContext(payload: unknown): SessionContext | null {
 // Callers pass Worker env, request headers and request origin; this module
 // owns the Better Auth wiring internally so no Better Auth type crosses the
 // public slice boundary. Returns null when no valid session resolves;
-// unexpected infrastructure defects throw to the caller's 500 boundary.
+// unexpected infrastructure defects throw to the caller's 500 boundary and
+// are logged first with a stable redacted failure phase (never 401: an
+// unexpected defect must not masquerade as "unauthenticated").
+//
+// Session resolution depends only on the dependencies required to resolve a
+// session: effective non-secret config, auth policy, signing secret, D1
+// binding, request headers and base URL. The transactional-mail transport is
+// resolved lazily (see `deferredSessionMailer`) so a mail-boundary
+// configuration defect cannot surface as a session-read failure.
 export async function resolveSessionContext(
   input: ResolveSessionInput,
 ): Promise<SessionContext | null> {
@@ -79,11 +147,27 @@ export async function resolveSessionContext(
   // non-secret configuration from the selected versioned profile + same-name
   // runtime overrides before touching Better Auth or D1. Secrets/bindings
   // continue directly from runtime and never enter the effective config.
-  const effective = resolveEffectiveConfig({
-    environment: input.env.ENVIRONMENT,
-    runtime: { ...input.env },
-  });
-  const policy = resolveAuthPolicy(effective.config);
+  let effective: ReturnType<typeof resolveEffectiveConfig>;
+  let policy: ReturnType<typeof resolveAuthPolicy>;
+  let secret: string;
+  try {
+    effective = resolveEffectiveConfig({
+      environment: input.env.ENVIRONMENT,
+      runtime: { ...input.env },
+    });
+    policy = resolveAuthPolicy(effective.config);
+    secret = resolveAuthSecret({
+      ENVIRONMENT: effective.config.ENVIRONMENT,
+      BETTER_AUTH_SECRET: input.env.BETTER_AUTH_SECRET,
+    });
+  } catch (error) {
+    logSessionResolveFailure({
+      phase: 'config',
+      requestId: input.requestId,
+      environment: input.env.ENVIRONMENT ?? 'local',
+    });
+    throw error;
+  }
   const background =
     input.background ??
     ((task) => {
@@ -91,32 +175,49 @@ export async function resolveSessionContext(
         console.log(JSON.stringify({ level: 'error', event: 'auth-mail.failed' }));
       });
     });
-  const auth = createIdentityAuth({
-    db: input.env.DB,
-    policy,
-    mailer: resolveAuthMailer(
-      {
-        ...effective.config,
-        RESEND_API_KEY: input.env.RESEND_API_KEY,
-        SMTP_USER: input.env.SMTP_USER,
-        SMTP_PASSWORD: input.env.SMTP_PASSWORD,
-      },
-      input.authMailer,
-    ),
-    secret: resolveAuthSecret({
-      ENVIRONMENT: effective.config.ENVIRONMENT,
-      BETTER_AUTH_SECRET: input.env.BETTER_AUTH_SECRET,
-    }),
-    baseURL: input.baseURL,
-    background,
-  });
+  let auth: ReturnType<typeof createIdentityAuth>;
+  try {
+    auth = createIdentityAuth({
+      db: input.env.DB,
+      policy,
+      mailer: deferredSessionMailer(
+        {
+          ...effective.config,
+          RESEND_API_KEY: input.env.RESEND_API_KEY,
+          SMTP_USER: input.env.SMTP_USER,
+          SMTP_PASSWORD: input.env.SMTP_PASSWORD,
+        },
+        input.authMailer,
+      ),
+      secret,
+      baseURL: input.baseURL,
+      background,
+    });
+  } catch (error) {
+    logSessionResolveFailure({
+      phase: 'auth',
+      requestId: input.requestId,
+      environment: effective.environment,
+    });
+    throw error;
+  }
 
-  // Bypass the signed cookie cache so a revoked session cannot authorize
-  // through cached payload after sign-out; the D1 store is authoritative.
-  const session = await auth.api.getSession({
-    headers: input.headers,
-    query: { disableCookieCache: true },
-  });
+  let session: unknown;
+  try {
+    // Bypass the signed cookie cache so a revoked session cannot authorize
+    // through cached payload after sign-out; the D1 store is authoritative.
+    session = await auth.api.getSession({
+      headers: input.headers,
+      query: { disableCookieCache: true },
+    });
+  } catch (error) {
+    logSessionResolveFailure({
+      phase: 'session',
+      requestId: input.requestId,
+      environment: effective.environment,
+    });
+    throw error;
+  }
   if (session === null) {
     return null;
   }
