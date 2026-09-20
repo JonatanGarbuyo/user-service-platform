@@ -316,15 +316,48 @@ export SMOKE_VERIFICATION_TOKEN="<token-from-allowlisted-mailbox>"
 npm run smoke:sandbox
 ```
 
+### 6.1 Exact-recipient repeatability (ticket #91)
+
+Exact-recipient smoke is repeatable against the same persistent sandbox D1
+without a fresh database and without a new recipient. Routine smoke behavior
+stays at the public application HTTP boundary: no D1 SQL, no sandbox-only
+application endpoint, no allowlist change, and no Gmail plus-address
+rewriting. The same explicit address is used directly every run; nothing is
+generated or inferred in exact mode.
+
+The sandbox D1 keeps the same mailbox identity across deploys, so the smoke
+models the persisted login state explicitly instead of assuming freshness:
+
+- **Fresh (`pass-fresh`)** — the run's password matches an unverified
+  identity. The smoke proves health, anonymous `GET /v1/me` (`401`),
+  registration (`201`, unverified), the verification gate (`403
+email-verification-required`), resend accepted (`202`), and — with the
+  token — the full verify -> sign-in -> authenticated `GET /v1/me` path.
+  This is the one-time full acceptance.
+- **`already-registered` (`pass-already-registered`)** — the run's random
+  password does not match the stored credential (the normal second run).
+  The gate cannot be proven this run, so the smoke proves health, anonymous
+  identity, generic duplicate registration (`201` without enumeration),
+  and resend acceptance (`202`) without claiming the gate, delivery, or a
+  session. A stale password or session cannot create a false PASS because
+  the `401` branch never reports the gate.
+- **`already-verified` (`pass-already-verified`)** — the run's password
+  matches an already-verified identity (stable-password repeat after a
+  prior token verification). The smoke proves session (`200` login plus
+  `200` me) and resend acceptance without claiming a fresh gate.
+
+Any other login outcome fails closed. Domain-generated mode is unchanged:
+each run registers a unique address and still requires the fresh gate.
+
 The smoke verifies, in order: `GET /v1/health`, anonymous `GET /v1/me`
-(`401 unauthenticated`), registration (`201`, unverified), pre-verification
-login rejected (`403 email-verification-required`), resend accepted (`202`),
-and — with the token — verification, sign-in, and authenticated
-`GET /v1/me` (`200`). It refuses invalid exact recipients and non-sandbox
-domain recipients, non-HTTP(S) targets, and localhost (unless
-`SMOKE_ALLOW_LOCALHOST=true`), and logs only method, path, status, and
-stable problem codes — never the recipient address. Run it after every
-sandbox deploy, Worker rollback, and D1 recovery.
+(`401 unauthenticated`), registration (`201`, unverified), the classified
+login state above, resend accepted (`202`), and — on the fresh path with
+the token — verification, sign-in, and authenticated `GET /v1/me` (`200`).
+It refuses invalid exact recipients and non-sandbox domain recipients,
+non-HTTP(S) targets, and localhost (unless `SMOKE_ALLOW_LOCALHOST=true`),
+and logs only method, path, status, and stable problem codes — never the
+recipient address. Run it after every sandbox deploy, Worker rollback, and
+D1 recovery.
 
 ## 7. Logs, traces, and metrics
 

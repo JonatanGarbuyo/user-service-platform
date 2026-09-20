@@ -8,6 +8,7 @@ import {
   assertSafeSmokeTarget,
   assertSandboxSmokeEmail,
   buildSmokeEmail,
+  classifyExactSmokeLogin,
   parseExactSmokeEmail,
   resolveSmokeConfig,
   resolveSmokeEmail,
@@ -459,5 +460,37 @@ describe('sandbox smoke guards (ticket #14)', () => {
       assertSafeSmokeTarget('http://localhost:8787', { allowLocalhost: true }),
     ).not.toThrow();
     expect(() => assertSafeSmokeTarget('https://sandbox.example.workers.dev')).not.toThrow();
+  });
+
+  it('models persisted exact-recipient login state without a false gate PASS (ticket #91)', () => {
+    // Fresh (or stable-password existing-unverified): the verification gate.
+    expect(classifyExactSmokeLogin(403, 'email-verification-required')).toBe('unverified');
+    // Random-password repeat: stored credential differs, gate cannot be
+    // proven this run; the repeat proves persistence + resend acceptance.
+    expect(classifyExactSmokeLogin(401, 'invalid-credentials')).toBe('already-registered');
+    // Stable-password repeat after prior verification: session + resend
+    // acceptance, never claimed as a fresh gate.
+    expect(classifyExactSmokeLogin(200, '<missing-code>')).toBe('already-verified');
+  });
+
+  it('fails closed on unexpected exact-recipient login states (ticket #91)', () => {
+    for (const [status, code] of [
+      [500, 'internal-error'],
+      [403, 'invalid-credentials'],
+      [401, 'email-verification-required'],
+      [200, 'email-verification-required'],
+      [404, '<missing-code>'],
+    ] as const) {
+      expect(classifyExactSmokeLogin(status, code)).toBe('unexpected');
+    }
+  });
+
+  it('documents fresh versus repeatable exact-recipient semantics in the runbook (ticket #91)', () => {
+    const runbook = readFileSync('docs/operations/sandbox-release-runbook.md', 'utf8');
+    expect(runbook).toMatch(/already-registered/i);
+    expect(runbook).toMatch(/already-verified/i);
+    expect(runbook).toMatch(/without a fresh database/i);
+    expect(runbook).toMatch(/without a new recipient/i);
+    expect(runbook).toMatch(/Never broaden/);
   });
 });

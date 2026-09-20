@@ -1,4 +1,4 @@
-// Sandbox smoke test (tickets #14, #87, ADR-0008).
+// Sandbox smoke test (tickets #14, #87, #91, ADR-0008).
 //
 // Proves the deployed sandbox Worker serves the health and verified-email
 // identity path without touching production accounts or production email
@@ -14,7 +14,13 @@
 //   recipients.
 //
 // Exact mode takes precedence when `SMOKE_SANDBOX_EMAIL` is set; nothing is
-// generated or inferred in that mode. The full verify -> sign-in transition
+// generated or inferred in that mode. Exact mode is repeatable at the public
+// HTTP boundary: the persistent sandbox D1 keeps the same mailbox identity
+// across deploys, so the login attempt observes one stable state per run
+// (`unverified` fresh gate, `already-registered` repeat with a different run
+// password, `already-verified` stable-password repeat after prior
+// verification). Repeats never claim a fresh gate they did not observe; the
+// full verify -> sign-in transition
 // needs a human to paste the token from the allowlisted mailbox
 // (`SMOKE_VERIFICATION_TOKEN`); without it the smoke proves the deployed
 // verification gate (register -> login rejected with
@@ -80,6 +86,45 @@ export function resolveSmokeEmail(config: SmokeConfig, runId: string): string {
     return config.recipient.email;
   }
   return buildSmokeEmail(config.recipient.emailDomain, runId);
+}
+
+// Persisted exact-recipient login state (ticket #91, architecture guard).
+//
+// The sandbox D1 keeps the same allowlisted mailbox identity across deploys,
+// so an exact-recipient smoke cannot assume every run starts fresh. Routine
+// smoke behavior stays at the public application HTTP boundary: the login
+// attempt with the run's password observes one of three stable states, and
+// unexpected states fail closed rather than producing a false PASS.
+//
+// - `unverified`: the run's credential matches an unverified identity, so
+//   the deployed verification gate (`403 email-verification-required`) is
+//   proven again. Fresh runs and stable-password repeats land here.
+// - `already-registered`: the run's credential does not match the stored
+//   one (random-password repeat). The gate cannot be proven this run, so the
+//   repeat proves persistence (generic duplicate `201`), resend acceptance
+//   (`202`), health and anonymous identity without claiming the gate or
+//   delivery.
+// - `already-verified`: the run's credential matches an already-verified
+//   identity (stable-password repeat after prior verification). The repeat
+//   proves session (`200` login + `200` me) and resend acceptance without
+//   claiming a fresh gate.
+export type ExactSmokeLoginState =
+  'unverified' | 'already-registered' | 'already-verified' | 'unexpected';
+
+export function classifyExactSmokeLogin(status: number, code: string): ExactSmokeLoginState {
+  if (status === 403 && code === 'email-verification-required') {
+    return 'unverified';
+  }
+  if (status === 401 && code === 'invalid-credentials') {
+    return 'already-registered';
+  }
+  // Successful logins carry the application-owned user payload with no
+  // problem `code`; any problem code on a 200 is an unexpected shape and
+  // fails closed rather than being mistaken for a verified session.
+  if (status === 200 && (code === '<missing-code>' || code === '<non-json>')) {
+    return 'already-verified';
+  }
+  return 'unexpected';
 }
 
 function emailDomainOf(email: string): string | undefined {
@@ -267,14 +312,99 @@ async function main(): Promise<void> {
     fail('register', register.res.status, 'expected 201 with emailVerified:false');
   }
 
-  // 4. The deployed verification gate rejects the session before verification.
+  // 4. The login attempt observes the persisted recipient state. Domain
+  // mode always starts fresh, so it still requires the verification gate.
+  // Exact mode (ticket #91) classifies the stable outcome instead of
+  // assuming freshness: `unverified` proves the gate, `already-registered`
+  // proves persistence + resend acceptance without claiming the gate or
+  // delivery, `already-verified` proves session + resend acceptance without
+  // claiming a fresh gate. Anything else fails closed.
   const gated = await request('login-unverified', '/v1/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password: config.password }),
   });
-  if (gated.res.status !== 403 || problemCode(gated.payload) !== 'email-verification-required') {
-    fail('login-unverified', gated.res.status, 'expected 403 email-verification-required');
+  if (config.recipient.kind === 'domain') {
+    if (gated.res.status !== 403 || problemCode(gated.payload) !== 'email-verification-required') {
+      fail('login-unverified', gated.res.status, 'expected 403 email-verification-required');
+    }
+  } else {
+    const state = classifyExactSmokeLogin(gated.res.status, problemCode(gated.payload));
+    if (state === 'already-registered') {
+      // Repeat with a different run password: the stored credential is the
+      // first run's value, so the gate cannot be proven this run. Prove
+      // resend acceptance through the sandbox mail boundary instead, then
+      // finish without claiming the gate, delivery, or a session.
+      const resend = await request('request-verification', '/v1/auth/request-verification', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (resend.res.status !== 202 || stringField(resend.payload, 'status') !== 'ok') {
+        fail('request-verification', resend.res.status, 'expected 202 {status:"ok"}');
+      }
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          step: 'verify-email',
+          status: 0,
+          detail: 'skipped-already-registered',
+        }),
+      );
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          step: 'smoke',
+          status: 200,
+          detail: 'pass-already-registered',
+        }),
+      );
+      return;
+    }
+    if (state === 'already-verified') {
+      // Stable-password repeat after prior verification: prove the session
+      // and resend acceptance without claiming a fresh gate.
+      const session = cookieHeader(gated.res);
+      if (session === undefined) {
+        fail('login-unverified', gated.res.status, 'expected a session cookie when verified');
+      }
+      const me = await request('me-authenticated', '/v1/me', {}, session);
+      if (me.res.status !== 200) {
+        fail('me-authenticated', me.res.status, 'expected 200 for the verified session');
+      }
+      const resend = await request('request-verification', '/v1/auth/request-verification', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (resend.res.status !== 202 || stringField(resend.payload, 'status') !== 'ok') {
+        fail('request-verification', resend.res.status, 'expected 202 {status:"ok"}');
+      }
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          step: 'verify-email',
+          status: 0,
+          detail: 'skipped-already-verified',
+        }),
+      );
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          step: 'smoke',
+          status: 200,
+          detail: 'pass-already-verified',
+        }),
+      );
+      return;
+    }
+    if (state !== 'unverified') {
+      fail(
+        'login-unverified',
+        gated.res.status,
+        'expected unverified, already-registered, or already-verified',
+      );
+    }
   }
 
   // 5. A resend is accepted through the sandbox mail boundary.
@@ -289,6 +419,10 @@ async function main(): Promise<void> {
 
   // 6. Full verify -> sign-in only when the operator supplies the token from
   // the allowlisted mailbox; otherwise the gate evidence above stands.
+  // This explicit token path is the one-time full acceptance: repeats with a
+  // different run password take the `already-registered` branch above and
+  // never reach this transition, so a stale credential cannot create a
+  // false PASS.
   if (config.verificationToken !== undefined) {
     const verify = await request('verify-email', '/v1/auth/verify-email', {
       method: 'POST',
@@ -325,7 +459,7 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log(JSON.stringify({ level: 'info', step: 'smoke', status: 200, detail: 'pass' }));
+  console.log(JSON.stringify({ level: 'info', step: 'smoke', status: 200, detail: 'pass-fresh' }));
 }
 
 const invokedDirectly = process.argv[1]?.endsWith('smoke-sandbox.ts') === true;
