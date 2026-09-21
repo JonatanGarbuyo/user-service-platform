@@ -1,4 +1,11 @@
 import type { ResolvedDeployment } from './targets.js';
+import {
+  parseTailLines,
+  summarizeSessionFailures,
+  type SessionFailureTailHandle,
+} from './diagnostic-tail.js';
+
+export type { SessionFailureTailHandle } from './diagnostic-tail.js';
 
 // Deployment orchestration (ticket #78, ADR-0008).
 //
@@ -46,6 +53,16 @@ export interface DeployIo {
   readonly cleanup: (path: string) => void;
   readonly preflight: (resolved: ResolvedDeployment) => Promise<void>;
   readonly log: (message: string) => void;
+  // Optional bounded diagnostic tail for the sandbox smoke window (ticket
+  // #96). When present and the environment is sandbox, the deploy boundary
+  // starts the tail immediately before `smoke-sandbox` and always terminates
+  // it afterward via `stop()`. Production never receives a tail. Absence of
+  // the hook (older harnesses, dry runs without tail support) runs the smoke
+  // unchanged.
+  readonly startSessionFailureTail?: (
+    resolved: ResolvedDeployment,
+    configPath: string,
+  ) => Promise<SessionFailureTailHandle>;
 }
 
 // The only accepted production confirmation is the target Worker name
@@ -80,6 +97,62 @@ function assertProductionConfirmed(request: DeployRequest): void {
   }
 }
 
+async function collectTailLines(
+  tail: SessionFailureTailHandle | null,
+  io: DeployIo,
+): Promise<readonly string[]> {
+  if (tail === null) {
+    return [];
+  }
+  try {
+    return await tail.stop();
+  } catch {
+    io.log('sandbox smoke diagnostic: session failure tail stop failed');
+    return [];
+  }
+}
+
+// Sandbox smoke wrapped with the bounded diagnostic tail (ticket #96).
+// Starts the tail immediately before the smoke and always terminates it
+// afterward. The tail connects concurrently while the smoke runs its health
+// then anonymous `GET /v1/me` sequence, so the failure event lands inside the
+// window in practice; an early-connect miss degrades to the ticket-allowed
+// `phase unavailable` rather than unfiltered logs. A failed smoke logs the
+// whitelisted safe phase (`config`|`auth`|`session`) or `phase unavailable` —
+// never unfiltered logs and never the phase in the public HTTP response. A
+// successful smoke logs the observation count but never fails for missing
+// events. A tail startup failure never fails the smoke itself.
+async function runSandboxSmokeWithDiagnostics(
+  resolved: ResolvedDeployment,
+  configPath: string,
+  io: DeployIo,
+  runner: DeployCommandRunner,
+): Promise<void> {
+  let tail: SessionFailureTailHandle | null = null;
+  if (io.startSessionFailureTail !== undefined) {
+    try {
+      tail = await io.startSessionFailureTail(resolved, configPath);
+    } catch {
+      tail = null;
+      io.log(
+        'sandbox smoke diagnostic: session failure tail unavailable ' +
+          '(continuing smoke without diagnostics)',
+      );
+    }
+  }
+  try {
+    await runStep('smoke-sandbox', 'npm', ['run', 'smoke:sandbox'], runner);
+  } catch (smokeError) {
+    io.log(summarizeSessionFailures(parseTailLines(await collectTailLines(tail, io))));
+    throw smokeError;
+  }
+  const events = parseTailLines(await collectTailLines(tail, io));
+  if (events.length > 0) {
+    io.log(summarizeSessionFailures(events));
+  } else {
+    io.log('sandbox smoke diagnostic: no session.resolve-failed event observed');
+  }
+}
 async function runStep(
   step: DeploymentStep,
   command: string,
@@ -138,7 +211,7 @@ export async function runDeployment(
       runner,
     );
     if (request.resolved.environment === 'sandbox') {
-      await runStep('smoke-sandbox', 'npm', ['run', 'smoke:sandbox'], runner);
+      await runSandboxSmokeWithDiagnostics(request.resolved, configPath, io, runner);
     }
     io.log(`deployed worker=${request.resolved.workerName}`);
     return { workerName: request.resolved.workerName, steps };
