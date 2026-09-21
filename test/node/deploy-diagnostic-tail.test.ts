@@ -263,6 +263,9 @@ describe('sandbox smoke diagnostic tail lifecycle (ticket #96)', () => {
           return Promise.reject(new Error('tail unavailable'));
         }
         return Promise.resolve({
+          exitedBeforeSmoke: false,
+          isLive: () => true,
+          peekLines: () => [...harness.tailLines],
           stop: () => {
             harness.stopped += 1;
             return Promise.resolve([...harness.tailLines]);
@@ -649,6 +652,9 @@ describe('smoke failure liveness (ticket #100)', () => {
       },
       startSessionFailureTail: () =>
         Promise.resolve({
+          exitedBeforeSmoke: false,
+          isLive: () => true,
+          peekLines: () => [],
           stop: () => {
             stopped += 1;
             // Teardown is asynchronous in production (SIGTERM grace, stream
@@ -677,5 +683,355 @@ describe('smoke failure liveness (ticket #100)', () => {
     // The failure path rethrows before the success summary: no green
     // `deployed worker=` line may follow a failed smoke.
     expect(transcript).not.toMatch(/deployed worker=/);
+  });
+});
+
+// Post-failure drain under test (ticket #102): the live tail must stay open for
+// a bounded drain window after the smoke client already observed the 500 so the
+// asynchronous Cloudflare invocation envelope can arrive. Startup must detect a
+// child that exits during the readiness grace and classify it as unavailable
+// rather than a live empty tail. All waits stay bounded and referenced.
+describe('sandbox diagnostic tail post-failure drain (ticket #102)', () => {
+  const COOPERATIVE = 'setInterval(() => undefined, 50);';
+  const EXIT_IMMEDIATELY = 'process.exit(1);';
+  const DELAYED_EVENT = (delayMs: number, phase = 'session'): string =>
+    `setTimeout(() => console.log(JSON.stringify({ event: 'session.resolve-failed', phase: '${phase}' })), ${String(delayMs)}); setInterval(() => undefined, 50);`;
+
+  function failingRunner(): DeployCommandRunner {
+    return (command, args) => {
+      if (command === 'npm' && args.join(' ').includes('smoke:sandbox')) {
+        return Promise.resolve({ exitCode: 1 });
+      }
+      return Promise.resolve({ exitCode: 0 });
+    };
+  }
+
+  function passingRunner(): DeployCommandRunner {
+    return () => Promise.resolve({ exitCode: 0 });
+  }
+
+  it('declares a small bounded drain window well inside existing lifecycle bounds', async () => {
+    const module = await import('../../scripts/deploy/diagnostic-tail.js');
+    expect(Number.isFinite(module.SESSION_FAILURE_TAIL_DRAIN_MS)).toBe(true);
+    expect(module.SESSION_FAILURE_TAIL_DRAIN_MS).toBeGreaterThan(0);
+    expect(module.SESSION_FAILURE_TAIL_DRAIN_MS).toBeLessThanOrEqual(3000);
+    expect(module.SESSION_FAILURE_TAIL_DRAIN_MS).toBeGreaterThanOrEqual(1000);
+    expect(module.SESSION_FAILURE_TAIL_DRAIN_POLL_MS).toBeGreaterThan(0);
+    expect(module.SESSION_FAILURE_TAIL_DRAIN_POLL_MS).toBeLessThan(
+      module.SESSION_FAILURE_TAIL_DRAIN_MS,
+    );
+    expect(
+      module.SESSION_FAILURE_TAIL_DRAIN_MS +
+        module.SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS +
+        module.SESSION_FAILURE_TAIL_KILL_SETTLE_MS,
+    ).toBeLessThan(module.SESSION_FAILURE_TAIL_MAX_DURATION_MS);
+  });
+
+  it('detects a child that exits during readiness as unavailable, never a live empty tail', async () => {
+    const module = await import('../../scripts/deploy/diagnostic-tail.js');
+    const handle = await module.startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 200,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 1000,
+      killSettleMs: 500,
+      maxDurationMs: 30_000,
+      command: process.execPath,
+      args: ['-e', EXIT_IMMEDIATELY],
+    });
+    try {
+      expect(handle.exitedBeforeSmoke).toBe(true);
+      expect(handle.isLive()).toBe(false);
+    } finally {
+      const lines = await handle.stop();
+      expect(Array.isArray(lines)).toBe(true);
+    }
+  });
+
+  it('marks a live child as ready with incremental peek access', async () => {
+    const module = await import('../../scripts/deploy/diagnostic-tail.js');
+    const handle = await module.startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 200,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 1000,
+      killSettleMs: 500,
+      maxDurationMs: 30_000,
+      command: process.execPath,
+      args: ['-e', COOPERATIVE],
+    });
+    try {
+      expect(handle.exitedBeforeSmoke).toBe(false);
+      expect(handle.isLive()).toBe(true);
+      expect(Array.isArray(handle.peekLines())).toBe(true);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('drains early once the whitelisted event arrives after smoke failure', async () => {
+    const module = await import('../../scripts/deploy/diagnostic-tail.js');
+    const handle = await module.startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 50,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 2000,
+      killSettleMs: 500,
+      maxDurationMs: 30_000,
+      command: process.execPath,
+      args: ['-e', DELAYED_EVENT(150, 'auth')],
+    });
+    const started = Date.now();
+    const outcome = await module.drainSessionFailureTail(handle, {
+      drainMs: 2000,
+      pollMs: 50,
+    });
+    const waited = Date.now() - started;
+    try {
+      expect(outcome.observedEvent).toBe(true);
+      expect(outcome.lines.join('\n')).toMatch(/auth/);
+      expect(module.parseTailLines([...outcome.lines]).map((entry) => entry.phase)).toContain(
+        'auth',
+      );
+      // Early exit: well under the full drain window.
+      expect(waited).toBeLessThan(2000);
+      expect(outcome.liveThroughDrain).toBe(true);
+    } finally {
+      // drain helper already stopped the child; second stop stays idempotent.
+      await handle.stop();
+    }
+  });
+
+  it('times out to phase-unavailable when no event arrives but proves liveness', async () => {
+    const module = await import('../../scripts/deploy/diagnostic-tail.js');
+    const handle = await module.startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 50,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 2000,
+      killSettleMs: 500,
+      maxDurationMs: 30_000,
+      command: process.execPath,
+      args: ['-e', COOPERATIVE],
+    });
+    const outcome = await module.drainSessionFailureTail(handle, {
+      drainMs: 300,
+      pollMs: 50,
+    });
+    expect(outcome.observedEvent).toBe(false);
+    expect(module.parseTailLines([...outcome.lines])).toEqual([]);
+    expect(outcome.liveThroughDrain).toBe(true);
+    expect(outcome.drainWaitedMs).toBeGreaterThanOrEqual(200);
+    expect(outcome.drainWaitedMs).toBeLessThan(2000);
+  });
+
+  it('keeps the drain timer referenced until settlement', async () => {
+    const module = await import('../../scripts/deploy/diagnostic-tail.js');
+    const unrefDelays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((callback: () => void, delayMs: number) => {
+      const timer = originalSetTimeout(callback, delayMs) as unknown as {
+        unref: () => unknown;
+      };
+      const originalUnref = timer.unref.bind(timer);
+      timer.unref = () => {
+        unrefDelays.push(delayMs);
+        originalUnref();
+      };
+      return timer;
+    }) as typeof setTimeout;
+    try {
+      const handle = await module.startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+        readyGraceMs: 50,
+        startTimeoutMs: 5000,
+        stopTimeoutMs: 1000,
+        killSettleMs: 500,
+        maxDurationMs: 30_000,
+        command: process.execPath,
+        args: ['-e', COOPERATIVE],
+      });
+      try {
+        await module.drainSessionFailureTail(handle, { drainMs: 321, pollMs: 50 });
+      } finally {
+        await handle.stop();
+      }
+      expect(unrefDelays).not.toContain(321);
+      expect(unrefDelays).not.toContain(50);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
+  it('captures an event that arrives after the smoke process already returned nonzero', async () => {
+    const logs: string[] = [];
+    let stopped = 0;
+    // Fake tail whose event materializes only after the smoke runner resolved:
+    // the first peek is empty, the second (during drain) carries the envelope.
+    let peeks = 0;
+    const io: DeployIo = {
+      materialize: () => '/tmp/wrangler.tail-drain.json',
+      cleanup: () => undefined,
+      preflight: () => Promise.resolve(undefined),
+      log: (message) => {
+        logs.push(message);
+      },
+      startSessionFailureTail: () =>
+        Promise.resolve({
+          exitedBeforeSmoke: false,
+          isLive: () => true,
+          peekLines: () => {
+            peeks += 1;
+            if (peeks === 1) {
+              return [];
+            }
+            return [
+              JSON.stringify({
+                outcome: 'ok',
+                logs: [
+                  {
+                    message: [JSON.stringify({ event: 'session.resolve-failed', phase: 'config' })],
+                  },
+                ],
+              }),
+            ];
+          },
+          stop: () => {
+            stopped += 1;
+            return Promise.resolve([
+              JSON.stringify({
+                outcome: 'ok',
+                logs: [
+                  {
+                    message: [JSON.stringify({ event: 'session.resolve-failed', phase: 'config' })],
+                  },
+                ],
+              }),
+            ]);
+          },
+        }),
+    };
+    await expect(runDeployment({ resolved: SANDBOX }, io, failingRunner())).rejects.toThrow(
+      /smoke-sandbox/,
+    );
+    expect(stopped).toBe(1);
+    expect(logs.join('\n')).toMatch(/phase=config/);
+    expect(logs.join('\n')).not.toMatch(/phase unavailable/i);
+  });
+
+  it('reports phase unavailable with liveness proof when the drain expires with no event', async () => {
+    const logs: string[] = [];
+    const io: DeployIo = {
+      materialize: () => '/tmp/wrangler.tail-drain-empty.json',
+      cleanup: () => undefined,
+      preflight: () => Promise.resolve(undefined),
+      log: (message) => {
+        logs.push(message);
+      },
+      startSessionFailureTail: () =>
+        Promise.resolve({
+          exitedBeforeSmoke: false,
+          isLive: () => true,
+          peekLines: () => [],
+          stop: () => Promise.resolve([]),
+        }),
+    };
+    await expect(runDeployment({ resolved: SANDBOX }, io, failingRunner())).rejects.toThrow(
+      /smoke-sandbox/,
+    );
+    const transcript = logs.join('\n');
+    expect(transcript).toMatch(/phase unavailable/i);
+    expect(transcript).toMatch(/live through.*drain/i);
+    expect(transcript).not.toMatch(/deployed worker=/);
+  });
+
+  it('classifies a tail that exited before smoke as unavailable without raw text', async () => {
+    const logs: string[] = [];
+    let stopped = 0;
+    const io: DeployIo = {
+      materialize: () => '/tmp/wrangler.tail-exited.json',
+      cleanup: () => undefined,
+      preflight: () => Promise.resolve(undefined),
+      log: (message) => {
+        logs.push(message);
+      },
+      startSessionFailureTail: () =>
+        Promise.resolve({
+          exitedBeforeSmoke: true,
+          isLive: () => false,
+          peekLines: () => [],
+          stop: () => {
+            stopped += 1;
+            return Promise.resolve([]);
+          },
+        }),
+    };
+    await expect(runDeployment({ resolved: SANDBOX }, io, failingRunner())).rejects.toThrow(
+      /smoke-sandbox/,
+    );
+    expect(stopped).toBe(1);
+    const transcript = logs.join('\n');
+    expect(transcript).toMatch(/exited before smoke/i);
+    expect(transcript).not.toMatch(/Error: |boom|token|@/i);
+  });
+
+  it('does not delay a successful smoke waiting for a failure event', async () => {
+    const logs: string[] = [];
+    let drainPeeks = 0;
+    const io: DeployIo = {
+      materialize: () => '/tmp/wrangler.tail-success.json',
+      cleanup: () => undefined,
+      preflight: () => Promise.resolve(undefined),
+      log: (message) => {
+        logs.push(message);
+      },
+      startSessionFailureTail: () =>
+        Promise.resolve({
+          exitedBeforeSmoke: false,
+          isLive: () => true,
+          peekLines: () => {
+            drainPeeks += 1;
+            return [];
+          },
+          stop: () => Promise.resolve([]),
+        }),
+    };
+    const started = Date.now();
+    await expect(runDeployment({ resolved: SANDBOX }, io, passingRunner())).resolves.toMatchObject({
+      workerName: SANDBOX.workerName,
+    });
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(drainPeeks).toBe(0);
+    expect(logs.join('\n')).toMatch(/no session\.resolve-failed event observed/);
+  });
+
+  it('never exposes raw tail payloads on the failure path', async () => {
+    const logs: string[] = [];
+    const io: DeployIo = {
+      materialize: () => '/tmp/wrangler.tail-redaction.json',
+      cleanup: () => undefined,
+      preflight: () => Promise.resolve(undefined),
+      log: (message) => {
+        logs.push(message);
+      },
+      startSessionFailureTail: () =>
+        Promise.resolve({
+          exitedBeforeSmoke: false,
+          isLive: () => true,
+          peekLines: () => [],
+          stop: () =>
+            Promise.resolve([
+              JSON.stringify({
+                event: 'session.resolve-failed',
+                phase: 'session',
+                requestId: 'req-drain-1',
+                environment: 'sandbox',
+                secret: 'must-never-surface',
+                cookie: 'better-auth.session_token=abc',
+              }),
+            ]),
+        }),
+    };
+    await expect(runDeployment({ resolved: SANDBOX }, io, failingRunner())).rejects.toThrow(
+      /smoke-sandbox/,
+    );
+    const transcript = logs.join('\n');
+    expect(transcript).toMatch(/phase=session/);
+    expect(transcript).not.toMatch(/must-never-surface|better-auth|@/i);
   });
 });
