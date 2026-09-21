@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import {
   buildSessionFailureTailArgs,
+  buildSessionFailureTailCommand,
   formatSafeSessionFailure,
   parseTailLine,
   parseTailLines,
+  resolveWranglerCliPath,
+  SESSION_FAILURE_TAIL_KILL_SETTLE_MS,
   SESSION_FAILURE_TAIL_MAX_DURATION_MS,
+  SESSION_FAILURE_TAIL_READY_GRACE_MS,
   SESSION_FAILURE_TAIL_START_TIMEOUT_MS,
   SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS,
+  startSessionFailureTail,
   summarizeSessionFailures,
   withTimeout,
 } from '../../scripts/deploy/diagnostic-tail.js';
@@ -66,7 +73,6 @@ describe('session failure tail args (ticket #96)', () => {
   it('tails the sandbox Worker filtered to the safe event with the target config', () => {
     const args = buildSessionFailureTailArgs(SANDBOX, '/tmp/wrangler.sandbox.json');
     expect(args).toEqual([
-      'wrangler',
       'tail',
       'rch-rugbychampagne-user-service-sandbox',
       '--format',
@@ -327,5 +333,210 @@ describe('sandbox smoke diagnostic tail lifecycle (ticket #96)', () => {
     );
     expect(harness.started).toBe(0);
     expect(harness.stopped).toBe(0);
+  });
+});
+
+// Lifecycle under test (ticket #98): the diagnostic tail child must be the
+// actual controlled process (no `npx`/wrapper descendant that can outlive
+// `stop`), `stop()` must complete within its bound and release stdio, the
+// hard maximum must terminate the tail even when `stop()` is never called,
+// and startup must wait a bounded readiness grace so the tail does not race
+// the fast health -> anonymous `/v1/me` smoke sequence. These tests drive the
+// real lifecycle against stub `node -e` children with injected short bounds
+// so a regression hangs the assertion, never the suite.
+describe('sandbox diagnostic tail process lifecycle (ticket #98)', () => {
+  const IGNORE_SIGTERM =
+    'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 50);';
+  const COOPERATIVE = 'console.log("stub ready"); setInterval(() => undefined, 50);';
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function waitForDeath(pid: number, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!isAlive(pid)) {
+        return true;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    }
+    return !isAlive(pid);
+  }
+
+  it('resolves the repository-pinned wrangler CLI entry instead of an npx wrapper', () => {
+    const cliPath = resolveWranglerCliPath();
+    expect(cliPath.endsWith('wrangler-dist/cli.js')).toBe(true);
+    expect(cliPath).not.toMatch(/\.bin/);
+    expect(existsSync(cliPath)).toBe(true);
+  });
+
+  it('builds a direct tail command with no unmanaged wrapper hop', () => {
+    const command = buildSessionFailureTailCommand(SANDBOX, '/tmp/wrangler.sandbox.json');
+    expect(command.command).toBe(process.execPath);
+    expect(command.args[0]).toBe(resolveWranglerCliPath());
+    expect(command.args).toEqual([
+      resolveWranglerCliPath(),
+      'tail',
+      'rch-rugbychampagne-user-service-sandbox',
+      '--format',
+      'json',
+      '--search',
+      'session.resolve-failed',
+      '--config',
+      '/tmp/wrangler.sandbox.json',
+    ]);
+    expect(`${command.command} ${command.args.join(' ')}`).not.toMatch(/\bnpx\b/);
+  });
+
+  it('declares a readiness grace and kill settle bounded well inside the hard maximum', () => {
+    for (const bound of [
+      SESSION_FAILURE_TAIL_READY_GRACE_MS,
+      SESSION_FAILURE_TAIL_KILL_SETTLE_MS,
+    ]) {
+      expect(Number.isFinite(bound)).toBe(true);
+      expect(bound).toBeGreaterThan(0);
+    }
+    expect(SESSION_FAILURE_TAIL_READY_GRACE_MS).toBeLessThan(SESSION_FAILURE_TAIL_START_TIMEOUT_MS);
+    expect(SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS + SESSION_FAILURE_TAIL_KILL_SETTLE_MS).toBeLessThan(
+      SESSION_FAILURE_TAIL_MAX_DURATION_MS,
+    );
+  });
+
+  it('spawns the pinned entry directly as the controlled child', async () => {
+    let spawned: { command: string; args: string[] } | undefined;
+    const seen: ChildProcess[] = [];
+    const handle = await startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 5,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 1000,
+      killSettleMs: 500,
+      maxDurationMs: 30_000,
+      spawnFn: (command, args, options) => {
+        spawned = { command, args: [...args] };
+        // Capture the requested invocation; run a harmless stub child instead
+        // of the real Wrangler tail so the test stays hermetic.
+        const child = nodeSpawn(process.execPath, ['-e', COOPERATIVE], options);
+        seen.push(child);
+        return child;
+      },
+    });
+    try {
+      expect(spawned?.command).toBe(process.execPath);
+      expect(spawned?.args[0]).toBe(resolveWranglerCliPath());
+      expect(`${spawned?.command ?? ''} ${(spawned?.args ?? []).join(' ')}`).not.toMatch(/\bnpx\b/);
+      expect(seen).toHaveLength(1);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('waits the bounded readiness grace before resolving startup', async () => {
+    const started = Date.now();
+    const handle = await startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 200,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 1000,
+      killSettleMs: 500,
+      maxDurationMs: 10_000,
+      command: process.execPath,
+      args: ['-e', COOPERATIVE],
+    });
+    try {
+      expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('stop() captures output and terminates a cooperative child with no leaked handles', async () => {
+    let child: ChildProcess | undefined;
+    const handle = await startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      // Grace comfortably covers stub interpreter startup so the ready line
+      // is printed before `stop()`; production uses the 5s documented grace.
+      readyGraceMs: 1000,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 2000,
+      killSettleMs: 1000,
+      maxDurationMs: 30_000,
+      spawnFn: (command, args, options) => {
+        child = nodeSpawn(command, args, options);
+        return child;
+      },
+      command: process.execPath,
+      args: ['-e', COOPERATIVE],
+    });
+    const lines = await handle.stop();
+    expect(lines.join('\n')).toMatch(/stub ready/);
+    expect(child?.stdout?.destroyed).toBe(true);
+    expect(child?.stderr?.destroyed).toBe(true);
+    expect(child !== undefined && (child.exitCode !== null || child.signalCode !== null)).toBe(
+      true,
+    );
+    if (child?.pid !== undefined) {
+      expect(isAlive(child.pid)).toBe(false);
+    }
+    // A second stop is a fast idempotent no-op, never a second kill window.
+    await expect(handle.stop()).resolves.toEqual([...lines]);
+  });
+
+  it('stop() force-terminates a SIGTERM-ignoring child within bounds', async () => {
+    let child: ChildProcess | undefined;
+    const handle = await startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      // Grace covers stub interpreter startup so the SIGTERM handler is
+      // installed before `stop()`; otherwise an early SIGTERM would
+      // (correctly but unhelpfully) terminate the stub via SIGTERM.
+      readyGraceMs: 1000,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 300,
+      killSettleMs: 1000,
+      maxDurationMs: 30_000,
+      spawnFn: (command, args, options) => {
+        child = nodeSpawn(command, args, options);
+        return child;
+      },
+      command: process.execPath,
+      args: ['-e', IGNORE_SIGTERM],
+    });
+    const started = Date.now();
+    const lines = await handle.stop();
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(Array.isArray(lines)).toBe(true);
+    expect(child?.signalCode).toBe('SIGKILL');
+    expect(child?.stdout?.destroyed).toBe(true);
+    expect(child?.stderr?.destroyed).toBe(true);
+    if (child?.pid !== undefined) {
+      expect(isAlive(child.pid)).toBe(false);
+    }
+  });
+
+  it('hard maximum terminates a SIGTERM-ignoring child even when stop() is never called', async () => {
+    let child: ChildProcess | undefined;
+    const handle = await startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+      readyGraceMs: 5,
+      startTimeoutMs: 5000,
+      stopTimeoutMs: 200,
+      killSettleMs: 500,
+      maxDurationMs: 500,
+      spawnFn: (command, args, options) => {
+        child = nodeSpawn(command, args, options);
+        return child;
+      },
+      command: process.execPath,
+      args: ['-e', IGNORE_SIGTERM],
+    });
+    try {
+      expect(child?.pid).toBeDefined();
+      expect(await waitForDeath(child?.pid ?? -1, 8000)).toBe(true);
+      expect(child?.stdout?.destroyed).toBe(true);
+      expect(child?.stderr?.destroyed).toBe(true);
+    } finally {
+      await handle.stop();
+    }
   });
 });

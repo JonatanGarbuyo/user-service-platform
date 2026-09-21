@@ -25,7 +25,9 @@
 //
 // This is release/operations tooling, not Identity business behavior: no
 // public endpoint changes, no sandbox-only Identity branch, no D1 access.
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import type { ResolvedDeployment } from './targets.js';
 
 // Stable session-resolution failure phases (ticket #93). Kept in sync with
@@ -42,13 +44,27 @@ export interface SafeSessionFailure {
   readonly environment?: string;
 }
 
-// Bounds for the diagnostic tail lifecycle (ticket #96, acceptance 5). The
-// tail streams for the smoke window only: startup resolves without waiting
-// for the first line, a hard maximum guarantees the child can never linger,
-// and `stop()` waits only up to `STOP` before force-killing.
+// Bounds for the diagnostic tail lifecycle (tickets #96/#98, acceptance 5).
+// The tail streams for the smoke window only: startup waits a bounded
+// readiness grace so the tail connects before the fast health -> anonymous
+// `/v1/me` smoke sequence, a hard maximum guarantees the child can never
+// linger, and `stop()` escalates SIGTERM -> SIGKILL within
+// `STOP + KILL_SETTLE` (well inside the hard maximum) while always releasing
+// stdio handles so the deploy process can exit.
 export const SESSION_FAILURE_TAIL_START_TIMEOUT_MS = 15_000;
 export const SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS = 10_000;
 export const SESSION_FAILURE_TAIL_MAX_DURATION_MS = 300_000;
+// Bounded grace between spawn and startup resolution (ticket #98, AC6).
+// Wrangler `tail` exposes no machine-readable readiness signal — connection
+// chatter is human text on stderr, which this boundary deliberately discards
+// unfiltered — so startup waits this fixed grace instead of racing the smoke.
+// Kept well inside the start timeout.
+export const SESSION_FAILURE_TAIL_READY_GRACE_MS = 5_000;
+// Settle window after the SIGKILL escalation before `stop()` (and the hard
+// maximum) destroys stdio handles unconditionally. The configured stop bound
+// is therefore the composite `STOP_TIMEOUT + KILL_SETTLE` (worst case 15s),
+// still far below the hard maximum.
+export const SESSION_FAILURE_TAIL_KILL_SETTLE_MS = 5_000;
 
 const SESSION_FAILURE_EVENT = 'session.resolve-failed';
 
@@ -247,16 +263,30 @@ export function summarizeSessionFailures(events: readonly SafeSessionFailure[]):
   );
 }
 
+// Resolves the repository-pinned Wrangler CLI entry
+// (`wrangler-dist/cli.js`) through the installed `wrangler` package metadata.
+// Spawning this file with `process.execPath` runs Wrangler in the child
+// directly: unlike `npx wrangler` (or `node_modules/.bin/wrangler`, whose
+// `bin/wrangler.js` wrapper spawns `wrangler-dist/cli.js` with inherited
+// stdio), there is no intermediate wrapper/descendant process that can
+// outlive `stop()` while holding the captured pipes open (ticket #98, AC1).
+export function resolveWranglerCliPath(): string {
+  const require = createRequire(import.meta.url);
+  const packagePath = require.resolve('wrangler/package.json');
+  return join(dirname(packagePath), 'wrangler-dist', 'cli.js');
+}
+
 // `wrangler tail` invocation for the sandbox smoke window (ticket #96). Uses
 // only the Worker name plus the target-specific Wrangler config; credentials
 // arrive through the existing process environment and no secret, email, or
-// token value is embedded in the arguments.
+// token value is embedded in the arguments. These are Wrangler-native
+// arguments: the caller prefixes them with the pinned CLI entry (see
+// `buildSessionFailureTailCommand`) instead of routing through `npx`.
 export function buildSessionFailureTailArgs(
   resolved: Pick<ResolvedDeployment, 'workerName'>,
   configPath: string,
 ): string[] {
   return [
-    'wrangler',
     'tail',
     resolved.workerName,
     '--format',
@@ -266,6 +296,24 @@ export function buildSessionFailureTailArgs(
     '--config',
     configPath,
   ];
+}
+
+// Fully resolved tail invocation: the current Node executable plus the pinned
+// Wrangler CLI entry plus the filtered `tail` arguments (ticket #98, AC1).
+export interface SessionFailureTailCommand {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+export function buildSessionFailureTailCommand(
+  resolved: Pick<ResolvedDeployment, 'workerName'>,
+  configPath: string,
+  cliPath: string = resolveWranglerCliPath(),
+): SessionFailureTailCommand {
+  return {
+    command: process.execPath,
+    args: [cliPath, ...buildSessionFailureTailArgs(resolved, configPath)],
+  };
 }
 
 // Handle for one bounded tail window. `stop` terminates the tail (bounded by
@@ -302,31 +350,80 @@ function killIfAlive(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-// Bounded `wrangler tail` for the sandbox smoke window (ticket #96).
+// Process factory seam for the tail lifecycle. Defaults to `node:child_process`
+// `spawn`; tests inject a wrapper around the real `spawn` to capture the
+// requested invocation or drive stub children with short bounds.
+export type SessionFailureTailSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+// Overrides for the tail lifecycle, used by tests to prove bounded
+// termination with stub children and short bounds. Production callers omit
+// this entirely and receive the pinned Wrangler invocation with the
+// documented default bounds.
+export interface SessionFailureTailOptions {
+  readonly spawnFn?: SessionFailureTailSpawn;
+  // Stub command/args replace the pinned Wrangler invocation (tests only).
+  readonly command?: string;
+  readonly args?: readonly string[];
+  // Pinned CLI entry override; defaults to `resolveWranglerCliPath()`.
+  readonly wranglerCliPath?: string;
+  readonly startTimeoutMs?: number;
+  readonly stopTimeoutMs?: number;
+  readonly killSettleMs?: number;
+  readonly maxDurationMs?: number;
+  readonly readyGraceMs?: number;
+}
+
+// Bounded `wrangler tail` for the sandbox smoke window (tickets #96/#98).
 //
-// Spawns `wrangler tail <worker> --format json --search session.resolve-failed`
-// with the target-specific Wrangler config so the smoke window captures only
-// the already-redacted `session.resolve-failed` Worker event. Cloudflare
-// credentials arrive through process inheritance only; raw tail output is
-// kept in memory and never printed — the deploy boundary parses and
-// whitelists it before logging anything. Stderr is consumed and discarded so
-// unfiltered Worker output can never reach the Actions log through this pipe.
+// Spawns the repository-pinned `wrangler-dist/cli.js` directly under
+// `process.execPath` with the target-specific Wrangler config so the smoke
+// window captures only the already-redacted `session.resolve-failed` Worker
+// event. Cloudflare credentials arrive through process inheritance only; raw
+// tail output is kept in memory and never printed — the deploy boundary
+// parses and whitelists it before logging anything. Stderr is consumed and
+// discarded so unfiltered Worker output can never reach the Actions log
+// through this pipe.
 //
-// Bounds: startup resolves once the child is spawned (tail streams, so there
-// is no ready signal to wait for) inside `SESSION_FAILURE_TAIL_START_TIMEOUT_MS`
-// so a hung spawn can never stall the deploy; a hard maximum kills a tail
-// whose `stop` is never reached; `stop` waits only up to the stop timeout
-// before force-killing.
+// Lifecycle (ticket #98): the spawned CLI process is the actual controlled
+// child — no `npx`/wrapper hop, so no descendant can outlive `stop()` while
+// holding the pipes. Startup waits the bounded readiness grace (no usable
+// Wrangler readiness signal exists; stderr chatter stays private) inside the
+// start timeout so a hung spawn can never stall the deploy. A hard maximum
+// escalates SIGTERM -> SIGKILL and then releases stdio even when `stop()` is
+// never reached. `stop()` is idempotent, escalates SIGTERM -> SIGKILL within
+// `stopTimeout + killSettle`, flushes remaining buffered output, destroys both
+// stdio streams, and unrefs the child so the deploy process can always exit.
 export function startSessionFailureTail(
   resolved: Pick<ResolvedDeployment, 'workerName'>,
   configPath: string,
+  options: SessionFailureTailOptions = {},
 ): Promise<SessionFailureTailHandle> {
-  const startup = ((): Promise<SessionFailureTailHandle> => {
-    const tailArgs = buildSessionFailureTailArgs(resolved, configPath);
-    const child: ChildProcess = spawn('npx', tailArgs, {
+  const startTimeoutMs = options.startTimeoutMs ?? SESSION_FAILURE_TAIL_START_TIMEOUT_MS;
+  const stopTimeoutMs = options.stopTimeoutMs ?? SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS;
+  const killSettleMs = options.killSettleMs ?? SESSION_FAILURE_TAIL_KILL_SETTLE_MS;
+  const maxDurationMs = options.maxDurationMs ?? SESSION_FAILURE_TAIL_MAX_DURATION_MS;
+  const readyGraceMs = options.readyGraceMs ?? SESSION_FAILURE_TAIL_READY_GRACE_MS;
+  const spawnFn: SessionFailureTailSpawn = options.spawnFn ?? spawn;
+
+  const startup = async (): Promise<SessionFailureTailHandle> => {
+    const tailCommand =
+      options.command !== undefined || options.args !== undefined
+        ? { command: options.command ?? process.execPath, args: options.args ?? [] }
+        : buildSessionFailureTailCommand(resolved, configPath, options.wranglerCliPath);
+    const child: ChildProcess = spawnFn(tailCommand.command, [...tailCommand.args], {
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    // Never hold the deploy loop open on the child's behalf: explicit
+    // SIGTERM/SIGKILL escalation plus stream destruction below owns
+    // termination; unref keeps a wedged child from pinning process exit.
+    if (typeof child.unref === 'function') {
+      child.unref();
+    }
     const lines: string[] = [];
     let buffer = '';
     child.stdout?.on('data', (chunk: Buffer | string) => {
@@ -340,44 +437,142 @@ export function startSessionFailureTail(
     });
     // Discard stderr: tail connection chatter must never surface unfiltered.
     child.stderr?.resume();
-    const maxTimer = setTimeout(() => {
-      killIfAlive(child, 'SIGTERM');
-    }, SESSION_FAILURE_TAIL_MAX_DURATION_MS);
-    if (typeof maxTimer.unref === 'function') {
-      maxTimer.unref();
-    }
-    let stopped = false;
-    const stop = async (): Promise<readonly string[]> => {
-      if (stopped) {
-        return [...lines];
-      }
-      stopped = true;
-      clearTimeout(maxTimer);
-      killIfAlive(child, 'SIGTERM');
-      const closed = new Promise<void>((resolvePromise) => {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          resolvePromise();
-          return;
-        }
-        child.once('close', () => {
-          resolvePromise();
-        });
-        child.once('error', () => {
-          resolvePromise();
-        });
-      });
+
+    let spawnError: Error | undefined;
+    const onSpawnError = (error: Error): void => {
+      spawnError = error;
+    };
+    child.once('error', onSpawnError);
+
+    const releaseStreams = (): void => {
+      child.stdout?.removeAllListeners();
+      child.stderr?.removeAllListeners();
       try {
-        await withTimeout(closed, SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS, 'diagnostic tail stop');
+        child.stdout?.destroy();
       } catch {
-        killIfAlive(child, 'SIGKILL');
+        // Stream teardown never fails termination.
       }
+      try {
+        child.stderr?.destroy();
+      } catch {
+        // Stream teardown never fails termination.
+      }
+    };
+
+    const flushBuffer = (): void => {
       if (buffer.length > 0) {
         lines.push(buffer);
         buffer = '';
       }
-      return [...lines];
     };
-    return Promise.resolve({ stop });
-  })();
-  return withTimeout(startup, SESSION_FAILURE_TAIL_START_TIMEOUT_MS, 'diagnostic tail start');
+
+    const waitForExit = (): Promise<void> =>
+      new Promise<void>((resolvePromise) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolvePromise();
+          return;
+        }
+        const onSettled = (): void => {
+          child.removeListener('close', onSettled);
+          child.removeListener('error', onSettled);
+          resolvePromise();
+        };
+        child.once('close', onSettled);
+        child.once('error', onSettled);
+      });
+
+    const waitForExitBounded = async (timeoutMs: number): Promise<boolean> => {
+      try {
+        await withTimeout(waitForExit(), timeoutMs, 'diagnostic tail stop');
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    let stopped = false;
+    let maxKillTimer: ReturnType<typeof setTimeout> | undefined;
+    let maxReleaseTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearMaxTimers = (): void => {
+      if (maxKillTimer !== undefined) {
+        clearTimeout(maxKillTimer);
+        maxKillTimer = undefined;
+      }
+      if (maxReleaseTimer !== undefined) {
+        clearTimeout(maxReleaseTimer);
+        maxReleaseTimer = undefined;
+      }
+    };
+
+    // Hard maximum: terminates the tail even when `stop()` is never called
+    // (ticket #98, AC3). SIGTERM first; escalate to SIGKILL after the stop
+    // bound; release stdio after the kill settle so a SIGTERM-ignoring child
+    // can neither survive nor pin the deploy loop via open pipes.
+    const maxTimer = setTimeout(() => {
+      if (stopped) {
+        return;
+      }
+      killIfAlive(child, 'SIGTERM');
+      maxKillTimer = setTimeout(() => {
+        if (stopped) {
+          return;
+        }
+        killIfAlive(child, 'SIGKILL');
+        maxReleaseTimer = setTimeout(() => {
+          if (stopped) {
+            return;
+          }
+          flushBuffer();
+          releaseStreams();
+        }, killSettleMs);
+        if (typeof maxReleaseTimer.unref === 'function') {
+          maxReleaseTimer.unref();
+        }
+      }, stopTimeoutMs);
+      if (typeof maxKillTimer.unref === 'function') {
+        maxKillTimer.unref();
+      }
+    }, maxDurationMs);
+    if (typeof maxTimer.unref === 'function') {
+      maxTimer.unref();
+    }
+
+    let stopPromise: Promise<readonly string[]> | undefined;
+    const stop = (): Promise<readonly string[]> => {
+      stopPromise ??= (async (): Promise<readonly string[]> => {
+        stopped = true;
+        clearTimeout(maxTimer);
+        clearMaxTimers();
+        killIfAlive(child, 'SIGTERM');
+        const exited = await waitForExitBounded(stopTimeoutMs);
+        if (!exited) {
+          killIfAlive(child, 'SIGKILL');
+          await waitForExitBounded(killSettleMs);
+        }
+        flushBuffer();
+        releaseStreams();
+        return [...lines];
+      })();
+      return stopPromise;
+    };
+
+    await new Promise<void>((resolvePromise) => {
+      const timer = setTimeout(() => {
+        resolvePromise();
+      }, readyGraceMs);
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    });
+    child.removeListener('error', onSpawnError);
+    if (spawnError !== undefined) {
+      stopped = true;
+      clearTimeout(maxTimer);
+      clearMaxTimers();
+      releaseStreams();
+      throw new Error(`diagnostic tail failed to start: ${spawnError.message}`);
+    }
+    return { stop };
+  };
+  return withTimeout(startup(), startTimeoutMs, 'diagnostic tail start');
 }
