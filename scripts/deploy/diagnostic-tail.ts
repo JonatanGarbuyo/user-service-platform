@@ -325,15 +325,16 @@ export interface SessionFailureTailHandle {
 
 // Rejects when `promise` does not settle within `timeoutMs` so tail
 // startup/collection/termination can never hang CI (ticket #96, acceptance 5).
+// The timeout timer is always awaited through the returned race, so it must
+// stay referenced until settlement (ticket #100): an unref'd timer lets Node
+// exit 0 while the deploy catch/stop/rethrow chain is still pending, which
+// produced the false-green deploy run 35548407940.
 export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       reject(new Error(`${label} timed out after ${String(timeoutMs)}ms.`));
     }, timeoutMs);
-    if (typeof timer.unref === 'function') {
-      timer.unref();
-    }
   });
   return Promise.race([promise, timeout]).finally(() => {
     clearTimeout(timer);
@@ -395,8 +396,17 @@ export interface SessionFailureTailOptions {
 // start timeout so a hung spawn can never stall the deploy. A hard maximum
 // escalates SIGTERM -> SIGKILL and then releases stdio even when `stop()` is
 // never reached. `stop()` is idempotent, escalates SIGTERM -> SIGKILL within
-// `stopTimeout + killSettle`, flushes remaining buffered output, destroys both
-// stdio streams, and unrefs the child so the deploy process can always exit.
+// `stopTimeout + killSettle`, flushes remaining buffered output and destroys
+// both stdio streams.
+//
+// Liveness (ticket #100): the controlled child and every awaited timer stay
+// referenced until the awaited control flow settles. `child.unref()` and
+// unref'ing an awaited timer let Node exit 0 while the smoke-failure
+// catch/stop/rethrow chain is still pending (false-green run 35548407940), so
+// they are never used on this path. Only the never-awaited hard-maximum
+// backstop timers stay unref'd: the referenced child (plus referenced stop
+// timers once `stop()` runs) keeps the deploy alive until they fire, so they
+// cannot hide an in-flight failure.
 export function startSessionFailureTail(
   resolved: Pick<ResolvedDeployment, 'workerName'>,
   configPath: string,
@@ -418,12 +428,12 @@ export function startSessionFailureTail(
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    // Never hold the deploy loop open on the child's behalf: explicit
-    // SIGTERM/SIGKILL escalation plus stream destruction below owns
-    // termination; unref keeps a wedged child from pinning process exit.
-    if (typeof child.unref === 'function') {
-      child.unref();
-    }
+    // Liveness (ticket #100): never unref the controlled child. `stop()`
+    // awaits its exit through `waitForExitBounded`, so the child handle is
+    // part of the awaited deploy control flow and must keep the process alive
+    // until teardown completes. Explicit SIGTERM/SIGKILL escalation plus
+    // stream destruction in `stop()` (and the hard-maximum backstop) owns
+    // termination, so nothing can pin process exit after teardown.
     const lines: string[] = [];
     let buffer = '';
     child.stdout?.on('data', (chunk: Buffer | string) => {
@@ -507,7 +517,11 @@ export function startSessionFailureTail(
     // Hard maximum: terminates the tail even when `stop()` is never called
     // (ticket #98, AC3). SIGTERM first; escalate to SIGKILL after the stop
     // bound; release stdio after the kill settle so a SIGTERM-ignoring child
-    // can neither survive nor pin the deploy loop via open pipes.
+    // can neither survive nor pin the deploy loop via open pipes. These
+    // backstop timers are never awaited, so they stay unref'd (ticket #100,
+    // AC3): the referenced tail child keeps the deploy alive until they fire,
+    // and once `stop()` runs its referenced stop timers own liveness — an
+    // unref'd backstop can therefore never hide an in-flight smoke failure.
     const maxTimer = setTimeout(() => {
       if (stopped) {
         return;
@@ -557,12 +571,11 @@ export function startSessionFailureTail(
     };
 
     await new Promise<void>((resolvePromise) => {
-      const timer = setTimeout(() => {
+      // Awaited by startup: stays referenced (ticket #100) so Node cannot
+      // exit before the tail connects and the smoke runs.
+      setTimeout(() => {
         resolvePromise();
       }, readyGraceMs);
-      if (typeof timer.unref === 'function') {
-        timer.unref();
-      }
     });
     child.removeListener('error', onSpawnError);
     if (spawnError !== undefined) {
