@@ -3,6 +3,11 @@ import type { D1Database } from '@cloudflare/workers-types';
 import { betterAuth } from 'better-auth';
 import { admin } from 'better-auth/plugins/admin';
 import { drizzle } from 'drizzle-orm/d1';
+import {
+  RESET_PASSWORD_ACTION_PATH,
+  VERIFY_EMAIL_ACTION_PATH,
+  buildAuthActionUrl,
+} from './action-urls.js';
 import type { AuthMailer } from './mailer.js';
 import type { AuthPolicy } from './policy.js';
 import { identitySchema } from './schema.js';
@@ -18,6 +23,13 @@ export interface IdentityAuthInput {
   readonly mailer: AuthMailer;
   readonly secret: string;
   readonly baseURL: string;
+  // Canonical application-owned auth action pages (ticket #77). Optional
+  // absolute HTTP(S) action-page URLs without a token; empty selects the
+  // service-owned fallback browser routes on the request origin. Identity
+  // appends exactly one `token` query parameter from the Better Auth token.
+  // The engine callback URL never crosses the AuthMailer boundary.
+  readonly verifyEmailActionURL?: string;
+  readonly resetPasswordActionURL?: string;
   // Schedules provider-latency work outside the synchronous auth response
   // path (ADR-0010). Falls back to supervised fire-and-forget when the
   // request has no execution context (e.g. contract generation, unit calls).
@@ -44,7 +56,16 @@ function createRedactingLogger(): NonNullable<Parameters<typeof betterAuth>[0]['
 // so the precise engine options type flows to consumers instead of the
 // generic default, which is not variance-compatible with it.
 export function createIdentityAuth(input: IdentityAuthInput) {
-  const { db, policy, mailer, secret, baseURL, background } = input;
+  const {
+    db,
+    policy,
+    mailer,
+    secret,
+    baseURL,
+    verifyEmailActionURL,
+    resetPasswordActionURL,
+    background,
+  } = input;
   const database = drizzle(db, { schema: identitySchema });
 
   return betterAuth({
@@ -77,15 +98,37 @@ export function createIdentityAuth(input: IdentityAuthInput) {
       // verification does; provider SDK/types stay inside adapters (ADR-0010).
       // Successful resets revoke existing sessions so previously issued
       // sessions cannot continue authenticating (ticket #12, ADR-0005).
+      // The engine callback URL is an implementation detail (ticket #77): it
+      // is never forwarded. Identity builds the user-facing reset action from
+      // the configured consumer page (or the service-owned fallback route on
+      // the request origin) plus the engine token.
       revokeSessionsOnPasswordReset: true,
-      sendResetPassword: async ({ user, url, token }) => {
+      sendResetPassword: async ({ user, token }) => {
+        const url = buildAuthActionUrl({
+          varName: 'AUTH_RESET_PASSWORD_ACTION_URL',
+          configured: resetPasswordActionURL ?? '',
+          requestOrigin: baseURL,
+          fallbackPath: RESET_PASSWORD_ACTION_PATH,
+          token,
+        });
         await mailer.sendPasswordResetEmail({ to: user.email, url, token });
       },
     },
     emailVerification: {
       sendOnSignUp: true,
       autoSignInAfterVerification: false,
-      sendVerificationEmail: async ({ user, url, token }) => {
+      // The engine verification callback URL never becomes public contract
+      // (ticket #77): the user-facing action targets the configured consumer
+      // page or the service-owned fallback route with the engine token as the
+      // single `token` query parameter.
+      sendVerificationEmail: async ({ user, token }) => {
+        const url = buildAuthActionUrl({
+          varName: 'AUTH_VERIFY_EMAIL_ACTION_URL',
+          configured: verifyEmailActionURL ?? '',
+          requestOrigin: baseURL,
+          fallbackPath: VERIFY_EMAIL_ACTION_PATH,
+          token,
+        });
         await mailer.sendVerificationEmail({ to: user.email, url, token });
       },
     },

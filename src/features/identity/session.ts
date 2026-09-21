@@ -191,6 +191,8 @@ export async function resolveSessionContext(
       ),
       secret,
       baseURL: input.baseURL,
+      verifyEmailActionURL: effective.config.AUTH_VERIFY_EMAIL_ACTION_URL,
+      resetPasswordActionURL: effective.config.AUTH_RESET_PASSWORD_ACTION_URL,
       background,
     });
   } catch (error) {

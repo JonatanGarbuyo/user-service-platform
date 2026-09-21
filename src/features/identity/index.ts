@@ -1,3 +1,4 @@
+import { createAuthActionsRouter } from './auth-actions.js';
 import { createIdentityRouter, type IdentityRouterOptions } from './router.js';
 
 // Public slice interface for the identity feature (AGENTS.md change rules).
@@ -6,6 +7,7 @@ import { createIdentityRouter, type IdentityRouterOptions } from './router.js';
 // boundary. `auth.ts` (Better Auth wiring) and `schema.ts` (D1 rows) are
 // slice internals and must never be imported outside this directory.
 export { createIdentityRouter };
+export { createAuthActionsRouter };
 export type { IdentityRouterOptions };
 export type {
   AdminBootstrapRequest,

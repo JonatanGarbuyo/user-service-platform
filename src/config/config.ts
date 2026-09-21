@@ -81,6 +81,77 @@ function validateProfile(config: NonSecretProfile): void {
   if (secure !== '' && secure !== 'true' && secure !== 'false') {
     throw new Error('Configuration error: SMTP_SECURE must be "true" or "false" when set.');
   }
+  validateAuthActionUrl(
+    'AUTH_VERIFY_EMAIL_ACTION_URL',
+    config.AUTH_VERIFY_EMAIL_ACTION_URL,
+    config.ENVIRONMENT,
+  );
+  validateAuthActionUrl(
+    'AUTH_RESET_PASSWORD_ACTION_URL',
+    config.AUTH_RESET_PASSWORD_ACTION_URL,
+    config.ENVIRONMENT,
+  );
+}
+
+// Loopback hosts permitted for plain-HTTP action pages in local/test
+// development (ticket #77): `localhost`, the IPv4 loopback range and the IPv6
+// loopback address. Bracketed IPv6 literals are unwrapped before comparison.
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  if (normalized === 'localhost' || normalized === '::1') {
+    return true;
+  }
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalized);
+}
+
+// Validates one canonical auth action URL slot (ticket #77). Empty means the
+// service-owned fallback page. Configured values must be absolute http(s)
+// action-page URLs without credentials or fragments; sandbox/production
+// custom targets require HTTPS while local/test allow plain HTTP only for
+// localhost/loopback development. Every failure names only the variable and
+// the expected shape, never the supplied value.
+function validateAuthActionUrl(name: string, value: string, environment: string): void {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(
+      `Configuration error: ${name} must be an absolute http(s) action URL without credentials or fragments.`,
+    );
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Configuration error: ${name} must be an absolute http(s) action URL without credentials or fragments.`,
+    );
+  }
+  if (parsed.username.length > 0 || parsed.password.length > 0 || parsed.hash.length > 0) {
+    throw new Error(
+      `Configuration error: ${name} must be an absolute http(s) action URL without credentials or fragments.`,
+    );
+  }
+  const normalizedEnv = environment.trim().toLowerCase();
+  const productionLike =
+    normalizedEnv === 'sandbox' || normalizedEnv === 'staging' || normalizedEnv === 'production';
+  if (productionLike) {
+    if (parsed.protocol !== 'https:') {
+      throw new Error(
+        `Configuration error: ${name} must be an absolute https action URL without credentials or fragments.`,
+      );
+    }
+    return;
+  }
+  if (parsed.protocol === 'http:' && !isLoopbackHostname(parsed.hostname)) {
+    throw new Error(
+      `Configuration error: ${name} must be an absolute https action URL or an http action URL for localhost/loopback development without credentials or fragments.`,
+    );
+  }
 }
 
 // Resolves the effective non-secret configuration: the selected

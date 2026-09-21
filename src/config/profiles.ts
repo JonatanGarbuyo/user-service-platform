@@ -20,6 +20,8 @@ export const NON_SECRET_VAR_NAMES = [
   'AUTH_MAIL_FROM',
   'AUTH_APP_NAME',
   'AUTH_MAIL_ALLOWLIST',
+  'AUTH_VERIFY_EMAIL_ACTION_URL',
+  'AUTH_RESET_PASSWORD_ACTION_URL',
   'SMTP_HOST',
   'SMTP_PORT',
   'SMTP_SECURE',
@@ -54,7 +56,8 @@ function freezeProfile(profile: NonSecretProfile): NonSecretProfile {
 // Local development defaults: open registration gated on verified email with
 // the metadata-only development mail sink (unset transport). SMTP slots stay
 // explicitly unset until a real-delivery local scenario selects the SMTP
-// transport (ticket #58).
+// transport (ticket #58). Auth action URL slots stay explicitly unset so local
+// mail targets the service-owned fallback action pages (ticket #77).
 export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'local',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -64,6 +67,8 @@ export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_MAIL_FROM: 'User Service <noreply@example.com>',
   AUTH_APP_NAME: 'User Service',
   AUTH_MAIL_ALLOWLIST: '',
+  AUTH_VERIFY_EMAIL_ACTION_URL: '',
+  AUTH_RESET_PASSWORD_ACTION_URL: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_SECURE: '',
@@ -73,7 +78,9 @@ export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
 // explicitly. The recipient allowlist is intentionally empty here and must be
 // supplied out-of-band per deployment; delivery without one fails closed.
 // SMTP slots stay explicitly unset until a deployment selects the SMTP
-// transport (ticket #58).
+// transport (ticket #58). Auth action URL slots stay explicitly unset so
+// sandbox mail targets the service-owned fallback pages unless a deployment
+// configures branded consumer pages (ticket #77).
 export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'sandbox',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -83,6 +90,8 @@ export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_MAIL_FROM: 'User Service <noreply@example.com>',
   AUTH_APP_NAME: 'User Service',
   AUTH_MAIL_ALLOWLIST: '',
+  AUTH_VERIFY_EMAIL_ACTION_URL: '',
+  AUTH_RESET_PASSWORD_ACTION_URL: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_SECURE: '',
@@ -92,7 +101,9 @@ export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
 // allowlist slot stays empty because production deliveries are not
 // allowlist-guarded; sandbox/production secrets still live outside this file.
 // SMTP slots stay explicitly unset until a deployment selects the SMTP
-// transport (ticket #58).
+// transport (ticket #58). Auth action URL slots stay explicitly unset so
+// production mail targets the service-owned fallback pages unless a
+// deployment configures branded consumer pages (ticket #77).
 export const PRODUCTION_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'production',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -102,6 +113,8 @@ export const PRODUCTION_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_MAIL_FROM: 'User Service <noreply@example.com>',
   AUTH_APP_NAME: 'User Service',
   AUTH_MAIL_ALLOWLIST: '',
+  AUTH_VERIFY_EMAIL_ACTION_URL: '',
+  AUTH_RESET_PASSWORD_ACTION_URL: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_SECURE: '',

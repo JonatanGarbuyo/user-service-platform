@@ -128,6 +128,8 @@ function scopedAuth(
       BETTER_AUTH_SECRET: c.env.BETTER_AUTH_SECRET,
     }),
     baseURL: new URL(c.req.url).origin,
+    verifyEmailActionURL: effective.config.AUTH_VERIFY_EMAIL_ACTION_URL,
+    resetPasswordActionURL: effective.config.AUTH_RESET_PASSWORD_ACTION_URL,
     background: backgroundScheduler(c),
   });
   return { auth, policy };

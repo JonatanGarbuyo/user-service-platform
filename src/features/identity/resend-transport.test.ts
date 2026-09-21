@@ -371,3 +371,52 @@ describe('resolveAuthMailer', () => {
     ).toThrow(/AUTH_MAIL_TRANSPORT/);
   });
 });
+
+describe('application-owned action URLs through Resend (ticket #77)', () => {
+  it('renders fallback and custom consumer action URLs verbatim without engine callbacks', async () => {
+    const seen: { url: string; init?: RequestInit }[] = [];
+    const { mailer } = testTransport(productionEnv(), (url, init) => {
+      seen.push({ url, init });
+      return okResponse('msg_action');
+    });
+
+    // The transformation happens above the transport (auth.ts): the adapter
+    // renders whatever application-owned action URL it receives, so the
+    // service-owned fallback pages and branded consumer pages both survive
+    // delivery unchanged.
+    await mailer.sendVerificationEmail({
+      to: 'ada@example.com',
+      url: 'http://localhost:8787/auth-actions/verify-email?token=fallback-token',
+      token: 'fallback-token',
+    });
+    await mailer.sendPasswordResetEmail({
+      to: 'ada@example.com',
+      url: 'https://app.example.com/reset?next=%2Fwelcome&token=custom-token',
+      token: 'custom-token',
+    });
+
+    expect(seen).toHaveLength(2);
+    const bodies = seen.map((entry) => {
+      const raw = entry.init?.body;
+      if (typeof raw !== 'string') {
+        throw new Error('Expected a JSON string request body.');
+      }
+      return JSON.parse(raw) as { html: string; text: string };
+    });
+    for (const body of bodies) {
+      expect(body.html).not.toContain('/api/auth');
+      expect(body.text).not.toContain('/api/auth');
+    }
+    expect(bodies[0]?.text).toContain(
+      'http://localhost:8787/auth-actions/verify-email?token=fallback-token',
+    );
+    expect(bodies[0]?.html).toContain(
+      'http://localhost:8787/auth-actions/verify-email?token=fallback-token',
+    );
+    expect(bodies[1]?.text).toContain(
+      'https://app.example.com/reset?next=%2Fwelcome&token=custom-token',
+    );
+    expect(bodies[1]?.html).toContain('https://app.example.com/reset');
+    expect(bodies[1]?.html).toContain('token=custom-token');
+  });
+});
