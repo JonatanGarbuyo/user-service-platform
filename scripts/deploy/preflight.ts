@@ -1,4 +1,12 @@
 import { assertWorkerName, parseDeployEnvironment } from './naming.js';
+import {
+  checkSecretTextBindings,
+  formatSecretBindingsError,
+  parseSecretListOutput,
+  secretBindingsFailed,
+  secretListArgs,
+} from './secret-bindings.js';
+import { requiredWorkerSecrets } from './secrets.js';
 import { isProvisionedDatabaseId, type ResolvedDeployment } from './targets.js';
 
 // Deployment preflight (ticket #78, ADR-0008).
@@ -11,7 +19,10 @@ import { isProvisionedDatabaseId, type ResolvedDeployment } from './targets.js';
 // Secret boundary: preflight never reads provider/auth secret values. Cloudflare
 // authentication is probed through `wrangler whoami` exit status, and command
 // output is reduced to pass/fail — outputs never enter check details, so
-// tokens or account identifiers cannot leak through diagnostics.
+// tokens or account identifiers cannot leak through diagnostics. Required
+// Worker secrets are verified through the provider-supported names/types-only
+// `secret list` mechanism (ticket #106): only binding `name`/`type` fields are
+// consumed, and failure details carry required names/status only.
 
 export interface PreflightCommand {
   readonly command: string;
@@ -126,11 +137,64 @@ export async function runPreflight(
     detail: workerOk ? 'worker name valid' : 'worker name invalid',
   });
 
+  checks.push(await checkWorkerSecrets(input.resolved, deps));
+
   return checks;
 }
 
 export function preflightFailed(checks: readonly PreflightCheck[]): boolean {
   return checks.some((check) => !check.ok);
+}
+
+// Required-secret binding-type gate (ticket #106): `secrets.required`
+// accepts a same-name plaintext Worker `vars` entry, so preflight lists the
+// target Worker's secrets through the provider-supported names/types-only
+// mechanism and requires every required name (derived from the same
+// `requiredWorkerSecrets` set owned by #104) to exist as `secret_text`. The
+// check fails closed before `wrangler deploy` and smoke; details carry
+// required names/status only, never values or provider output.
+async function checkWorkerSecrets(
+  resolved: ResolvedDeployment,
+  deps: PreflightDeps,
+): Promise<PreflightCheck> {
+  const required = requiredWorkerSecrets({
+    environment: resolved.environment,
+    vars: resolved.vars,
+  });
+  if (required.length === 0) {
+    return { name: 'worker-secrets', ok: true, detail: 'no required Worker secrets' };
+  }
+  const listed = await deps.run('npx', [...secretListArgs(resolved.workerName)]);
+  if (listed.exitCode !== 0) {
+    return {
+      name: 'worker-secrets',
+      ok: false,
+      detail: `required Worker secrets unverified as secret_text bindings: ${required.join(', ')}`,
+    };
+  }
+  let remote;
+  try {
+    remote = parseSecretListOutput(listed.stdout);
+  } catch {
+    return {
+      name: 'worker-secrets',
+      ok: false,
+      detail: `required Worker secrets unverified as secret_text bindings: ${required.join(', ')}`,
+    };
+  }
+  const results = checkSecretTextBindings(required, remote);
+  if (secretBindingsFailed(results)) {
+    return {
+      name: 'worker-secrets',
+      ok: false,
+      detail: formatSecretBindingsError(resolved.workerName, results).message,
+    };
+  }
+  return {
+    name: 'worker-secrets',
+    ok: true,
+    detail: 'required Worker secrets present as secret_text bindings',
+  };
 }
 
 // Formats only check names plus static details: command output (which may
