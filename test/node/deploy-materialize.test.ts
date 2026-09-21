@@ -89,12 +89,21 @@ describe('wrangler config materialization', () => {
     expect(config.main).toBe(resolveRepoWorkerMain(resolveRepoRoot()));
   });
 
-  it('never materializes secret keys into the generated config', () => {
+  it('declares required secret names without materializing secret values', () => {
+    // Ticket #104: the generated config declares `secrets.required` names so
+    // `wrangler deploy` fails closed before promotion; values never appear.
     const config = buildTargetWranglerConfig(SANDBOX_RESOLVED);
+    expect(config.secrets).toEqual({
+      required: ['BETTER_AUTH_SECRET', 'RESEND_API_KEY'],
+    });
+    for (const secret of ['BETTER_AUTH_SECRET', 'RESEND_API_KEY', 'SMTP_USER', 'SMTP_PASSWORD']) {
+      expect(config.vars).not.toHaveProperty(secret);
+    }
     const serialized = JSON.stringify(config);
     for (const secret of ['BETTER_AUTH_SECRET', 'RESEND_API_KEY', 'SMTP_USER', 'SMTP_PASSWORD']) {
-      expect(serialized).not.toContain(secret);
+      expect(serialized).not.toMatch(new RegExp(`"${secret}"\\s*:`));
     }
+    expect(serialized).not.toContain('canary');
   });
 
   it('binds a distinct D1 per target environment while keeping the DB binding', () => {
