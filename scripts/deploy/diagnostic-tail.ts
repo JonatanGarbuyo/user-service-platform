@@ -54,6 +54,15 @@ export interface SafeSessionFailure {
 export const SESSION_FAILURE_TAIL_START_TIMEOUT_MS = 15_000;
 export const SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS = 10_000;
 export const SESSION_FAILURE_TAIL_MAX_DURATION_MS = 300_000;
+// Bounded post-failure drain window (ticket #102). Cloudflare delivers the
+// tail invocation envelope asynchronously after the HTTP client already
+// observed the 500, so a failing smoke keeps the live tail open briefly before
+// `stop()`. The window ends early once a whitelisted event is observed;
+// otherwise it expires and reports `phase unavailable` with a liveness proof.
+// Kept to 2s so the added failure latency stays small and explicitly bounded,
+// and well inside the existing stop/maximum bounds.
+export const SESSION_FAILURE_TAIL_DRAIN_MS = 2_000;
+export const SESSION_FAILURE_TAIL_DRAIN_POLL_MS = 100;
 // Bounded grace between spawn and startup resolution (ticket #98, AC6).
 // Wrangler `tail` exposes no machine-readable readiness signal — connection
 // chatter is human text on stderr, which this boundary deliberately discards
@@ -319,8 +328,15 @@ export function buildSessionFailureTailCommand(
 // Handle for one bounded tail window. `stop` terminates the tail (bounded by
 // `SESSION_FAILURE_TAIL_STOP_TIMEOUT_MS`) and resolves with the raw captured
 // lines; the deploy boundary parses/whitelists them before logging anything.
+// `isLive` reports whether the Wrangler child is still running, `peekLines`
+// returns the buffered lines so far without terminating the tail (used by the
+// bounded post-failure drain), and `exitedBeforeSmoke` is true when the child
+// already exited during the readiness grace (ticket #102).
 export interface SessionFailureTailHandle {
   readonly stop: () => Promise<readonly string[]>;
+  readonly isLive: () => boolean;
+  readonly peekLines: () => readonly string[];
+  readonly exitedBeforeSmoke: boolean;
 }
 
 // Rejects when `promise` does not settle within `timeoutMs` so tail
@@ -453,6 +469,18 @@ export function startSessionFailureTail(
       spawnError = error;
     };
     child.once('error', onSpawnError);
+    // Premature-exit detection (ticket #102): the tail startup waits a fixed
+    // readiness grace with no machine-readable Wrangler signal, so a child
+    // that dies during the grace would otherwise look like a live empty tail
+    // and report a misleading `phase unavailable`. Track liveness from spawn
+    // so the deploy boundary can classify `exited before smoke` with a fixed
+    // safe message and never print raw stderr/error text.
+    let exited = false as boolean;
+    const onChildSettled = (): void => {
+      exited = true;
+    };
+    child.once('close', onChildSettled);
+    child.once('exit', onChildSettled);
 
     const releaseStreams = (): void => {
       child.stdout?.removeAllListeners();
@@ -551,6 +579,19 @@ export function startSessionFailureTail(
       maxTimer.unref();
     }
 
+    const isLive = (): boolean => !exited && child.exitCode === null && child.signalCode === null;
+
+    const peekLines = (): readonly string[] => {
+      // Incremental snapshot for the post-failure drain: buffered complete
+      // lines plus any partial trailing chunk so a just-arrived envelope can
+      // end the drain early. Callers parse through the whitelist boundary and
+      // never log this raw snapshot.
+      if (buffer.length > 0) {
+        return [...lines, buffer];
+      }
+      return [...lines];
+    };
+
     let stopPromise: Promise<readonly string[]> | undefined;
     const stop = (): Promise<readonly string[]> => {
       stopPromise ??= (async (): Promise<readonly string[]> => {
@@ -558,8 +599,8 @@ export function startSessionFailureTail(
         clearTimeout(maxTimer);
         clearMaxTimers();
         killIfAlive(child, 'SIGTERM');
-        const exited = await waitForExitBounded(stopTimeoutMs);
-        if (!exited) {
+        const settled = await waitForExitBounded(stopTimeoutMs);
+        if (!settled) {
           killIfAlive(child, 'SIGKILL');
           await waitForExitBounded(killSettleMs);
         }
@@ -580,12 +621,107 @@ export function startSessionFailureTail(
     child.removeListener('error', onSpawnError);
     if (spawnError !== undefined) {
       stopped = true;
+      exited = true;
       clearTimeout(maxTimer);
       clearMaxTimers();
       releaseStreams();
       throw new Error(`diagnostic tail failed to start: ${spawnError.message}`);
     }
-    return { stop };
+    const exitedBeforeSmoke = exited || !isLive();
+    return { stop, isLive, peekLines, exitedBeforeSmoke };
   };
   return withTimeout(startup(), startTimeoutMs, 'diagnostic tail start');
+}
+
+// Bounded post-failure drain outcome (ticket #102). `lines` is the final raw
+// capture returned by `stop()`; `observedEvent` reports whether the
+// whitelisted `session.resolve-failed` event was present; `liveThroughDrain`
+// proves the tail stayed alive until the event or the full drain window;
+// `drainWaitedMs` is the actual referenced wait (always bounded by `drainMs`).
+export interface TailDrainOutcome {
+  readonly lines: readonly string[];
+  readonly observedEvent: boolean;
+  readonly liveThroughDrain: boolean;
+  readonly drainWaitedMs: number;
+}
+
+export interface TailDrainOptions {
+  readonly drainMs?: number;
+  readonly pollMs?: number;
+}
+
+// Keeps a live tail open for a bounded drain window after smoke failure so the
+// asynchronous Cloudflare invocation envelope can arrive (ticket #102).
+//
+// Polls the handle's incremental snapshot through the existing whitelist
+// parser and ends the drain early once a safe event is observed; otherwise
+// waits the full bounded window and reports no event. A tail that already
+// exited returns immediately without adding drain latency. The drain sleep
+// stays awaited and referenced (ticket #100 liveness invariant): it is a plain
+// `setTimeout` that is never `unref()`'d, so Node cannot exit 0 while the
+// smoke-failure catch/drain/rethrow chain is still pending. Raw incremental
+// snapshots stay private; only the final whitelisted parse may be logged by
+// the caller.
+export async function drainSessionFailureTail(
+  handle: SessionFailureTailHandle,
+  options: TailDrainOptions = {},
+): Promise<TailDrainOutcome> {
+  const drainMs = options.drainMs ?? SESSION_FAILURE_TAIL_DRAIN_MS;
+  const pollMs = options.pollMs ?? SESSION_FAILURE_TAIL_DRAIN_POLL_MS;
+  const started = Date.now();
+  const snapshotHasEvent = (snapshot: readonly string[]): boolean =>
+    parseTailLines(snapshot).length > 0;
+
+  if (handle.exitedBeforeSmoke || !handle.isLive()) {
+    const lines = await handle.stop();
+    return {
+      lines,
+      observedEvent: parseTailLines([...lines]).length > 0,
+      liveThroughDrain: false,
+      drainWaitedMs: Date.now() - started,
+    };
+  }
+
+  let liveThroughDrain = true;
+  while (Date.now() - started < drainMs) {
+    if (snapshotHasEvent(handle.peekLines())) {
+      const lines = await handle.stop();
+      return {
+        lines,
+        observedEvent: parseTailLines([...lines]).length > 0,
+        liveThroughDrain: true,
+        drainWaitedMs: Date.now() - started,
+      };
+    }
+    if (!handle.isLive()) {
+      liveThroughDrain = false;
+      break;
+    }
+    const remaining = drainMs - (Date.now() - started);
+    if (remaining <= 0) {
+      break;
+    }
+    // Referenced by construction (no unref): the smoke-failure path awaits
+    // this drain, so Node must stay alive through it (ticket #100).
+    await new Promise<void>((resolvePromise) => {
+      setTimeout(
+        () => {
+          resolvePromise();
+        },
+        Math.min(Math.max(pollMs, 1), remaining),
+      );
+    });
+    if (!handle.isLive() && !snapshotHasEvent(handle.peekLines())) {
+      liveThroughDrain = false;
+      break;
+    }
+  }
+  const lines = await handle.stop();
+  const observedEvent = parseTailLines([...lines]).length > 0;
+  return {
+    lines,
+    observedEvent,
+    liveThroughDrain: observedEvent ? true : liveThroughDrain,
+    drainWaitedMs: Date.now() - started,
+  };
 }

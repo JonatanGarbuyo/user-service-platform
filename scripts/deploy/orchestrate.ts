@@ -1,6 +1,8 @@
 import type { ResolvedDeployment } from './targets.js';
 import {
+  drainSessionFailureTail,
   parseTailLines,
+  SESSION_FAILURE_TAIL_DRAIN_MS,
   summarizeSessionFailures,
   type SessionFailureTailHandle,
 } from './diagnostic-tail.js';
@@ -112,16 +114,47 @@ async function collectTailLines(
   }
 }
 
-// Sandbox smoke wrapped with the bounded diagnostic tail (tickets #96/#98).
+function tailExitedBeforeSmoke(tail: SessionFailureTailHandle): boolean {
+  if (tail.exitedBeforeSmoke) {
+    return true;
+  }
+  try {
+    return !tail.isLive();
+  } catch {
+    return false;
+  }
+}
+
+// Bounded post-failure drain (ticket #102): keeps the live tail open briefly
+// after the smoke client already observed the failure so the asynchronous
+// Cloudflare invocation envelope can arrive. Ends early on a whitelisted
+// event; otherwise expires and reports `phase unavailable` with a liveness
+// proof. The drain sleep stays awaited and referenced (ticket #100), raw
+// incremental snapshots stay private, and only whitelisted `event`/`phase`/
+// optional `requestId`/`environment` may be logged.
+async function collectDrainedTailLines(
+  tail: SessionFailureTailHandle,
+  io: DeployIo,
+): Promise<{ readonly lines: readonly string[]; readonly liveThroughDrain: boolean }> {
+  try {
+    const outcome = await drainSessionFailureTail(tail);
+    return { lines: outcome.lines, liveThroughDrain: outcome.liveThroughDrain };
+  } catch {
+    io.log('sandbox smoke diagnostic: session failure tail stop failed');
+    return { lines: [], liveThroughDrain: false };
+  }
+}
+
+// Sandbox smoke wrapped with the bounded diagnostic tail (tickets #96/#98/#102).
 // Starts the tail immediately before the smoke and always terminates it
 // afterward. Tail startup waits its bounded readiness grace before the smoke
 // runs, so the tail is connected before the fast health then anonymous `GET
 // /v1/me` sequence; a slow connect still degrades to the ticket-allowed
-// `phase unavailable` rather than unfiltered logs. A failed smoke logs the
-// whitelisted safe phase (`config`|`auth`|`session`) or `phase unavailable` —
-// never unfiltered logs and never the phase in the public HTTP response. A
-// successful smoke logs the observation count but never fails for missing
-// events. A tail startup failure never fails the smoke itself.
+// `phase unavailable` rather than unfiltered logs. A child that exits during
+// the grace is classified as `exited before smoke` with a fixed safe message
+// rather than a misleading live empty tail. A failed smoke keeps the live tail
+// open for the bounded drain window before terminating it, preferring early
+// exit on a whitelisted event.
 async function runSandboxSmokeWithDiagnostics(
   resolved: ResolvedDeployment,
   configPath: string,
@@ -143,6 +176,25 @@ async function runSandboxSmokeWithDiagnostics(
   try {
     await runStep('smoke-sandbox', 'npm', ['run', 'smoke:sandbox'], runner);
   } catch (smokeError) {
+    if (tail !== null && tailExitedBeforeSmoke(tail)) {
+      await collectTailLines(tail, io);
+      io.log('sandbox smoke diagnostic: session failure tail unavailable (exited before smoke)');
+      throw smokeError;
+    }
+    if (tail !== null) {
+      const drained = await collectDrainedTailLines(tail, io);
+      const events = parseTailLines(drained.lines);
+      if (events.length > 0) {
+        io.log(summarizeSessionFailures(events));
+      } else if (drained.liveThroughDrain) {
+        io.log(
+          `${summarizeSessionFailures([])} (tail live through ${String(SESSION_FAILURE_TAIL_DRAIN_MS)}ms drain)`,
+        );
+      } else {
+        io.log(`${summarizeSessionFailures([])} (tail exited during drain)`);
+      }
+      throw smokeError;
+    }
     io.log(summarizeSessionFailures(parseTailLines(await collectTailLines(tail, io))));
     throw smokeError;
   }
