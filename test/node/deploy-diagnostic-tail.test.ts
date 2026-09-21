@@ -540,3 +540,142 @@ describe('sandbox diagnostic tail process lifecycle (ticket #98)', () => {
     }
   });
 });
+
+// Liveness under test (ticket #100): a failed sandbox smoke must always make
+// the deploy promise reject (nonzero exit upstream) even while the diagnostic
+// tail teardown is still in progress. The live false-green in deploy run
+// 35548407940 ended SUCCESS after `Sandbox smoke failed at me-anonymous` with
+// neither the `sandbox smoke diagnostic` summary nor `deployment complete`
+// output — consistent with the awaited tail child plus awaited lifecycle timers
+// all being `unref()`'d so Node exited 0 while the catch/stop/rethrow chain was
+// still pending. These tests pin the awaited path to referenced handles using
+// the real `runDeployment` orchestration shape plus the real tail lifecycle.
+describe('smoke failure liveness (ticket #100)', () => {
+  // Intercepts `unref()` on timers created while the capture is active so a
+  // test can prove which awaited delays stay referenced. Returns the observed
+  // unref'd delays plus a restore thunk; callers restore in `finally`.
+  function captureUnrefedDelays(): { unrefDelays: number[]; restore: () => void } {
+    const unrefDelays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((callback: () => void, delayMs: number) => {
+      const timer = originalSetTimeout(callback, delayMs) as unknown as {
+        unref: () => unknown;
+      };
+      const originalUnref = timer.unref.bind(timer);
+      timer.unref = () => {
+        unrefDelays.push(delayMs);
+        originalUnref();
+      };
+      return timer;
+    }) as typeof setTimeout;
+    return {
+      unrefDelays,
+      restore: () => {
+        globalThis.setTimeout = originalSetTimeout;
+      },
+    };
+  }
+
+  it('withTimeout keeps its awaited timer referenced until settlement', async () => {
+    const capture = captureUnrefedDelays();
+    try {
+      await expect(
+        withTimeout(
+          new Promise<string>((resolvePromise) => {
+            setTimeout(() => {
+              resolvePromise('ok');
+            }, 20);
+          }),
+          5000,
+          'liveness probe',
+        ),
+      ).resolves.toBe('ok');
+    } finally {
+      capture.restore();
+    }
+    expect(capture.unrefDelays).toEqual([]);
+  });
+
+  it('keeps the awaited tail child and readiness grace referenced until stop()', async () => {
+    const STUB_ALIVE = 'setInterval(() => undefined, 50);';
+    const capture = captureUnrefedDelays();
+    let childUnrefCalls = 0;
+    try {
+      const handle = await startSessionFailureTail(SANDBOX, '/tmp/wrangler.sandbox.json', {
+        readyGraceMs: 777,
+        startTimeoutMs: 5000,
+        stopTimeoutMs: 1000,
+        killSettleMs: 500,
+        maxDurationMs: 30_000,
+        command: process.execPath,
+        args: ['-e', STUB_ALIVE],
+        spawnFn: (command, args, options) => {
+          const child = nodeSpawn(command, args, options);
+          const originalUnref = child.unref.bind(child);
+          child.unref = () => {
+            childUnrefCalls += 1;
+            originalUnref();
+          };
+          return child;
+        },
+      });
+      try {
+        // The awaited stop() path loses liveness when the controlled child is
+        // unref'd: Node may exit 0 while teardown is still pending.
+        expect(childUnrefCalls).toBe(0);
+        // The readiness grace is awaited by startup, so unref'ing it lets the
+        // same early-exit happen before the smoke even runs. The hard-maximum
+        // backstop (30s here) may stay unref'd: it is never awaited and the
+        // referenced child keeps the deploy alive until it fires.
+        expect(capture.unrefDelays).not.toContain(777);
+        expect(capture.unrefDelays).not.toContain(5000);
+      } finally {
+        await handle.stop();
+      }
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it('rejects a failed smoke after an asynchronous tail stop with the diagnostic first', async () => {
+    const logs: string[] = [];
+    let stopped = 0;
+    const io: DeployIo = {
+      materialize: () => '/tmp/wrangler.tail-liveness.json',
+      cleanup: () => undefined,
+      preflight: () => Promise.resolve(undefined),
+      log: (message) => {
+        logs.push(message);
+      },
+      startSessionFailureTail: () =>
+        Promise.resolve({
+          stop: () => {
+            stopped += 1;
+            // Teardown is asynchronous in production (SIGTERM grace, stream
+            // flush); the deploy must stay alive through it and still reject.
+            return new Promise<readonly string[]>((resolvePromise) => {
+              setTimeout(() => {
+                resolvePromise([
+                  JSON.stringify({ event: 'session.resolve-failed', phase: 'session' }),
+                ]);
+              }, 50);
+            });
+          },
+        }),
+    };
+    const runner: DeployCommandRunner = (command, args) => {
+      if (command === 'npm' && args.join(' ').includes('smoke:sandbox')) {
+        return Promise.resolve({ exitCode: 1 });
+      }
+      return Promise.resolve({ exitCode: 0 });
+    };
+    await expect(runDeployment({ resolved: SANDBOX }, io, runner)).rejects.toThrow(/smoke-sandbox/);
+    expect(stopped).toBe(1);
+    const transcript = logs.join('\n');
+    expect(transcript).toMatch(/sandbox smoke diagnostic/);
+    expect(transcript).toMatch(/session/);
+    // The failure path rethrows before the success summary: no green
+    // `deployed worker=` line may follow a failed smoke.
+    expect(transcript).not.toMatch(/deployed worker=/);
+  });
+});
