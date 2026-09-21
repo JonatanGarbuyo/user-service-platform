@@ -112,11 +112,11 @@ async function collectTailLines(
   }
 }
 
-// Sandbox smoke wrapped with the bounded diagnostic tail (ticket #96).
+// Sandbox smoke wrapped with the bounded diagnostic tail (tickets #96/#98).
 // Starts the tail immediately before the smoke and always terminates it
-// afterward. The tail connects concurrently while the smoke runs its health
-// then anonymous `GET /v1/me` sequence, so the failure event lands inside the
-// window in practice; an early-connect miss degrades to the ticket-allowed
+// afterward. Tail startup waits its bounded readiness grace before the smoke
+// runs, so the tail is connected before the fast health then anonymous `GET
+// /v1/me` sequence; a slow connect still degrades to the ticket-allowed
 // `phase unavailable` rather than unfiltered logs. A failed smoke logs the
 // whitelisted safe phase (`config`|`auth`|`session`) or `phase unavailable` —
 // never unfiltered logs and never the phase in the public HTTP response. A
