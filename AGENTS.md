@@ -64,6 +64,11 @@ Do not skip directly from a broad idea to implementation.
 - Once the application TypeScript project is scaffolded, typed linting and `typecheck` become mandatory CI gates.
 - Architecture boundaries documented here must become machine-enforced import/dependency rules once the source layout is finalized.
 
+## Testing rules
+
+- Do not write tautological tests.
+- Prefer tests of public behaviour and repository contracts over implementation details.
+
 ## Change rules
 
 - A feature slice owns its contract, domain behaviour, persistence implementation, and tests.
