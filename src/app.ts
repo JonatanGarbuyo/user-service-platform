@@ -3,7 +3,11 @@ import type { Context } from 'hono';
 import { requestId } from 'hono/request-id';
 import type { Env } from './env.js';
 import { createHealthRouter } from './features/health/index.js';
-import { createIdentityRouter, type IdentityRouterOptions } from './features/identity/index.js';
+import {
+  createAuthActionsRouter,
+  createIdentityRouter,
+  type IdentityRouterOptions,
+} from './features/identity/index.js';
 import { openApiConfig } from './openapi.js';
 import { PROBLEM_JSON, createProblem } from './shared/problem.js';
 
@@ -74,6 +78,10 @@ export function createApp(identityOptions: IdentityRouterOptions = {}) {
 
   app.route('/v1', createHealthRouter());
   app.route('/v1', createIdentityRouter(identityOptions));
+  // Service-owned fallback browser action pages (ticket #77). Plain HTML
+  // handlers outside the versioned JSON API: they complete through the
+  // existing POST `/v1` contracts and never enter the OpenAPI document.
+  app.route('/auth-actions', createAuthActionsRouter());
 
   app.doc('/v1/openapi.json', openApiConfig);
 

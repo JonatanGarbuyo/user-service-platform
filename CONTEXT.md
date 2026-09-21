@@ -115,6 +115,10 @@ A runtime-validatable public interface. HTTP contracts are the source for genera
 
 A narrow integration boundary for infrastructure whose implementation may change, such as object storage, transactional email, or an external provider.
 
+### Auth Action URL
+
+The user-facing verification/reset link delivered by transactional auth mail. It targets either a deployment-configured consumer action page or the service-owned fallback browser routes, and carries the engine token as a single `token` query parameter. The Better Auth callback URL is an engine implementation detail and never becomes an Auth Action URL.
+
 ### Authenticated User
 
 The stable application-facing identity exposed to feature slices after authentication. It must not expose Better Auth persistence models or provider-specific types.

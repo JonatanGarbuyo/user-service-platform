@@ -40,6 +40,15 @@ export interface Env {
   // wherever the Resend transport runs outside production so sandbox runs
   // cannot mail arbitrary recipients.
   AUTH_MAIL_ALLOWLIST?: string;
+  // User-facing auth action pages (ticket #77). Optional absolute HTTP(S)
+  // action-page URLs without a token; empty means the service-owned fallback
+  // browser routes (`/auth-actions/verify-email`, `/auth-actions/reset-password`)
+  // on the request origin. Custom sandbox/production targets require HTTPS;
+  // local/test allow plain HTTP only for localhost/loopback development.
+  // Identity appends exactly one `token` query parameter from the Better Auth
+  // token; the engine callback URL never becomes public contract.
+  AUTH_VERIFY_EMAIL_ACTION_URL?: string;
+  AUTH_RESET_PASSWORD_ACTION_URL?: string;
   // Provider-neutral SMTP transactional-mail configuration (ticket #58).
   // Host, port and TLS mode are deployment configuration; the authentication
   // credentials are secrets supplied via the ignored local `.env` or

@@ -402,7 +402,6 @@ describe('resolveAuthMailer with SMTP', () => {
     const mailer = resolveAuthMailer({ ...smtpEnv(), AUTH_MAIL_TRANSPORT: 'smtp' });
     expect(mailer).toBeInstanceOf(SmtpAuthMailer);
   });
-
   it('keeps the in-memory transport available for credential-free tests', () => {
     expect(resolveAuthMailer({ AUTH_MAIL_TRANSPORT: 'inmemory' })).toBeInstanceOf(
       InMemoryAuthMailer,
@@ -413,5 +412,43 @@ describe('resolveAuthMailer with SMTP', () => {
     expect(() =>
       resolveAuthMailer({ ENVIRONMENT: 'local', AUTH_MAIL_TRANSPORT: 'sendmail' }),
     ).toThrow(/AUTH_MAIL_TRANSPORT/);
+  });
+});
+
+describe('application-owned action URLs through SMTP (ticket #77)', () => {
+  it('renders fallback and custom consumer action URLs verbatim without engine callbacks', async () => {
+    const { mailer, sent } = testTransport(smtpEnv());
+
+    // The transformation happens above the transport (auth.ts): the adapter
+    // renders whatever application-owned action URL it receives, so the
+    // service-owned fallback pages and branded consumer pages both survive
+    // delivery unchanged.
+    await mailer.sendVerificationEmail({
+      to: 'ops@example.com',
+      url: 'http://localhost:8787/auth-actions/verify-email?token=fallback-token',
+      token: 'fallback-token',
+    });
+    await mailer.sendPasswordResetEmail({
+      to: 'ops@example.com',
+      url: 'https://app.example.com/reset?next=%2Fwelcome&token=custom-token',
+      token: 'custom-token',
+    });
+
+    expect(sent).toHaveLength(2);
+    for (const mail of sent) {
+      expect(mail.html).not.toContain('/api/auth');
+      expect(mail.text).not.toContain('/api/auth');
+    }
+    expect(sent[0]?.text).toContain(
+      'http://localhost:8787/auth-actions/verify-email?token=fallback-token',
+    );
+    expect(sent[0]?.html).toContain(
+      'http://localhost:8787/auth-actions/verify-email?token=fallback-token',
+    );
+    expect(sent[1]?.text).toContain(
+      'https://app.example.com/reset?next=%2Fwelcome&token=custom-token',
+    );
+    expect(sent[1]?.html).toContain('https://app.example.com/reset');
+    expect(sent[1]?.html).toContain('token=custom-token');
   });
 });
