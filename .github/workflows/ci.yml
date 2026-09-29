@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: ['**']
+    branches: ['main']
   pull_request: {}
 
 # Least-privilege for product CI: approving these runs must not expose
@@ -16,7 +16,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
+        # Ticket #82: PR runs must prove the exact PR HEAD, not the synthetic
+        # merge commit. `pull_request` events set GITHUB_REF to
+        # refs/pull/<n>/merge, so default checkout would test the merge SHA.
+        # `push: main` keeps the normal event SHA. Actions expressions
+        # propagate null through `&&`/`||`, so on push events (where
+        # `github.event.pull_request` is absent) the left side yields null and
+        # `|| github.sha` selects the event SHA. Do not reintroduce
+        # branch-push CI to mask this; the expression below resolves to the PR
+        # head SHA on pull_request and to the event SHA otherwise.
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v7

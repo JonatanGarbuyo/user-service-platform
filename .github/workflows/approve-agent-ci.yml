@@ -22,7 +22,7 @@ on:
   # workflows except for the documented `pull_request` opened/synchronize/
   # reopened exception.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch: {}
 
 # Default-deny; each trusted job grants only what it needs to inspect

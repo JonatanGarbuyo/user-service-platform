@@ -118,8 +118,8 @@ describe('check polling policy', () => {
     ).toBe('fail');
   });
 
-  it('waits with margin beyond the 5-minute schedule interval (ticket #47)', () => {
-    // The approver poll runs at most every 5 minutes; the review-cycle wait
+  it('waits with margin beyond the 10-minute schedule interval (tickets #47/#82)', () => {
+    // The approver poll runs at most every 10 minutes; the review-cycle wait
     // must leave margin for the next tick plus queue/startup/approval.
     expect(CHECK_POLL_DELAY_MS).toBe(10000);
     expect(CHECK_POLL_ATTEMPTS * CHECK_POLL_DELAY_MS).toBeGreaterThanOrEqual(12 * 60 * 1000);

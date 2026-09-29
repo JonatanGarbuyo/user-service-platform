@@ -176,6 +176,13 @@ describe('agent:ticket workflow handoff at the push stage', () => {
         captured.bodies.push(bodyArg === undefined ? '' : bodyArg.slice('body='.length));
         return Promise.resolve({ stdout: '', stderr: '' });
       }
+      // Ticket #82: the handoff run leaves a machine-readable marker comment
+      // on the source ticket via `gh issue comment`.
+      if (command === 'gh' && args[0] === 'issue' && args[1] === 'comment') {
+        const bodyIndex = args.indexOf('--body');
+        captured.bodies.push(bodyIndex === -1 ? '' : (args[bodyIndex + 1] ?? ''));
+        return Promise.resolve({ stdout: '', stderr: '' });
+      }
       if (key === `git diff --name-only ${MAIN_HEAD}...${NEXT_HEAD} -- .github/workflows/`) {
         return Promise.resolve({ stdout: `${WORKFLOW_FILE}\n`, stderr: '' });
       }
@@ -258,6 +265,9 @@ describe('agent:ticket workflow handoff at the push stage', () => {
       'diff --git a/.github/workflows/agent-fix-cycle.yml',
     );
     expect(captured.handoffs[0]?.patch).toContain('diff --git a/scripts/x.ts');
+    // Ticket #82: the run also leaves the machine-readable marker for the
+    // trusted approver alongside the human-readable BLOCKED message.
+    expect(captured.bodies.some((body) => body.includes('trusted-workflow-handoff:v1'))).toBe(true);
     expect(captured.outcomes).toHaveLength(1);
     expect(captured.outcomes[0]).toMatchObject({ outcome: 'BLOCKED', stage: 'push' });
     expect(captured.outcomes[0]?.actionRequired).toMatch(/trusted/i);

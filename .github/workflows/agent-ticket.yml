@@ -21,8 +21,15 @@ permissions:
 
 jobs:
   run:
-    # Issues only; PR comments are handled by agent-fix-cycle.
-    if: ${{ !github.event.issue.pull_request }}
+    # Ticket #82 cheap prefilter (no runner cost for ordinary comments):
+    # issues only, exact one-line command body, authorized actor. GitHub
+    # Actions string equality is case-insensitive, so uppercase/mixed-case
+    # variants may allocate a runner; the downstream guard keeps exact
+    # lowercase validation and rejects them before any work. Whitespace and
+    # extra-text variants remain ineligible here. The repository-owned guard
+    # after checkout remains authoritative for issue/PR state, labels,
+    # same-repo/main/exact-HEAD and command ambiguity.
+    if: ${{ !github.event.issue.pull_request && github.event.comment.body == '/agent-ticket' && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') }}
     runs-on: ubuntu-latest
     # Backstop only: repository-owned worker bounds (ticket #31) terminate hung
     # workers well before this; the terminal step below still runs and

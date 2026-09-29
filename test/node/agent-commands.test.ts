@@ -311,11 +311,27 @@ describe('agent workflow contracts', () => {
   );
 
   it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
-    'never interpolates raw comment text into shell on %s',
+    'never interpolates raw comment text into shell run steps on %s',
     (name) => {
       const workflow = readWorkflow(name);
+      const runBlocks = [
+        ...workflow.matchAll(/^\s*run:\s*\|([\s\S]*?)(?=^\s*-\s+name:|^ {2}\w)/gm),
+      ].map((match) => match[1] ?? '');
 
-      expect(workflow).not.toMatch(/github\.event\.comment\.body/);
+      // Ticket #82: the cheap job-level `if:` prefilter may read
+      // `github.event.comment.body` as an Actions expression (no shell
+      // interpolation). Shell `run:` blocks must still read comment text only
+      // through `$GITHUB_EVENT_PATH`, never via expression interpolation.
+      expect(workflow).toMatch(/github\.event\.comment\.body/);
+      for (const block of runBlocks) {
+        expect(block).not.toContain('github.event.comment.body');
+      }
+      // Comment body must never be interpolated as an expression inside a
+      // shell step; only the job-level `if:` may reference it.
+      const interpolatedInRun = runBlocks.some((block) =>
+        /\$\{\{[^}]*github\.event\.comment\.body[^}]*\}\}/.test(block),
+      );
+      expect(interpolatedInRun).toBe(false);
     },
   );
 

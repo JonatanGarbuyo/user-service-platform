@@ -24,9 +24,10 @@ export const CHECK_POLL_DELAY_MS = 10000;
 
 // Ticket #47: an `action_required` conclusion means the exact-HEAD `ci` run is
 // awaiting trusted approval, not that it failed. The poll must wait for the
-// scheduled approver (5-minute cadence plus queue/startup) instead of failing
-// fast, so a normally approved run can still reach READY in the same
-// `review:cycle` execution. 72 attempts at 10s bound the wait to 12 minutes.
+// scheduled approver (10-minute cadence plus queue/startup, ticket #82)
+// instead of failing fast, so a normally approved run can still reach READY in
+// the same `review:cycle` execution. 72 attempts at 10s bound the wait to 12
+// minutes, strictly inside the worst-case backstop tick plus startup margin.
 export function hasApprovalWaitingRuns(runs: CommitCheckRun[]): boolean {
   return runs.some((run) => run.conclusion === 'action_required');
 }

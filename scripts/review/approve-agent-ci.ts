@@ -1,16 +1,28 @@
 import { runCommand, type CommandExecutor } from './runner.js';
-import { isWorkflowFile } from './workflow-handoff.js';
+import {
+  TRUSTED_PUBLISHER_APP_SLUG,
+  findMatchingHandoffMarker,
+  isWorkflowFile,
+  parseTrustedHandoffMarker,
+  type TrustedHandoffMarker,
+} from './workflow-handoff.js';
 
 // Deterministic provenance guards for auto-approving exact-HEAD CI on trusted
 // agent-created PRs (ticket #44). The separate trusted approver workflow is
 // driven by `workflow_run` for the `ci` workflow and approves only runs that
 // prove every guard below from GitHub-owned metadata. It never checks out or
 // executes PR code, and workflow-file PR changes stay governed by the #36
-// trusted-publication policy. All refusals fail closed with concise evidence.
+// trusted-publication policy. Ticket #82 adds a narrow trusted-handoff
+// exception: a workflow-file correction published through the separately
+// authorized trusted publisher (`chatgpt-codex-connector`) may qualify only
+// with a matching `github-actions[bot]` handoff marker on the source ticket,
+// full workflow-file coverage, and independent exact-HEAD equality. All
+// refusals fail closed with concise evidence.
 export const APPROVE_TRUSTED_WORKFLOW_NAME = 'ci';
 export const APPROVE_REQUIRED_CONCLUSION = 'action_required';
 export const APPROVE_BOT_LOGIN = 'github-actions[bot]';
 export const APPROVE_READY_LABEL = 'ready-for-agent';
+export const APPROVE_TRUSTED_PUBLISHER_APP_SLUG = TRUSTED_PUBLISHER_APP_SLUG;
 
 const TICKET_BRANCH_PATTERN = /^ticket\/([1-9]\d*)-[^/]+$/;
 const EXACT_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
@@ -73,6 +85,13 @@ export interface AgentCiProvenance {
   issueLabels: readonly string[];
   issueIsPullRequest: boolean;
   changedFiles: readonly string[];
+  // Ticket #82 trusted-handoff provenance. Only the PR issue representation
+  // (`issues/{prNumber}`) carries the publisher app slug; the source ticket
+  // (`issues/{ticket}`) never proves publication provenance. Handoff markers
+  // are parsed from `github-actions[bot]` comments on the source ticket.
+  // Absent for normal bot PRs.
+  prPerformedViaAppSlug?: string;
+  handoffMarkers?: readonly TrustedHandoffMarker[];
 }
 
 export type AgentCiDecision =
@@ -81,6 +100,29 @@ export type AgentCiDecision =
 
 function isExactSha(sha: string | undefined | null): boolean {
   return typeof sha === 'string' && EXACT_SHA_PATTERN.test(sha.trim());
+}
+
+function checkExactHeadEquality(
+  runHeadSha: string,
+  prHeadSha: string,
+  ticket: number,
+): AgentCiDecision | null {
+  if (!isExactSha(runHeadSha) || !isExactSha(prHeadSha)) {
+    return {
+      approved: false,
+      ticket,
+      reason:
+        'refusing: run HEAD or PR HEAD SHA is missing or ambiguous; cannot prove exact-HEAD equality',
+    };
+  }
+  if (runHeadSha.toLowerCase() !== prHeadSha.toLowerCase()) {
+    return {
+      approved: false,
+      ticket,
+      reason: `refusing: run HEAD ${runHeadSha} does not equal PR HEAD ${prHeadSha}`,
+    };
+  }
+  return null;
 }
 
 export function decideAgentCiApproval(provenance: AgentCiProvenance): AgentCiDecision {
@@ -118,12 +160,6 @@ export function decideAgentCiApproval(provenance: AgentCiProvenance): AgentCiDec
     return {
       approved: false,
       reason: `refusing: PR #${String(provenance.prNumber)} is not same-repository (head ${provenance.prHeadRepo || '(missing)'} vs base ${provenance.prBaseRepo || '(missing)'}); fork PRs are not supported`,
-    };
-  }
-  if (provenance.prAuthorLogin !== APPROVE_BOT_LOGIN) {
-    return {
-      approved: false,
-      reason: `refusing: PR #${String(provenance.prNumber)} author is ${provenance.prAuthorLogin || '(missing)'}, expected ${APPROVE_BOT_LOGIN}`,
     };
   }
   const ticket = parseTicketBranch(provenance.prHeadRef);
@@ -169,32 +205,73 @@ export function decideAgentCiApproval(provenance: AgentCiProvenance): AgentCiDec
     };
   }
   const workflowFiles = provenance.changedFiles.filter((file) => isWorkflowFile(file));
-  if (workflowFiles.length > 0) {
+  const isBotPr = provenance.prAuthorLogin === APPROVE_BOT_LOGIN;
+  if (isBotPr) {
+    if (workflowFiles.length > 0) {
+      return {
+        approved: false,
+        ticket,
+        reason: `refusing: PR touches workflow files (${workflowFiles.join(', ')}); workflow-file corrections remain governed by trusted publication and must not be auto-approved`,
+      };
+    }
+    const headCheck = checkExactHeadEquality(provenance.runHeadSha, provenance.prHeadSha, ticket);
+    if (headCheck !== null) {
+      return headCheck;
+    }
+    return {
+      approved: true,
+      ticket,
+      reason: `approved: trusted agent PR #${String(provenance.prNumber)} for issue #${String(ticket)} at exact HEAD ${provenance.prHeadSha}`,
+    };
+  }
+  // Ticket #82 trusted-handoff path for non-bot PRs. Trust is never inferred
+  // from author login, owner association, title/body, branch naming, or a
+  // user-copyable label: it requires the separately authorized trusted
+  // publisher app on the PR issue representation plus a matching bot handoff
+  // marker on the source ticket covering every workflow file. Only a
+  // workflow-file correction may use this path.
+  if (workflowFiles.length === 0) {
     return {
       approved: false,
       ticket,
-      reason: `refusing: PR touches workflow files (${workflowFiles.join(', ')}); workflow-file corrections remain governed by trusted publication and must not be auto-approved`,
+      reason: `refusing: PR #${String(provenance.prNumber)} author is ${provenance.prAuthorLogin || '(missing)'}, expected ${APPROVE_BOT_LOGIN}; non-bot PRs qualify only as workflow-file trusted handoffs`,
     };
   }
-  if (!isExactSha(provenance.runHeadSha) || !isExactSha(provenance.prHeadSha)) {
+  const markers = provenance.handoffMarkers ?? [];
+  const matching = findMatchingHandoffMarker(markers, {
+    ticket,
+    branch: provenance.prHeadRef,
+    workflowFiles,
+  });
+  if (matching === null) {
     return {
       approved: false,
       ticket,
-      reason:
-        'refusing: run HEAD or PR HEAD SHA is missing or ambiguous; cannot prove exact-HEAD equality',
+      reason: `refusing: PR #${String(provenance.prNumber)} has no matching trusted-workflow-handoff marker for ticket #${String(ticket)} covering (${workflowFiles.join(', ')})`,
     };
   }
-  if (provenance.runHeadSha.toLowerCase() !== provenance.prHeadSha.toLowerCase()) {
+  if ((provenance.prPerformedViaAppSlug ?? '') !== APPROVE_TRUSTED_PUBLISHER_APP_SLUG) {
     return {
       approved: false,
       ticket,
-      reason: `refusing: run HEAD ${provenance.runHeadSha} does not equal PR HEAD ${provenance.prHeadSha}`,
+      reason: `refusing: PR #${String(provenance.prNumber)} publisher is ${provenance.prPerformedViaAppSlug ?? '(missing)'}, expected ${APPROVE_TRUSTED_PUBLISHER_APP_SLUG} with a matching handoff marker`,
     };
   }
+  const handoffHeadCheck = checkExactHeadEquality(
+    provenance.runHeadSha,
+    provenance.prHeadSha,
+    ticket,
+  );
+  if (handoffHeadCheck !== null) {
+    return handoffHeadCheck;
+  }
+  // Trust attaches to the original publication provenance + handoff marker;
+  // the current HEAD is still gated exactly, so later exact-HEAD corrections
+  // pushed through agent-fix-cycle/safe-push remain eligible.
   return {
     approved: true,
     ticket,
-    reason: `approved: trusted agent PR #${String(provenance.prNumber)} for issue #${String(ticket)} at exact HEAD ${provenance.prHeadSha}`,
+    reason: `approved: trusted handoff PR #${String(provenance.prNumber)} for issue #${String(ticket)} at exact HEAD ${provenance.prHeadSha}`,
   };
 }
 
@@ -355,7 +432,7 @@ export async function fetchHeadWorkflowRuns(
 // originating `agent-ticket`/review-cycle flow emits this event immediately
 // (it already holds `contents: write`, which is sufficient to create a
 // repository dispatch) so the trusted approver wakes without waiting for the
-// 5-minute scheduled poll. The payload is only a hint: the trusted job must
+// 10-minute scheduled backstop (ticket #82). The payload is only a hint: the trusted job must
 // still fetch canonical GitHub state and rerun the deterministic
 // provenance/exact-HEAD/no-workflow-change evaluator before any approval.
 export const APPROVE_DISPATCH_EVENT = 'approve-agent-ci-request';
@@ -461,7 +538,7 @@ export function filterPolledRunsForHint(
 
 // Immediate liveness signal for ticket #47: best-effort only. Callers swallow
 // failures and keep polling, so a dispatch outage degrades to the scheduled
-// 5-minute backstop instead of failing the delivery flow.
+// 10-minute backstop (ticket #82) instead of failing the delivery flow.
 export async function requestApprovalDispatch(
   execute: CommandExecutor,
   repoSlug: string,
@@ -476,6 +553,147 @@ export function buildPrFetchArgs(repoSlug: string, prNumber: number): readonly s
 
 export function buildIssueFetchArgs(repoSlug: string, issueNumber: number): readonly string[] {
   return ['api', `repos/${repoSlug}/issues/${String(issueNumber)}`];
+}
+
+// Ticket #82: the PR issue representation (`issues/{prNumber}`) proves
+// publication provenance via `performed_via_github_app.slug`. It is a
+// distinct object from the source ticket (`issues/{ticket}`) in GitHub's
+// shared numbering namespace; querying the ticket number for publisher
+// provenance is a coverage failure. Named distinctly so tests pin the
+// correct variable.
+export function buildPrIssueFetchArgs(repoSlug: string, prNumber: number): readonly string[] {
+  return ['api', `repos/${repoSlug}/issues/${String(prNumber)}`];
+}
+
+// Ticket #82: handoff markers live in `github-actions[bot]` comments on the
+// source ticket. The trusted approver reads metadata/comments only and never
+// checks out or executes PR code. `--paginate --jq '.[] | ... | @json'`
+// emits one compact JSON value per comment per page, so paginated pages
+// concatenate safely (the same pattern as the poll-runs `--jq` line output).
+// The parser below accepts those newline-delimited values (objects or
+// `@json`-encoded strings) as well as a single API array for back-compat.
+export function buildTicketCommentsArgs(repoSlug: string, ticket: number): readonly string[] {
+  return [
+    'api',
+    `repos/${repoSlug}/issues/${String(ticket)}/comments`,
+    '--paginate',
+    '--jq',
+    '.[] | {body: .body, user: {login: .user.login}} | @json',
+  ];
+}
+
+export interface TicketCommentView {
+  body: string;
+  authorLogin: string;
+}
+
+function toTicketCommentView(entry: unknown): TicketCommentView | null {
+  if (typeof entry === 'string') {
+    // `@json` emits one JSON-encoded string per comment; unwrap it.
+    try {
+      const inner: unknown = JSON.parse(entry);
+      if (typeof inner === 'object' && inner !== null && !Array.isArray(inner)) {
+        return toTicketCommentView(inner);
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    return null;
+  }
+  const record = entry as { body?: unknown; user?: { login?: unknown } };
+  return {
+    body: typeof record.body === 'string' ? record.body : '',
+    authorLogin: typeof record.user?.login === 'string' ? record.user.login : '',
+  };
+}
+
+function collectCommentEntries(value: unknown, views: TicketCommentView[]): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const view = toTicketCommentView(entry);
+      if (view !== null) {
+        views.push(view);
+      }
+    }
+    return;
+  }
+  const view = toTicketCommentView(value);
+  if (view !== null) {
+    views.push(view);
+  }
+}
+
+export function parseTicketCommentsOutput(stdout: string): TicketCommentView[] {
+  const trimmed = stdout.trim();
+  if (trimmed === '') {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    const views: TicketCommentView[] = [];
+    collectCommentEntries(parsed, views);
+    // A single parsed value handles one page/array/object. When `--paginate`
+    // concatenates several single-line page arrays, the whole-stdout parse
+    // fails and the line fallback below flattens each page array instead of
+    // degrading to empty body/author records.
+    if (
+      views.length > 0 ||
+      trimmed.startsWith('[') ||
+      trimmed.startsWith('{') ||
+      trimmed.startsWith('"')
+    ) {
+      return views;
+    }
+  } catch {
+    // Fall through to newline-delimited values.
+  }
+  // Newline-delimited JSON values: one comment object (or `@json` string, or
+  // single-line page array) per line. Page arrays flatten so a marker on a
+  // later page is preserved.
+  const views: TicketCommentView[] = [];
+  for (const line of trimmed.split('\n')) {
+    if (line.trim() === '') {
+      continue;
+    }
+    try {
+      const entry: unknown = JSON.parse(line);
+      collectCommentEntries(entry, views);
+    } catch {
+      continue;
+    }
+  }
+  return views;
+}
+
+export function parsePrIssueAppSlug(stdout: string): string {
+  try {
+    const parsed = JSON.parse(stdout) as {
+      performed_via_github_app?: { slug?: unknown } | null;
+    };
+    const slug = parsed.performed_via_github_app?.slug;
+    return typeof slug === 'string' ? slug : '';
+  } catch {
+    return '';
+  }
+}
+
+export function collectBotHandoffMarkers(
+  comments: readonly TicketCommentView[],
+): TrustedHandoffMarker[] {
+  const markers: TrustedHandoffMarker[] = [];
+  for (const comment of comments) {
+    if (comment.authorLogin !== APPROVE_BOT_LOGIN) {
+      continue;
+    }
+    const marker = parseTrustedHandoffMarker(comment.body);
+    if (marker !== null) {
+      markers.push(marker);
+    }
+  }
+  return markers;
 }
 
 export function buildPrFilesArgs(repoSlug: string, prNumber: number): readonly string[] {
@@ -624,6 +842,59 @@ export async function evaluateAgentCiApproval(
     };
   }
 
+  const prAuthorLogin = typeof pr.user?.login === 'string' ? pr.user.login : '';
+  // Bot PRs keep the existing path without extra reads. Non-bot PRs may
+  // qualify only through the #82 trusted-handoff exception, which requires
+  // the PR issue publisher provenance plus a matching bot marker on the
+  // source ticket. Fetches below fail closed.
+  if (prAuthorLogin === APPROVE_BOT_LOGIN) {
+    return decideAgentCiApproval({
+      workflowName: input.workflowName,
+      runConclusion: input.runConclusion,
+      associatedPrCount: input.pullRequestNumbers.length,
+      prNumber,
+      prState: stringField(pr.state),
+      prBaseRef: stringField(pr.base?.ref),
+      prHeadRef,
+      prHeadSha: stringField(pr.head?.sha),
+      prAuthorLogin,
+      prHeadRepo: stringField(pr.head?.repo?.full_name),
+      prBaseRepo: stringField(pr.base?.repo?.full_name),
+      prTitle: stringField(pr.title),
+      prBody: pr.body === null || pr.body === undefined ? '' : stringField(pr.body),
+      runHeadSha: input.runHeadSha,
+      issueNumber: typeof issue.number === 'number' ? issue.number : ticket,
+      issueState: stringField(issue.state),
+      issueLabels: parseIssueLabels(issue.labels),
+      issueIsPullRequest,
+      changedFiles,
+    });
+  }
+
+  let prPerformedViaAppSlug: string;
+  try {
+    const { stdout } = await execute('gh', buildPrIssueFetchArgs(input.repoSlug, prNumber));
+    prPerformedViaAppSlug = parsePrIssueAppSlug(stdout);
+  } catch (error) {
+    return {
+      approved: false,
+      ticket,
+      reason: `refusing: cannot prove PR publication provenance: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  let handoffMarkers: TrustedHandoffMarker[];
+  try {
+    const { stdout } = await execute('gh', buildTicketCommentsArgs(input.repoSlug, ticket));
+    handoffMarkers = collectBotHandoffMarkers(parseTicketCommentsOutput(stdout));
+  } catch (error) {
+    return {
+      approved: false,
+      ticket,
+      reason: `refusing: cannot prove trusted handoff provenance: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
   return decideAgentCiApproval({
     workflowName: input.workflowName,
     runConclusion: input.runConclusion,
@@ -633,7 +904,7 @@ export async function evaluateAgentCiApproval(
     prBaseRef: stringField(pr.base?.ref),
     prHeadRef,
     prHeadSha: stringField(pr.head?.sha),
-    prAuthorLogin: typeof pr.user?.login === 'string' ? pr.user.login : '',
+    prAuthorLogin,
     prHeadRepo: stringField(pr.head?.repo?.full_name),
     prBaseRepo: stringField(pr.base?.repo?.full_name),
     prTitle: stringField(pr.title),
@@ -644,6 +915,8 @@ export async function evaluateAgentCiApproval(
     issueLabels: parseIssueLabels(issue.labels),
     issueIsPullRequest,
     changedFiles,
+    prPerformedViaAppSlug,
+    handoffMarkers,
   });
 }
 
