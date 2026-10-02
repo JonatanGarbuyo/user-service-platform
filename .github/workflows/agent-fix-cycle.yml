@@ -211,6 +211,12 @@ jobs:
           fi
           echo "Worktree is clean after address-review."
 
+      - name: Restore dependencies before quality gates
+        # Operational fix: the address-review step can remove or isolate
+        # node_modules, so reinstall deterministically before gates.
+        if: steps.guard.outputs.run == 'true'
+        run: npm ci
+
       - name: Run repository quality gates
         if: steps.guard.outputs.run == 'true'
         run: |
