@@ -67,6 +67,33 @@ Remote workflows upload this bundle as run artifacts alongside
 runner logs. The terminal status comment carries the marker, the touched
 files, and the action required.
 
+## Source-ticket provenance and exact-HEAD CI
+
+Ticket #82 adds a source-ticket comment alongside the evidence bundle:
+`<!-- trusted-workflow-handoff:v1 {...} -->`. Repository-owned
+`agent-ticket` code publishes it as `github-actions[bot]`; its JSON records
+the ticket number, ticket branch, original base/implementation SHAs and every
+workflow file in the handoff. The patch and metadata bundle remain required
+for reviewing and publishing the correction.
+
+The trusted approver keeps the ordinary bot-PR path unchanged, including its
+refusal of workflow-file changes. Its separate trusted-handoff path requires
+all of the following:
+
+- an open, same-repository PR against `main`, with matching ticket/branch/title/body;
+- the source ticket open and labelled `ready-for-agent`;
+- a non-empty workflow-file set fully covered by a matching bot-authored
+  source-ticket marker;
+- the PR's canonical publication app slug `chatgpt-codex-connector`;
+- independent equality between the CI run SHA and the current PR HEAD.
+
+The marker's original base/head identify the reviewed handoff for audit; they
+are not equality gates for later correction commits. Every correction still
+requires current exact-HEAD reviews and CI. PR author, owner association,
+labels or copied marker text alone cannot establish trusted provenance.
+Read/parse failures, missing coverage and zero-workflow non-bot handoffs
+refuse approval. `action_required` remains pending approval, never CI success.
+
 ## Trusted publication procedure
 
 1. Download the handoff bundle from the blocked run's artifacts.
