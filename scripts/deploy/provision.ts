@@ -142,6 +142,19 @@ function secretPutInstruction(workerName: string, secretName: string): string {
   return `npx wrangler secret put ${secretName} --name ${workerName}`;
 }
 
+// Logs one target-specific operator command per required secret name. Names
+// only: secret values are never read, so they cannot leak through these
+// instructions.
+function logSecretInstructions(
+  workerName: string,
+  required: readonly string[],
+  io: ProvisionIo,
+): void {
+  for (const name of required) {
+    io.log(`  ${secretPutInstruction(workerName, name)}`);
+  }
+}
+
 export async function runProvision(
   request: ProvisionRequest,
   io: ProvisionIo,
@@ -217,7 +230,7 @@ async function provisionD1(
   const listed = await runner('npx', [...d1ListArgs()]);
   if (listed.exitCode !== 0) {
     throw new Error(
-      `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 discovery failed.`,
+      `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 discovery failed. Verify access with "npx wrangler d1 list --json" and rerun.`,
     );
   }
   const matches = matchExactDatabase(parseD1ListOutput(listed.stdout), resolved.databaseName);
@@ -235,7 +248,7 @@ async function provisionD1(
     const created = await runner('npx', [...d1CreateArgs(resolved.databaseName)]);
     if (created.exitCode !== 0) {
       throw new Error(
-        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation failed for database "${resolved.databaseName}".`,
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation failed for database "${resolved.databaseName}". Create it manually with "npx wrangler d1 create ${resolved.databaseName}" and rerun with --apply to stage its id.`,
       );
     }
     const createdId = parseD1CreateOutput(created.stdout);
@@ -306,23 +319,26 @@ async function reportSecrets(
   if (required.length === 0) {
     return 'ok';
   }
-  if (workerState !== 'found') {
+  if (workerState === 'absent') {
     io.log(
       `worker ${resolved.workerName} is not deployed yet, so required secrets cannot be listed; after the first deploy, configure each required secret (${required.join(', ')}) with:`,
     );
-    for (const name of required) {
-      io.log(`  ${secretPutInstruction(resolved.workerName, name)}`);
-    }
+    logSecretInstructions(resolved.workerName, required, io);
     return 'worker-not-deployed';
+  }
+  if (workerState === 'unknown') {
+    io.log(
+      `worker deployment state is unknown for worker=${resolved.workerName}, so required secrets (${required.join(', ')}) are unverified; verify the Worker state, then configure each missing secret with:`,
+    );
+    logSecretInstructions(resolved.workerName, required, io);
+    return 'unverified';
   }
   const listed = await runner('npx', [...secretListArgs(resolved.workerName)]);
   if (listed.exitCode !== 0) {
     io.log(
       `required Worker secrets unverified for worker=${resolved.workerName}: ${required.join(', ')}. Configure each missing secret with:`,
     );
-    for (const name of required) {
-      io.log(`  ${secretPutInstruction(resolved.workerName, name)}`);
-    }
+    logSecretInstructions(resolved.workerName, required, io);
     return 'unverified';
   }
   let remote;
@@ -332,9 +348,7 @@ async function reportSecrets(
     io.log(
       `required Worker secrets unverified for worker=${resolved.workerName}: ${required.join(', ')}. Configure each missing secret with:`,
     );
-    for (const name of required) {
-      io.log(`  ${secretPutInstruction(resolved.workerName, name)}`);
-    }
+    logSecretInstructions(resolved.workerName, required, io);
     return 'unverified';
   }
   const results = checkSecretTextBindings(required, remote);

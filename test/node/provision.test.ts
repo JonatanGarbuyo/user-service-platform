@@ -260,28 +260,56 @@ describe('provisioning failure boundaries', () => {
         { name: SANDBOX_DB, uuid: OTHER_REMOTE_ID },
       ],
     });
-    await expect(runProvision(sandboxRequest(), harness.io, harness.runner)).rejects.toThrow(
-      /ambiguous|duplicate/i,
+    const error = await runProvision(sandboxRequest(), harness.io, harness.runner).then(
+      () => {
+        throw new Error('expected provisioning to fail closed');
+      },
+      (failure: unknown) => failure,
     );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/ambiguous|duplicate/i);
+    expect((error as Error).message).toMatch(/manually|runbook/i);
     expect(harness.commands.some(({ args }) => args.includes('create'))).toBe(false);
     expect(harness.writes).toEqual([]);
   });
 
-  it('fails closed when the configured id disagrees with the remote exact-name resource', async () => {
+  it('fails closed on configured/remote mismatch with the exact next operator action', async () => {
     const harness = createHarness({
       file: withDatabaseId(loadTargetsFromRepo(), 'sandbox', OTHER_REMOTE_ID),
       remotes: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
     });
-    await expect(runProvision(sandboxRequest(), harness.io, harness.runner)).rejects.toThrow(
-      /mismatch|disagree|conflict/i,
+    const error = await runProvision(sandboxRequest(), harness.io, harness.runner).then(
+      () => {
+        throw new Error('expected provisioning to fail closed');
+      },
+      (failure: unknown) => failure,
     );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/mismatch|disagree|conflict/i);
+    expect((error as Error).message).toMatch(/manually|runbook/i);
     expect(harness.commands.some(({ args }) => args.includes('create'))).toBe(false);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('fails closed on discovery command failure with the exact next operator action', async () => {
+    const harness = createHarness({ d1ListExit: 1 });
+    await expect(runProvision(sandboxRequest(), harness.io, harness.runner)).rejects.toThrow(
+      /npx wrangler d1 list --json/,
+    );
     expect(harness.writes).toEqual([]);
   });
 
   it('fails closed on malformed discovery output without staging an id', async () => {
     const harness = createHarness({ d1ListStdout: '{"value":"not-an-array"}' });
     await expect(runProvision(sandboxRequest(), harness.io, harness.runner)).rejects.toThrow();
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('fails closed when creation fails with the manual fallback action', async () => {
+    const harness = createHarness({ createExit: 1 });
+    await expect(
+      runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
+    ).rejects.toThrow(new RegExp(`npx wrangler d1 create ${SANDBOX_DB}`));
     expect(harness.writes).toEqual([]);
   });
 
@@ -329,6 +357,9 @@ describe('provisioning Worker and secret reporting', () => {
     const outcome = await runProvision(sandboxRequest(), harness.io, harness.runner);
     expect(outcome.workerState).toBe('unknown');
     expect(outcome.d1Action).toBe('create');
+    expect(harness.logs.join('\n')).not.toMatch(/not deployed yet/);
+    expect(outcome.secretStatus).toBe('unverified');
+    expect(harness.commands.some(({ args }) => args.includes('secret'))).toBe(false);
   });
 
   it('checks required secrets by names only where the Worker exists', async () => {
@@ -377,6 +408,8 @@ describe('provisioning Worker and secret reporting', () => {
   });
 });
 
+const PRODUCTION_REMOTE_ID = 'c3d4e5f6-a708-4939-c5d6-e7f809a1b2c3';
+
 describe('provisioning production safety', () => {
   it('keeps production plan read-only without confirmation', async () => {
     const harness = createHarness();
@@ -421,7 +454,38 @@ describe('provisioning production safety', () => {
     expect(harness.writes).toEqual([]);
   });
 
-  it('provisions production apply with the exact Worker-name confirmation', () => {
+  it('provisions production apply with the exact Worker-name confirmation', async () => {
+    const harness = createHarness({
+      createStdout: JSON.stringify({ uuid: PRODUCTION_REMOTE_ID, name: PRODUCTION_DB }),
+    });
+    const outcome = await runProvision(
+      {
+        target: 'rch-rugbychampagne',
+        environment: 'production',
+        mode: 'apply',
+        confirm: PRODUCTION_WORKER,
+      },
+      harness.io,
+      harness.runner,
+    );
+    const create = harness.commands.find(({ args }) => args.includes('create'));
+    expect(create?.args).toContain(PRODUCTION_DB);
+    expect(outcome.d1Action).toBe('created');
+    expect(outcome.databaseId).toBe(PRODUCTION_REMOTE_ID);
+    expect(outcome.configUpdated).toBe(true);
+    expect(harness.writes).toHaveLength(1);
+    expect(harness.writes[0]?.targets[0]?.environments.production.databaseId).toBe(
+      PRODUCTION_REMOTE_ID,
+    );
+    expect(harness.writes[0]?.targets[0]?.environments.sandbox.databaseId).toBe('');
+    for (const { args } of harness.commands) {
+      expect(args.join(' ')).not.toMatch(/wrangler deploy(?!ments)/);
+      expect(args.join(' ')).not.toMatch(/publish|upload/);
+      expect(args.join(' ')).not.toMatch(/secret (put|delete|bulk)/);
+    }
+  });
+
+  it('derives the production confirmation from the target Worker name', () => {
     expect(
       productionProvisionConfirmFor({
         targetKey: 'rch-rugbychampagne',

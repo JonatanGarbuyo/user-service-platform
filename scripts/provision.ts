@@ -35,7 +35,7 @@ import {
   resolveProvisionSelection,
 } from './deploy/provision-cli.js';
 import { runProvision, type ProvisionCommandResult } from './deploy/provision.js';
-import { listTargetKeys, loadTargetsFile } from './deploy/targets.js';
+import { listTargetKeys, loadTargetsFile, type TargetsFile } from './deploy/targets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,6 +45,10 @@ function repoRoot(): string {
 
 function targetsPath(): string {
   return join(repoRoot(), 'deploy', 'targets.json');
+}
+
+function readTargetsFile(): TargetsFile {
+  return loadTargetsFile(JSON.parse(readFileSync(targetsPath(), 'utf8')) as unknown);
 }
 
 // Runs a Wrangler read/create step, capturing machine-readable stdout for
@@ -73,8 +77,7 @@ async function main(): Promise<void> {
     console.log(PROVISION_HELP);
     return;
   }
-  const raw = readFileSync(targetsPath(), 'utf8');
-  const targets = loadTargetsFile(JSON.parse(raw) as unknown);
+  const targets = readTargetsFile();
   const selection = resolveProvisionSelection(parsed, {
     targets: listTargetKeys(targets),
     interactive: false,
@@ -87,8 +90,7 @@ async function main(): Promise<void> {
       confirm: parsed.confirm,
     },
     {
-      loadTargets: () =>
-        loadTargetsFile(JSON.parse(readFileSync(targetsPath(), 'utf8')) as unknown),
+      loadTargets: () => readTargetsFile(),
       writeTargets: (file) => {
         writeFileSync(targetsPath(), `${JSON.stringify(file, null, 2)}\n`, 'utf8');
       },
