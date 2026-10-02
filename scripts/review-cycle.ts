@@ -631,8 +631,8 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       // Ticket #47 liveness: the first observation of `action_required`
       // triggers one best-effort immediate approval request via
       // `repository_dispatch` (which GitHub delivers even for
-      // GITHUB_TOKEN-created PRs). The scheduled 5-minute poll remains the
-      // backstop; the bounded 12-minute wait below is unchanged.
+      // GITHUB_TOKEN-created PRs). The scheduled 10-minute backstop (ticket
+      // #82) remains the backstop; the bounded 12-minute wait below is unchanged.
       // Corrected-HEAD regression (#60/PR #68): a zero-job `action_required`
       // ci run surfaces no commit check-run, so the canonical exact-HEAD
       // Actions workflow runs are observed alongside commit check-runs.
