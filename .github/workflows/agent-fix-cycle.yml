@@ -177,56 +177,30 @@ jobs:
           npm install -g opencode-ai@1.18.30
           opencode --version | grep -F '1.18.30'
 
-      - name: Diagnose Standards provider for PR 109
-        # Temporary bounded instrumentation; remove after diagnosis.
-        # No probe output is review evidence or a PASS marker.
+      - name: Refresh Standards model catalog for PR 109
+        # Temporary same-model recovery probe; remove after diagnosis.
+        # Probe output cannot satisfy either configured review gate.
         if: steps.guard.outputs.run == 'true' && steps.guard.outputs.pr == '109' && steps.guard.outputs.head == '834be0b446dde17c5d8bc0924e7ca4f0ad031ed0'
-        timeout-minutes: 5
+        timeout-minutes: 3
         env:
           OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENCODE_CONFIG_CONTENT: '{"permission":{"*":"deny"}}'
         run: |
           set -euo pipefail
-          PROBE_DIR="$(mktemp -d "$RUNNER_TEMP/standards-probe-82.XXXXXX")"
-          trap 'rm -f "$PROBE_DIR/models.log" "$PROBE_DIR/cli.log" "$PROBE_DIR/api.json" "$PROBE_DIR/api.err" "$PROBE_DIR/control.json" "$PROBE_DIR/control.err"; rmdir "$PROBE_DIR"' EXIT
-          echo "[DEBUG-82] cli=$(opencode --version)"
-          MODEL_LIST_CODE=0
-          timeout --signal=TERM --kill-after=10s 30s opencode models opencode > "$PROBE_DIR/models.log" 2>&1 || MODEL_LIST_CODE=$?
+          PROBE_DIR="$(mktemp -d "$RUNNER_TEMP/standards-refresh-82.XXXXXX")"
+          trap 'rm -f "$PROBE_DIR/models.log" "$PROBE_DIR/cli.log"; rmdir "$PROBE_DIR"' EXIT
+          REFRESH_CODE=0
+          timeout --signal=TERM --kill-after=10s 30s opencode models opencode --refresh > "$PROBE_DIR/models.log" 2>&1 || REFRESH_CODE=$?
           MODEL_LISTED=false
           if grep -Fxq 'opencode/mimo-v2.5-free' "$PROBE_DIR/models.log"; then MODEL_LISTED=true; fi
-          echo "[DEBUG-82] model_list_exit=$MODEL_LIST_CODE model_listed=$MODEL_LISTED"
-          CONTROL_LISTED=false
-          if grep -Fxq 'opencode/muse-spark-1.3-contributor-free' "$PROBE_DIR/models.log"; then CONTROL_LISTED=true; fi
-          echo "[DEBUG-82] control_model_listed=$CONTROL_LISTED"
+          echo "[DEBUG-82] refresh_exit=$REFRESH_CODE model_listed=$MODEL_LISTED"
           CLI_CODE=0
           timeout --signal=TERM --kill-after=10s 90s opencode run --auto --agent reviewer-standards --model opencode/mimo-v2.5-free "Connectivity probe only. Do not call tools, inspect files, perform a review, publish GitHub comments, or modify anything. Reply exactly STANDARDS_PROBE_OK." > "$PROBE_DIR/cli.log" 2>&1 || CLI_CODE=$?
           CLI_REPLY=false
           if sed 's/\x1b\[[0-9;]*m//g' "$PROBE_DIR/cli.log" | grep -Fxq 'STANDARDS_PROBE_OK'; then CLI_REPLY=true; fi
           CLI_ERROR_REF="$(grep -oE 'err_[a-zA-Z0-9]{1,64}' "$PROBE_DIR/cli.log" | head -n 1 || true)"
-          CLI_UNKNOWN_ERROR=false
-          if grep -Fq '"UnknownError"' "$PROBE_DIR/cli.log"; then CLI_UNKNOWN_ERROR=true; fi
-          echo "[DEBUG-82] cli_exit=$CLI_CODE expected_reply=$CLI_REPLY unknown_error=$CLI_UNKNOWN_ERROR error_ref=$CLI_ERROR_REF"
-          # Same provider/model via its documented API separates gateway health
-          # from CLI/command startup. Print only status and fixed classifications.
-          API_CODE=0
-          API_STATUS="$(curl --silent --show-error --max-time 60 --request POST 'https://opencode.ai/zen/v1/chat/completions' --header "Authorization: Bearer $OPENCODE_ZEN_API_KEY" --header 'Content-Type: application/json' --data '{"model":"mimo-v2.5-free","messages":[{"role":"user","content":"Reply with exactly STANDARDS_PROBE_OK."}],"max_tokens":256}' --output "$PROBE_DIR/api.json" --write-out '%{http_code}' 2> "$PROBE_DIR/api.err")" || API_CODE=$?
-          API_REPLY=false
-          API_HINT=unclassified
-          if [ -s "$PROBE_DIR/api.json" ] && jq -e . "$PROBE_DIR/api.json" > /dev/null 2>&1; then
-            if jq -e 'try ((.choices[0].message.content // "") | gsub("^\\s+|\\s+$"; "") == "STANDARDS_PROBE_OK") catch false' "$PROBE_DIR/api.json" > /dev/null 2>&1; then API_REPLY=true; fi
-            API_HINT="$(jq -r 'try ([(try .error.message catch null), (try .message catch null), (try .data.message catch null), (try .error catch null)] | map(select(type == "string")) | join(" ") | ascii_downcase | if test("quota|rate.limit|capacity") then "capacity" elif test("auth|api.key|unauthor|permission|denied|forbidden|not.allowed|unknown.user|expired") then "authorization" elif test("disabled|deprecated|removed|retired|unavailable") then "availability" elif test("model|not.found|unsupported") then "model-route" elif test("server|internal") then "server" else "unclassified" end) catch "unclassified"' "$PROBE_DIR/api.json" 2>/dev/null)" || API_HINT=unclassified
-          fi
-          echo "[DEBUG-82] api_exit=$API_CODE http_status=$API_STATUS expected_reply=$API_REPLY error_hint=$API_HINT"
-          API_JSON=false
-          if jq -e . "$PROBE_DIR/api.json" > /dev/null 2>&1; then API_JSON=true; fi
-          API_FORBIDDEN=false
-          if grep -Eiq 'forbidden|access.denied|not.allowed|blocked' "$PROBE_DIR/api.json"; then API_FORBIDDEN=true; fi
-          echo "[DEBUG-82] api_json=$API_JSON forbidden_text=$API_FORBIDDEN"
-          # Control: the existing working Spec model, same credential/provider.
-          CONTROL_CODE=0
-          CONTROL_STATUS="$(curl --silent --show-error --max-time 60 --request POST 'https://opencode.ai/zen/v1/responses' --header "Authorization: Bearer $OPENCODE_ZEN_API_KEY" --header 'Content-Type: application/json' --data '{"model":"muse-spark-1.3-contributor-free","input":"Reply with exactly STANDARDS_PROBE_OK.","max_output_tokens":256}' --output "$PROBE_DIR/control.json" --write-out '%{http_code}' 2> "$PROBE_DIR/control.err")" || CONTROL_CODE=$?
-          echo "[DEBUG-82] control_api_exit=$CONTROL_CODE http_status=$CONTROL_STATUS"
-          echo "[DEBUG-82] probe complete; actual configured reviews still required"
+          echo "[DEBUG-82] refreshed_cli_exit=$CLI_CODE expected_reply=$CLI_REPLY error_ref=$CLI_ERROR_REF"
+          echo "[DEBUG-82] recovery probe complete; actual configured reviews still required"
 
       - name: Run address-review correction
         # Bounded like the repository-owned address-review worker (ticket #31):
