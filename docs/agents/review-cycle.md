@@ -56,7 +56,7 @@ Cycles: <n>
    abort under `--no-push`). The loop never reviews a SHA the PR does not
    point at.
 2. Run both axes concurrently as `opencode run --auto` workers:
-   `/review-standards` (MiMo-V2.5) and `/review-spec` (Muse Spark 1.3 Contributor Free). Each
+   `/review-standards` (MiMo-V2.6-Flash) and `/review-spec` (Muse Spark 1.3 Contributor Free). Each
    custom command's frontmatter is the single source of truth for its
    configured subagent/model, so no `--agent` flag is passed. Explicit `deny`
    rules remain effective under `--auto`. Workers stream stdout/stderr live
@@ -94,7 +94,7 @@ instead of changing code.
 Each review report ends with exactly one marker line:
 
 ```text
-<!-- review-result: axis=standards model=mimo-v2.5 head=<sha> result=PASS|FAIL|NEEDS-DECISION -->
+<!-- review-result: axis=standards model=mimo-v2.6-flash head=<sha> result=PASS|FAIL|NEEDS-DECISION -->
 <!-- review-result: axis=spec model=muse-spark-1.3-contributor-free head=<sha> result=PASS|FAIL|NEEDS-DECISION -->
 ```
 

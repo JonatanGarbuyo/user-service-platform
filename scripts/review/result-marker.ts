@@ -39,7 +39,7 @@ export function parseReviewMarkers(body: string): ReviewMarker[] {
 }
 
 export function expectedModelForAxis(axis: ReviewAxis): string {
-  return axis === 'standards' ? 'mimo-v2.5' : 'muse-spark-1.3-contributor-free';
+  return axis === 'standards' ? 'mimo-v2.6-flash' : 'muse-spark-1.3-contributor-free';
 }
 
 export interface CurrentHeadReports {
