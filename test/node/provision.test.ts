@@ -17,11 +17,30 @@ const REMOTE_SANDBOX_ID = 'a1b2c3d4-e5f6-4789-a3b5-c6d7e8f90a1b';
 const OTHER_REMOTE_ID = 'b2c3d4e5-f607-4828-b4c5-d6e7f90a1b2c';
 const CANARY = 'canary-provision-secret-abcdef123456';
 
+function realCreateText(databaseName: string, databaseId: string): string {
+  // Representative `wrangler d1 create` output at pinned Wrangler 4.130.0:
+  // human-readable success text plus a config snippet, never JSON.
+  return [
+    `✅ Successfully created DB '${databaseName}'`,
+    'Created your new D1 database.',
+    '',
+    'To access your new D1 Database in your Worker, add the following snippet to your configuration file:',
+    '[[d1_databases]]',
+    'binding = "DB"',
+    `database_name = "${databaseName}"`,
+    `database_id = "${databaseId}"`,
+    '',
+  ].join('\n');
+}
+
 interface HarnessOptions {
   readonly file?: TargetsFile;
   readonly remotes?: { name: string; uuid: string }[];
+  readonly remotesAfterCreate?: { name: string; uuid: string }[];
   readonly d1ListStdout?: string;
   readonly d1ListExit?: number;
+  readonly d1ListStdoutAfterCreate?: string;
+  readonly d1ListExitAfterCreate?: number;
   readonly createStdout?: string;
   readonly createExit?: number;
   readonly worker?: 'found' | 'absent' | 'error' | 'malformed';
@@ -77,6 +96,27 @@ function createHarness(options: HarnessOptions = {}): Harness {
     runner: (command, args) => {
       commands.push({ command, args: [...args] });
       if (args.includes('d1') && args.includes('list')) {
+        const createSeen = commands.some((entry) => entry.args.includes('create'));
+        if (createSeen) {
+          if (options.d1ListStdoutAfterCreate !== undefined) {
+            return Promise.resolve({
+              exitCode: options.d1ListExitAfterCreate ?? 0,
+              stdout: options.d1ListStdoutAfterCreate,
+            });
+          }
+          if ((options.d1ListExitAfterCreate ?? 0) !== 0) {
+            return Promise.resolve({
+              exitCode: options.d1ListExitAfterCreate ?? 1,
+              stdout: '',
+            });
+          }
+          if (options.remotesAfterCreate !== undefined) {
+            return Promise.resolve({
+              exitCode: 0,
+              stdout: JSON.stringify(options.remotesAfterCreate),
+            });
+          }
+        }
         if (options.d1ListStdout !== undefined) {
           return Promise.resolve({
             exitCode: options.d1ListExit ?? 0,
@@ -94,8 +134,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       if (args.includes('d1') && args.includes('create')) {
         return Promise.resolve({
           exitCode: options.createExit ?? 0,
-          stdout:
-            options.createStdout ?? JSON.stringify({ uuid: REMOTE_SANDBOX_ID, name: SANDBOX_DB }),
+          stdout: options.createStdout ?? realCreateText(SANDBOX_DB, REMOTE_SANDBOX_ID),
         });
       }
       if (args.includes('deployments')) {
@@ -183,20 +222,56 @@ describe('provisioning plan mode', () => {
 });
 
 describe('provisioning apply mode', () => {
-  it('creates the exact canonical D1 and stages its id', async () => {
-    const harness = createHarness();
+  it('creates the exact canonical D1 and stages its id from JSON rediscovery', async () => {
+    const harness = createHarness({
+      remotesAfterCreate: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
+    });
     const outcome = await runProvision(
       sandboxRequest({ mode: 'apply' }),
       harness.io,
       harness.runner,
     );
     const create = harness.commands.find(({ args }) => args.includes('create'));
-    expect(create?.args).toContain(SANDBOX_DB);
+    expect(create?.args).toEqual(['wrangler', 'd1', 'create', SANDBOX_DB, '--update-config=false']);
+    const lists = harness.commands.filter(({ args }) => args.includes('list'));
+    expect(lists.length).toBeGreaterThanOrEqual(2);
     expect(outcome.d1Action).toBe('created');
     expect(outcome.databaseId).toBe(REMOTE_SANDBOX_ID);
     expect(outcome.configUpdated).toBe(true);
     expect(harness.writes).toHaveLength(1);
     expect(harness.writes[0]?.targets[0]?.environments.sandbox.databaseId).toBe(REMOTE_SANDBOX_ID);
+  });
+
+  it('stages the rediscovered id even when creation text carries no usable uuid', async () => {
+    const harness = createHarness({
+      createStdout: realCreateText(SANDBOX_DB, 'pending-without-uuid-lookup'),
+      remotesAfterCreate: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
+    });
+    const outcome = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      harness.io,
+      harness.runner,
+    );
+    expect(outcome.d1Action).toBe('created');
+    expect(outcome.databaseId).toBe(REMOTE_SANDBOX_ID);
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it('never stages creation text output: the staged id comes from exact-name rediscovery', async () => {
+    const decoyId = 'd9e8f7a6-b5c4-4d3e-8f7a-6b5c4d3e2f1a';
+    const harness = createHarness({
+      createStdout: realCreateText(SANDBOX_DB, decoyId),
+      remotesAfterCreate: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
+    });
+    const outcome = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      harness.io,
+      harness.runner,
+    );
+    expect(outcome.databaseId).toBe(REMOTE_SANDBOX_ID);
+    expect(outcome.databaseId).not.toBe(decoyId);
+    expect(harness.writes[0]?.targets[0]?.environments.sandbox.databaseId).toBe(REMOTE_SANDBOX_ID);
+    expect(harness.logs.join('\n')).not.toContain(decoyId);
   });
 
   it('adopts the existing D1 id on apply without creating', async () => {
@@ -213,7 +288,9 @@ describe('provisioning apply mode', () => {
   });
 
   it('is idempotent: a rerun after success creates nothing and writes nothing', async () => {
-    const first = createHarness();
+    const first = createHarness({
+      remotesAfterCreate: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
+    });
     const created = await runProvision(sandboxRequest({ mode: 'apply' }), first.io, first.runner);
     expect(created.configUpdated).toBe(true);
     const second = createHarness({
@@ -227,7 +304,10 @@ describe('provisioning apply mode', () => {
   });
 
   it('recovers from a config-write failure by rediscovering the same remote', async () => {
-    const failing = createHarness({ failWrite: true });
+    const failing = createHarness({
+      failWrite: true,
+      remotesAfterCreate: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
+    });
     await expect(
       runProvision(sandboxRequest({ mode: 'apply' }), failing.io, failing.runner),
     ).rejects.toThrow(/config/i);
@@ -309,12 +389,45 @@ describe('provisioning failure boundaries', () => {
     const harness = createHarness({ createExit: 1 });
     await expect(
       runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
-    ).rejects.toThrow(new RegExp(`npx wrangler d1 create ${SANDBOX_DB}`));
+    ).rejects.toThrow(new RegExp(`npx wrangler d1 create ${SANDBOX_DB} --update-config=false`));
     expect(harness.writes).toEqual([]);
   });
 
-  it('fails closed when creation returns no usable uuid', async () => {
-    const harness = createHarness({ createStdout: JSON.stringify({ name: SANDBOX_DB }) });
+  it('fails closed when post-create rediscovery finds no exact-name database', async () => {
+    const harness = createHarness({ remotesAfterCreate: [] });
+    await expect(
+      runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
+    ).rejects.toThrow(/rediscover|rerun.*--apply|npx wrangler d1 list --json/i);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('fails closed when post-create rediscovery is ambiguous', async () => {
+    const harness = createHarness({
+      remotesAfterCreate: [
+        { name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID },
+        { name: SANDBOX_DB, uuid: OTHER_REMOTE_ID },
+      ],
+    });
+    await expect(
+      runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
+    ).rejects.toThrow(/ambiguous|duplicate/i);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('fails closed when post-create rediscovery output is malformed', async () => {
+    const harness = createHarness({
+      d1ListStdoutAfterCreate: '{"value":"not-an-array"}',
+    });
+    await expect(
+      runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
+    ).rejects.toThrow();
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('fails closed when post-create rediscovery carries an invalid identifier', async () => {
+    const harness = createHarness({
+      d1ListStdoutAfterCreate: JSON.stringify([{ name: SANDBOX_DB, uuid: 'not-a-uuid' }]),
+    });
     await expect(
       runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
     ).rejects.toThrow();
@@ -406,6 +519,26 @@ describe('provisioning Worker and secret reporting', () => {
     await runProvision(sandboxRequest(), harness.io, harness.runner);
     expect(harness.logs.join('\n')).not.toContain(CANARY);
   });
+
+  it('never logs creation text output containing provider-shaped fields', async () => {
+    const harness = createHarness({
+      createStdout: [
+        `✅ Successfully created DB '${SANDBOX_DB}'`,
+        'Created your new D1 database.',
+        `token ${CANARY}`,
+        `database_id = "${REMOTE_SANDBOX_ID}"`,
+        '',
+      ].join('\n'),
+      remotesAfterCreate: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }],
+    });
+    const outcome = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      harness.io,
+      harness.runner,
+    );
+    expect(outcome.d1Action).toBe('created');
+    expect(harness.logs.join('\n')).not.toContain(CANARY);
+  });
 });
 
 const PRODUCTION_REMOTE_ID = 'c3d4e5f6-a708-4939-c5d6-e7f809a1b2c3';
@@ -456,7 +589,8 @@ describe('provisioning production safety', () => {
 
   it('provisions production apply with the exact Worker-name confirmation', async () => {
     const harness = createHarness({
-      createStdout: JSON.stringify({ uuid: PRODUCTION_REMOTE_ID, name: PRODUCTION_DB }),
+      createStdout: realCreateText(PRODUCTION_DB, PRODUCTION_REMOTE_ID),
+      remotesAfterCreate: [{ name: PRODUCTION_DB, uuid: PRODUCTION_REMOTE_ID }],
     });
     const outcome = await runProvision(
       {
@@ -469,7 +603,13 @@ describe('provisioning production safety', () => {
       harness.runner,
     );
     const create = harness.commands.find(({ args }) => args.includes('create'));
-    expect(create?.args).toContain(PRODUCTION_DB);
+    expect(create?.args).toEqual([
+      'wrangler',
+      'd1',
+      'create',
+      PRODUCTION_DB,
+      '--update-config=false',
+    ]);
     expect(outcome.d1Action).toBe('created');
     expect(outcome.databaseId).toBe(PRODUCTION_REMOTE_ID);
     expect(outcome.configUpdated).toBe(true);

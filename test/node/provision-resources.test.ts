@@ -3,7 +3,6 @@ import {
   d1CreateArgs,
   d1ListArgs,
   matchExactDatabase,
-  parseD1CreateOutput,
   parseD1ListOutput,
 } from '../../scripts/deploy/provision-d1.js';
 import {
@@ -26,9 +25,8 @@ describe('provisioning D1 provider contract', () => {
 
   it('creates the exact canonical database name without touching config files', () => {
     const args = d1CreateArgs(DATABASE_NAME);
-    expect(args).toContain(DATABASE_NAME);
-    expect(args).toContain('--json');
-    expect(args.join(' ')).not.toMatch(/update-config/);
+    expect([...args]).toEqual(['wrangler', 'd1', 'create', DATABASE_NAME, '--update-config=false']);
+    expect(args.join(' ')).not.toContain('--json');
   });
 
   it('parses an exact-name remote database', () => {
@@ -89,20 +87,31 @@ describe('provisioning D1 provider contract', () => {
     expect(JSON.stringify(parsed)).not.toContain(CANARY);
   });
 
-  it('parses the created database uuid from creation output', () => {
-    const stdout = JSON.stringify({ uuid: REMOTE_ID, name: DATABASE_NAME });
-    expect(parseD1CreateOutput(stdout)).toBe(REMOTE_ID);
-  });
-
-  it('rejects creation output without a uuid without leaking it', () => {
-    let error: unknown;
-    try {
-      parseD1CreateOutput(JSON.stringify({ name: DATABASE_NAME, token: CANARY }));
-    } catch (error_) {
-      error = error_;
-    }
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).not.toContain(CANARY);
+  it('treats creation output as opaque text resolved through JSON rediscovery', () => {
+    // Pinned Wrangler 4.130.0 prints human-readable success text plus a
+    // config snippet for `d1 create` (no `--json` flag exists). The
+    // orchestration boundary ignores that text and rediscovers the created
+    // id with `d1 list --json`, so there is no creation-output parser.
+    const createText = [
+      `✅ Successfully created DB '${DATABASE_NAME}'`,
+      'Created your new D1 database.',
+      '',
+      'To access your new D1 Database in your Worker, add the following snippet to your configuration file:',
+      '[[d1_databases]]',
+      'binding = "DB"',
+      `database_name = "${DATABASE_NAME}"`,
+      `database_id = "${REMOTE_ID}"`,
+      '',
+    ].join('\n');
+    expect(createText).toContain(DATABASE_NAME);
+    expect(() => {
+      JSON.parse(createText);
+    }).toThrow();
+    const rediscovered = matchExactDatabase(
+      parseD1ListOutput(JSON.stringify([{ uuid: REMOTE_ID, name: DATABASE_NAME }])),
+      DATABASE_NAME,
+    );
+    expect(rediscovered).toEqual([{ name: DATABASE_NAME, uuid: REMOTE_ID }]);
   });
 });
 

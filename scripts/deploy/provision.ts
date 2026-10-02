@@ -10,7 +10,6 @@ import {
   d1ListArgs,
   isAcceptedRemoteDatabaseId,
   matchExactDatabase,
-  parseD1CreateOutput,
   parseD1ListOutput,
 } from './provision-d1.js';
 import { parseWorkerDeploymentsOutput, workerDeploymentsListArgs } from './provision-worker.js';
@@ -30,10 +29,13 @@ import type { DeployableEnvironment } from './naming.js';
 //
 // - D1 is the only dependent resource provisioned today. Discovery lists
 //   remote databases through Wrangler JSON output and matches the exact
-//   canonical database name: zero matches plans (or creates on apply), one
-//   match adopts/verifies its id, duplicate matches fail closed, and a
-//   configured id that disagrees with the remote exact-name resource fails
-//   closed.
+//   canonical database name: zero matches plans (or creates on apply, then
+//   rediscovers the created id with a second `d1 list --json`), one match
+//   adopts/verifies its id, duplicate matches fail closed, and a configured
+//   id that disagrees with the remote exact-name resource fails closed.
+//   Creation uses the supported `wrangler d1 create <name>
+//   --update-config=false` invocation; its opaque text output is never
+//   parsed, logged or staged.
 // - The Worker is discovered read-only. An absent Worker is not an error:
 //   the first normal `npm run deploy` creates/publishes it. Provisioning
 //   never publishes application code and never creates a placeholder Worker.
@@ -248,17 +250,45 @@ async function provisionD1(
     const created = await runner('npx', [...d1CreateArgs(resolved.databaseName)]);
     if (created.exitCode !== 0) {
       throw new Error(
-        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation failed for database "${resolved.databaseName}". Create it manually with "npx wrangler d1 create ${resolved.databaseName}" and rerun with --apply to stage its id.`,
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation failed for database "${resolved.databaseName}". Create it manually with "npx wrangler d1 create ${resolved.databaseName} --update-config=false" and rerun with --apply to stage its id.`,
       );
     }
-    const createdId = parseD1CreateOutput(created.stdout);
-    if (!isAcceptedRemoteDatabaseId(createdId)) {
+    // Creation output is opaque success text plus a config snippet: it is
+    // never parsed, logged or echoed. Rediscover the created id with the
+    // approved `d1 list --json` contract and validate it before staging.
+    const rediscovered = await runner('npx', [...d1ListArgs()]);
+    if (rediscovered.exitCode !== 0) {
       throw new Error(
-        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": unexpected D1 creation response for database "${resolved.databaseName}".`,
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation succeeded but rediscovery failed. Verify with "npx wrangler d1 list --json" and rerun with --apply to stage its id.`,
+      );
+    }
+    const postMatches = matchExactDatabase(
+      parseD1ListOutput(rediscovered.stdout),
+      resolved.databaseName,
+    );
+    if (postMatches.length > 1) {
+      throw new Error(
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": ambiguous D1 rediscovery for database "${resolved.databaseName}" (duplicate exact-name resources). Resolve the duplicate manually.`,
+      );
+    }
+    const postMatch = postMatches[0];
+    if (postMatch === undefined) {
+      throw new Error(
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation succeeded but rediscovery found no exact-name database "${resolved.databaseName}". Verify with "npx wrangler d1 list --json" and rerun with --apply to stage its id.`,
+      );
+    }
+    if (!isAcceptedRemoteDatabaseId(postMatch.uuid)) {
+      throw new Error(
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": unexpected remote identifier for database "${resolved.databaseName}".`,
+      );
+    }
+    if (resolved.databaseId !== '' && resolved.databaseId !== postMatch.uuid) {
+      throw new Error(
+        `Refusing provisioning for target "${resolved.targetKey}" environment "${resolved.environment}": the configured database id disagrees with the remote exact-name D1 database "${resolved.databaseName}". Resolve the mismatch manually.`,
       );
     }
     io.log(`d1 created database=${resolved.databaseName}`);
-    return { effectiveId: createdId, action: 'created' };
+    return { effectiveId: postMatch.uuid, action: 'created' };
   }
   if (!isAcceptedRemoteDatabaseId(match.uuid)) {
     throw new Error(

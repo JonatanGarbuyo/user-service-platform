@@ -2,14 +2,18 @@ import { isProvisionedDatabaseId } from './targets.js';
 
 // D1 provisioning provider contract (ticket #80).
 //
-// Discovery and creation go through Wrangler JSON output against the exact
-// canonical database name:
-//
-// - `wrangler d1 list --json` discovers remote databases;
-// - `wrangler d1 create <canonical-name> --json` creates the missing database.
+// Discovery goes through Wrangler JSON output against the exact canonical
+// database name (`wrangler d1 list --json`). Creation uses the supported
+// `wrangler d1 create <canonical-name> --update-config=false` invocation:
+// pinned Wrangler 4.130.0 has no `--json` flag for `d1 create` and prints
+// human-readable success text plus a config snippet instead. Creation output
+// is opaque text and is never parsed: after a successful create the caller
+// rediscovers with `d1 list --json`, requires exactly one exact-name match,
+// and validates its UUID before staging.
 //
 // The repository target registry (`deploy/targets.json`), not a generated
-// Wrangler file, is authoritative: creation never uses `--update-config`.
+// Wrangler file, is authoritative: creation explicitly disables Wrangler
+// config updates (`--update-config=false`) so no wrangler.jsonc is touched.
 //
 // Secret boundary: this module consumes database names/ids only. Failure
 // messages never echo provider output, so tokens, account identifiers or
@@ -25,10 +29,12 @@ export function d1ListArgs(): readonly string[] {
   return ['wrangler', 'd1', 'list', '--json'];
 }
 
-// Exact-name D1 creation invocation. The caller validates the returned uuid
-// before staging it; malformed creation responses never become accepted ids.
+// Exact-name D1 creation invocation. Creation output is opaque success
+// text plus a config snippet (never JSON): the caller ignores it and
+// rediscovers the created id with `d1 list --json`. Config updates are
+// explicitly disabled so the repository target registry stays authoritative.
 export function d1CreateArgs(databaseName: string): readonly string[] {
-  return ['wrangler', 'd1', 'create', databaseName, '--json'];
+  return ['wrangler', 'd1', 'create', databaseName, '--update-config=false'];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -72,24 +78,6 @@ export function matchExactDatabase(
   databaseName: string,
 ): RemoteDatabase[] {
   return remotes.filter((entry) => entry.name === databaseName);
-}
-
-// Parses the database uuid from creation output. The returned uuid is the
-// provider-issued identifier; the orchestration boundary validates it with
-// the same provisioned-id shape the deployer enforces before staging it.
-// Output without a uuid fails closed with a fixed message that echoes
-// nothing from the provider.
-export function parseD1CreateOutput(stdout: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout) as unknown;
-  } catch {
-    throw new Error('Unable to provision the D1 database: unexpected creation output.');
-  }
-  if (isRecord(parsed) && typeof parsed.uuid === 'string' && parsed.uuid.length > 0) {
-    return parsed.uuid;
-  }
-  throw new Error('Unable to provision the D1 database: unexpected creation output.');
 }
 
 // Validates a discovered or created remote id with the same provisioned-id

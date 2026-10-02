@@ -123,8 +123,11 @@ resource, or an unreachable provider), it fails closed and prints the exact
 next operator action. The manual fallback for D1 creation is:
 
 ```bash
-npx wrangler d1 create rch-rugbychampagne-user-service-sandbox-db
-# Record the returned database_id in deploy/targets.json, then commit.
+npx wrangler d1 create rch-rugbychampagne-user-service-sandbox-db --update-config=false
+# Creation prints human-readable text (pinned Wrangler has no --json flag for
+# this command) and never touches versioned config. Rerun provisioning to
+# rediscover the exact-name database and stage its id, then commit:
+# npm run provision -- --target rch-rugbychampagne --env sandbox --apply
 ```
 
 Sandbox non-secret mail values are versioned per target in
