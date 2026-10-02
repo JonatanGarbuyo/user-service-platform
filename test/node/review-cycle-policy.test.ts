@@ -10,7 +10,7 @@ describe('review cycle policy', () => {
   it('is ready only when both axes PASS for the current HEAD', () => {
     expect(
       decideNextStep({
-        standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'PASS' },
+        standards: { axis: 'standards', model: 'mimo-v2.6-flash', head, result: 'PASS' },
         spec: { axis: 'spec', model: 'muse-spark-1.3-contributor-free', head, result: 'PASS' },
         cycles: 0,
         maxCycles: 3,
@@ -20,7 +20,7 @@ describe('review cycle policy', () => {
 
   it('never lets one axis cancel the other: a single PASS is not ready', () => {
     const decision = decideNextStep({
-      standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'PASS' },
+      standards: { axis: 'standards', model: 'mimo-v2.6-flash', head, result: 'PASS' },
       spec: undefined,
       cycles: 0,
       maxCycles: 3,
@@ -31,7 +31,7 @@ describe('review cycle policy', () => {
 
   it('routes blocking FAIL findings to address-review within the bound', () => {
     const decision = decideNextStep({
-      standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'FAIL' },
+      standards: { axis: 'standards', model: 'mimo-v2.6-flash', head, result: 'FAIL' },
       spec: { axis: 'spec', model: 'muse-spark-1.3-contributor-free', head, result: 'PASS' },
       cycles: 1,
       maxCycles: 3,
@@ -42,7 +42,7 @@ describe('review cycle policy', () => {
 
   it('stops after the bounded number of correction cycles', () => {
     const decision = decideNextStep({
-      standards: { axis: 'standards', model: 'mimo-v2.5', head, result: 'FAIL' },
+      standards: { axis: 'standards', model: 'mimo-v2.6-flash', head, result: 'FAIL' },
       spec: { axis: 'spec', model: 'muse-spark-1.3-contributor-free', head, result: 'PASS' },
       cycles: 3,
       maxCycles: 3,
@@ -55,7 +55,7 @@ describe('review cycle policy', () => {
     const decision = decideNextStep({
       standards: {
         axis: 'standards',
-        model: 'mimo-v2.5',
+        model: 'mimo-v2.6-flash',
         head,
         result: 'NEEDS-DECISION',
       },

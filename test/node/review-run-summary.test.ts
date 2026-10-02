@@ -42,7 +42,7 @@ describe('review run summary timing accumulation', () => {
       axis: 'standards',
       attempt: 1,
       durationMs: 1500,
-      model: 'mimo-v2.5',
+      model: 'mimo-v2.6-flash',
       result: 'PASS',
     });
     expect(summary.specAttempts[0]).toMatchObject({

@@ -8,7 +8,7 @@ Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, the originating imple
 
 Resolve the pull request from `$ARGUMENTS` when supplied; otherwise resolve the pull request for the current branch with `gh pr view`. Determine its base branch and use the corresponding local or remote-tracking base ref as the fixed point. Confirm the fixed point resolves, record the current HEAD SHA, and review the three-dot diff plus commit list required by the skill.
 
-Run only the Spec axis: missing or partial requirements, incorrect implementation, contradictions, and scope creep. Reference the exact ticket/spec requirement for each finding. Do not modify code.
+Run only the Spec axis: missing or partial requirements, incorrect implementation, contradictions, and scope creep. Reference the exact ticket/spec requirement for each finding. The skill's default dual-axis dispatch does not apply to this scoped command. Do not modify code.
 
 Publish the final report as a top-level comment on that pull request via `gh pr comment`. Begin with `## Spec review — Muse Spark 1.3 Contributor Free` and include `Reviewed HEAD: <sha>`. End the comment with exactly one machine-readable marker line so deterministic orchestration never infers pass/fail from prose:
 

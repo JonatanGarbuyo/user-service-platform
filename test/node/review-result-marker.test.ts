@@ -13,8 +13,8 @@ describe('review result marker', () => {
     const head = 'a'.repeat(40);
 
     expect(
-      formatReviewMarker({ axis: 'standards', model: 'mimo-v2.5', head, result: 'PASS' }),
-    ).toBe(`<!-- review-result: axis=standards model=mimo-v2.5 head=${head} result=PASS -->`);
+      formatReviewMarker({ axis: 'standards', model: 'mimo-v2.6-flash', head, result: 'PASS' }),
+    ).toBe(`<!-- review-result: axis=standards model=mimo-v2.6-flash head=${head} result=PASS -->`);
   });
 
   it('round-trips a spec FAIL marker without inferring from prose', () => {
@@ -42,6 +42,24 @@ describe('review result marker', () => {
     expect(parseReviewMarkers('Looks good to me. PASS!')).toEqual([]);
   });
 
+  it('requires MiMo 2.6 and ignores a newer MiMo 2.5 PASS on the same HEAD', () => {
+    const currentHead = '6'.repeat(40);
+    const current = {
+      body: '<!-- review-result: axis=standards model=mimo-v2.6-flash head=6666666666666666666666666666666666666666 result=FAIL -->',
+      createdAt: '2026-10-02T00:00:00Z',
+    };
+    const legacy = {
+      body: '<!-- review-result: axis=standards model=mimo-v2.5 head=6666666666666666666666666666666666666666 result=PASS -->',
+      createdAt: '2026-10-02T01:00:00Z',
+    };
+
+    expect(selectCurrentHeadReports([legacy], currentHead)).toEqual({});
+    expect(selectCurrentHeadReports([current, legacy], currentHead).standards).toMatchObject({
+      model: 'mimo-v2.6-flash',
+      result: 'FAIL',
+    });
+  });
+
   it('selects only reports matching the current HEAD and ignores stale HEADs', () => {
     const oldHead = '1'.repeat(40);
     const currentHead = '2'.repeat(40);
@@ -49,7 +67,7 @@ describe('review result marker', () => {
       {
         body: formatReviewMarker({
           axis: 'standards',
-          model: 'mimo-v2.5',
+          model: 'mimo-v2.6-flash',
           head: oldHead,
           result: 'PASS',
         }),
@@ -58,7 +76,7 @@ describe('review result marker', () => {
       {
         body: formatReviewMarker({
           axis: 'standards',
-          model: 'mimo-v2.5',
+          model: 'mimo-v2.6-flash',
           head: currentHead,
           result: 'FAIL',
         }),

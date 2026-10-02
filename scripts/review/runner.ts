@@ -112,7 +112,7 @@ export interface ReviewAxisWorker {
 // Pinned worker per axis for targeted marker retries (PR #17 blocker 1):
 // only the axis missing its marker is relaunched, the other is left alone.
 // The command frontmatter is the single source of truth for the configured
-// subagent/model (ticket #18): Standards resolves to MiMo-V2.5 via
+// subagent/model (ticket #18): Standards resolves to MiMo-V2.6-Flash via
 // `reviewer-standards`, Spec resolves to Muse Spark 1.3 Contributor Free via
 // `reviewer-spec`. Callers must not pass `--agent`.
 export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
