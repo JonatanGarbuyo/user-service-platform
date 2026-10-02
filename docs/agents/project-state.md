@@ -85,8 +85,8 @@ Verified on 2026-10-02:
 - #13 production auth email: closed/completed. PR #53 passed Standards, Spec, repository gates, and exact-HEAD CI on `364bc5afddb93bdbfd4aedf6dd7b2c9b63228943`; ChatGPT performed the final squash merge with expected-head protection. Main commit: `66cc6fe85f12dae516d7226abb5867acce0ed823`.
 - #14 sandbox promotion: closed/completed. Canonical target is sandbox, not staging.
 - #78 client-aware deployer/target registry, #104 required-secret declarations, and #106 rejection of plaintext required-secret bindings: closed/completed. Their isolation and secret-binding contracts govern provisioning.
-- #82 Actions noise/trusted-handoff CI provenance: open, with draft PR #109. Repository gates and exact-HEAD CI pass on `834be0b446dde17c5d8bc0924e7ca4f0ad031ed0`; Spec has a valid PASS. Configured Standards execution remains blocked; see the orchestration state below.
-- #80 unified target provisioning: `enhancement` / `ready-for-agent`. The existing architecture decision and [agent brief](https://github.com/JonatanGarbuyo/user-service-platform/issues/80#issuecomment-5944301295) specify plan/apply, D1 discovery/recovery, Worker discovery without deployment, and names/types-only secret handling. Implementation is active in [run 36954841369](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/36954841369) on its separate ticket branch; no live provisioning is authorized by that implementation run.
+- #82 Actions noise/trusted-handoff CI provenance: open, with draft PR #109. Repository gates and exact-HEAD CI pass on `e215f87aea620afb97f9f43bed12afdb417aeb4b`. Configured Standards now executes successfully and produced two valid blocking findings; the model-migration authorization is recorded on the source ticket. [Correction run 37007213406](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37007213406) is addressing those findings before fresh dual review and exact-HEAD CI.
+- #80 unified target provisioning: `enhancement` / `ready-for-agent`. The existing architecture decision and [agent brief](https://github.com/JonatanGarbuyo/user-service-platform/issues/80#issuecomment-5944301295) specify plan/apply, D1 discovery/recovery, Worker discovery without deployment, and names/types-only secret handling. The previous attempt failed on a temporary implementation-provider overload without creating a PR. [Run 37007216614](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37007216614) restarts implementation from the recovered operational configuration; no live provisioning is authorized.
 
 Current execution frontier:
 
@@ -96,7 +96,7 @@ Current execution frontier:
   -> final acceptance
 ```
 
-Resolve the Standards execution blocker before accepting either open effort. Final merge and live infrastructure operations retain their separate controls.
+Configured Standards execution has recovered. Resolve valid review findings and require both configured axes plus exact-HEAD CI before accepting either open effort. Final merge and live infrastructure operations retain their separate controls.
 
 ## Remote execution/review gate
 
@@ -124,11 +124,13 @@ Review/execution invariants:
 
 ### Current orchestration state
 
-PR #109 is blocked by configured Standards startup, not by repository gates or missing manual CI approval. [Diagnosis](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5944424053) records three bounded runner attempts: the configured Standards model is absent from the pinned CLI catalog even after a successful catalog refresh, and a minimal request fails before review. Direct HTTP probes returned 403 for both Standards and the working Spec model, so they do not establish a model-specific authorization cause. Read live reviewer configuration; model substitution requires an explicit orchestration decision.
+The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5944424053) is historical. The maintainer approved the Standards model recovery in [source-ticket decision5952117927](https://github.com/JonatanGarbuyo/user-service-platform/issues/82#issuecomment-5952117927). Main commit `9cc8e30d0d5ac002d0b5a82d2ff9863b1bc56d88` adopts only the independently reviewed and exact-HEAD-CI-tested operational configuration, matching marker identity, provenance instructions and regression fixtures. Read live reviewer configuration rather than copying model assignments from this checkpoint.
 
-The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`. The dependency-restoration bootstrap remains. Do not rerun the unchanged cycle as a recovery strategy or claim a configured Standards review from another worker. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker; its observations are informational, not configured-axis evidence.
+[Run37004855993](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37004855993) proves the configured Standards worker executed, published its own report and completed exit0; Spec published only its own axis. This validates execution, not PR acceptance: Standards reported FAIL for incomplete YAML run-step security coverage and an undeclared direct parser dependency. Spec's authorization finding has been answered on the source ticket; a fresh review is still required. Continue the active correction run, preserve the findings, and verify the newly published exact HEAD.
 
-#80 implementation may progress independently, but its final acceptance has the same configured-review requirement. Inspect its live run/PR evidence before issuing another trigger.
+The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; dependency restoration remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
+
+#80 implementation has been restarted independently. Inspect its live run/PR evidence before issuing another trigger; final acceptance requires the same configured dual review and exact-HEAD CI.
 
 ## Maintenance debt
 
