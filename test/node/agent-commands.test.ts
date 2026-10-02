@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import {
   checkFixCyclePr,
   checkTicketIssue,
@@ -192,6 +193,48 @@ function readWorkflow(name: string): string {
   return readFileSync(`.github/workflows/${name}`, 'utf8');
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+// Location-specific reader: every string-valued `run:` step across all jobs,
+// parsed as YAML so comments never satisfy the contract. Covers both `run: |`
+// blocks and single-line `run:` steps (for example `run: npm ci`).
+function extractRunSteps(workflowText: string): string[] {
+  const parsed: unknown = parseYaml(workflowText);
+  const doc = asRecord(parsed);
+  const jobs = doc === undefined ? undefined : asRecord(doc.jobs);
+  if (jobs === undefined) {
+    return [];
+  }
+  const steps: string[] = [];
+  for (const job of Object.values(jobs)) {
+    const jobRecord = asRecord(job);
+    const jobSteps = jobRecord === undefined ? undefined : jobRecord.steps;
+    if (!Array.isArray(jobSteps)) {
+      continue;
+    }
+    for (const entry of jobSteps) {
+      const step = asRecord(entry);
+      if (step !== undefined && typeof step.run === 'string') {
+        steps.push(step.run);
+      }
+    }
+  }
+  return steps;
+}
+
+function runStepsReferenceCommentBody(runSteps: string[]): boolean {
+  return runSteps.some((step) => step.includes('github.event.comment.body'));
+}
+
+function runStepsInterpolateCommentBody(runSteps: string[]): boolean {
+  return runSteps.some((step) => /\$\{\{[^}]*github\.event\.comment\.body[^}]*\}\}/.test(step));
+}
+
 describe('agent workflow contracts', () => {
   it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
     'triggers %s from created issue comments with per-target concurrency',
@@ -311,27 +354,58 @@ describe('agent workflow contracts', () => {
   );
 
   it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+    'covers every run step including terminal and single-line runs on %s',
+    (name) => {
+      const runSteps = extractRunSteps(readWorkflow(name));
+
+      // Fail closed: the ban below must never pass vacuously.
+      expect(runSteps.length).toBeGreaterThan(0);
+      // Single-line `run:` steps are part of the contract surface.
+      expect(runSteps).toContain('npm ci');
+      // The terminal status step carries the most `${{ }}` interpolations and
+      // posts with `issues: write`; it must be inside the ban surface.
+      expect(runSteps.some((step) => step.includes('workflow did not reach READY'))).toBe(true);
+    },
+  );
+
+  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+    'rejects injected comment-body references in the terminal and single-line runs on %s',
+    (name) => {
+      const runSteps = extractRunSteps(readWorkflow(name));
+      const terminal = runSteps.find((step) => step.includes('workflow did not reach READY'));
+      expect(terminal).toBeDefined();
+
+      const withTerminalInjection = [
+        ...runSteps,
+        `${terminal ?? ''}\necho $` + '{{ github.event.comment.body }}',
+      ];
+      expect(runStepsInterpolateCommentBody(withTerminalInjection)).toBe(true);
+      expect(runStepsReferenceCommentBody(withTerminalInjection)).toBe(true);
+
+      const withSingleLineInjection = runSteps.map((step) =>
+        step === 'npm ci' ? 'echo $' + '{{ github.event.comment.body }}' : step,
+      );
+      expect(withSingleLineInjection).not.toContain('npm ci');
+      expect(runStepsInterpolateCommentBody(withSingleLineInjection)).toBe(true);
+      expect(runStepsReferenceCommentBody(withSingleLineInjection)).toBe(true);
+    },
+  );
+
+  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
     'never interpolates raw comment text into shell run steps on %s',
     (name) => {
       const workflow = readWorkflow(name);
-      const runBlocks = [
-        ...workflow.matchAll(/^\s*run:\s*\|([\s\S]*?)(?=^\s*-\s+name:|^ {2}\w)/gm),
-      ].map((match) => match[1] ?? '');
+      const runSteps = extractRunSteps(workflow);
 
       // Ticket #82: the cheap job-level `if:` prefilter may read
       // `github.event.comment.body` as an Actions expression (no shell
       // interpolation). Shell `run:` blocks must still read comment text only
       // through `$GITHUB_EVENT_PATH`, never via expression interpolation.
       expect(workflow).toMatch(/github\.event\.comment\.body/);
-      for (const block of runBlocks) {
-        expect(block).not.toContain('github.event.comment.body');
-      }
+      expect(runStepsReferenceCommentBody(runSteps)).toBe(false);
       // Comment body must never be interpolated as an expression inside a
       // shell step; only the job-level `if:` may reference it.
-      const interpolatedInRun = runBlocks.some((block) =>
-        /\$\{\{[^}]*github\.event\.comment\.body[^}]*\}\}/.test(block),
-      );
-      expect(interpolatedInRun).toBe(false);
+      expect(runStepsInterpolateCommentBody(runSteps)).toBe(false);
     },
   );
 
