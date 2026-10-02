@@ -53,33 +53,78 @@ retention beyond Free), `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
 stored as repository secrets, and a mail-provider-authorized sender for the
 target environment.
 
+Provisioning is owned by one repository entry point (ticket #80), which
+derives physical resource names from the canonical deployment key so the
+operator never invents Cloudflare resource names. Dependency provisioning
+stays separate from application deployment: provisioning discovers or
+creates the target D1 database and reports Worker/secret state, while only
+the normal `npm run deploy` creates/publishes the Worker.
+
 ```bash
-# 1. Create the client-scoped sandbox database (run once per target; never
-#    share a database across companies, sites or environments).
-npx wrangler d1 create rch-rugbychampagne-user-service-sandbox-db
+# 1. Preview first-time provisioning for the target (read-only; the default
+#    --plan mode performs no remote mutation). Planning production is also
+#    read-only and needs no confirmation.
+npm run provision -- --target rch-rugbychampagne --env sandbox --plan
 
-# 2. Record the returned database_id in deploy/targets.json under the
-#    target's sandbox environment, then commit. Database ids are not secrets
-#    and are version controlled. The deployer refuses to run while the slot
-#    is empty or a placeholder.
+# 2. Provision the target sandbox dependencies. For an unprovisioned target
+#    this creates the client-scoped database
+#    rch-rugbychampagne-user-service-sandbox-db (never shared across
+#    companies, sites or environments) and stages its non-secret database_id
+#    in deploy/targets.json. A rerun after any partial failure rediscovers
+#    the exact-name resource and converges without duplicate creation.
+npm run provision -- --target rch-rugbychampagne --env sandbox --apply
 
-# 3. Materialize the target config (no remote mutation; also used for every
+# 3. Review the staged non-secret database id, then commit it. Database ids
+#    are not secrets and are version controlled. The deployer refuses to run
+#    while the slot is empty or a placeholder. Provisioning never commits or
+#    pushes automatically.
+git diff -- deploy/targets.json
+
+# 4. Materialize the target config (no remote mutation; also used for every
 #    targeted wrangler command below).
 npm run deploy -- --target rch-rugbychampagne --env sandbox \
   --write-config /tmp/rch-sandbox.json
 
-# 4. Set sandbox secrets against the target Worker (never commit these; never
+# 5. Set sandbox secrets against the target Worker (never commit these; never
 #    reuse production values; never copy them from local files — type or paste
 #    each value at the prompt). The RCH sandbox selects the SMTP transport
 #    (ticket #88), so it needs the SMTP credential pair, not a Resend key.
 #    `SMTP_USER` is the Gmail address and `SMTP_PASSWORD` is a Google App
-#    Password, never the normal Google password.
+#    Password, never the normal Google password. Provisioning prints the
+#    exact per-secret operator commands but never handles secret values:
 npx wrangler secret put BETTER_AUTH_SECRET --config /tmp/rch-sandbox.json
 npx wrangler secret put SMTP_USER --config /tmp/rch-sandbox.json
 npx wrangler secret put SMTP_PASSWORD --config /tmp/rch-sandbox.json
 
-# 5. Confirm preflight passes without mutating anything.
+# 6. Confirm preflight passes without mutating anything.
 npm run deploy -- --target rch-rugbychampagne --env sandbox --dry-run
+```
+
+Provisioning reports when the Worker is not deployed yet; that is expected
+for a new target and is not an error. The first normal deploy
+(`npm run deploy -- --target rch-rugbychampagne --env sandbox
+--non-interactive`) creates/publishes it. When the Worker already exists,
+provisioning additionally reports each required secret name as
+present/missing (names/types only, never values).
+
+Production provisioning follows the same flow with an explicit human guard:
+production `--apply` requires `--confirm` equal to the exact target Worker
+name and cannot happen as a side effect of sandbox:
+
+```bash
+npm run provision -- --target rch-rugbychampagne --env production --plan
+npm run provision -- --target rch-rugbychampagne --env production --apply \
+  --confirm rch-rugbychampagne-user-service-production
+```
+
+If the provisioning command cannot safely complete a step (ambiguous
+discovery, a configured id that disagrees with the remote exact-name
+resource, or an unreachable provider), it fails closed and prints the exact
+next operator action. The manual fallback for D1 creation is:
+
+```bash
+npx wrangler d1 create rch-rugbychampagne-user-service-sandbox-db
+# Record the returned database_id in deploy/targets.json, then commit.
 ```
 
 Sandbox non-secret mail values are versioned per target in
