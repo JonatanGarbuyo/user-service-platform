@@ -262,10 +262,17 @@ async function provisionD1(
         `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation succeeded but rediscovery failed. Verify with "npx wrangler d1 list --json" and rerun with --apply to stage its id.`,
       );
     }
-    const postMatches = matchExactDatabase(
-      parseD1ListOutput(rediscovered.stdout),
-      resolved.databaseName,
-    );
+    let postMatches;
+    try {
+      postMatches = matchExactDatabase(
+        parseD1ListOutput(rediscovered.stdout),
+        resolved.databaseName,
+      );
+    } catch {
+      throw new Error(
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": D1 creation succeeded but rediscovery returned unexpected output for database "${resolved.databaseName}". Verify with "npx wrangler d1 list --json" and rerun with --apply to stage its id.`,
+      );
+    }
     if (postMatches.length > 1) {
       throw new Error(
         `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": ambiguous D1 rediscovery for database "${resolved.databaseName}" (duplicate exact-name resources). Resolve the duplicate manually.`,
@@ -279,7 +286,7 @@ async function provisionD1(
     }
     if (!isAcceptedRemoteDatabaseId(postMatch.uuid)) {
       throw new Error(
-        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": unexpected remote identifier for database "${resolved.databaseName}".`,
+        `Unable to provision target "${resolved.targetKey}" environment "${resolved.environment}": unexpected remote identifier for database "${resolved.databaseName}". Verify with "npx wrangler d1 list --json" and rerun with --apply to stage its id.`,
       );
     }
     if (resolved.databaseId !== '' && resolved.databaseId !== postMatch.uuid) {

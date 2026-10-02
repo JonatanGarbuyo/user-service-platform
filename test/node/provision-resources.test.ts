@@ -86,33 +86,6 @@ describe('provisioning D1 provider contract', () => {
     expect(parsed).toEqual([{ name: DATABASE_NAME, uuid: REMOTE_ID }]);
     expect(JSON.stringify(parsed)).not.toContain(CANARY);
   });
-
-  it('treats creation output as opaque text resolved through JSON rediscovery', () => {
-    // Pinned Wrangler 4.130.0 prints human-readable success text plus a
-    // config snippet for `d1 create` (no `--json` flag exists). The
-    // orchestration boundary ignores that text and rediscovers the created
-    // id with `d1 list --json`, so there is no creation-output parser.
-    const createText = [
-      `✅ Successfully created DB '${DATABASE_NAME}'`,
-      'Created your new D1 database.',
-      '',
-      'To access your new D1 Database in your Worker, add the following snippet to your configuration file:',
-      '[[d1_databases]]',
-      'binding = "DB"',
-      `database_name = "${DATABASE_NAME}"`,
-      `database_id = "${REMOTE_ID}"`,
-      '',
-    ].join('\n');
-    expect(createText).toContain(DATABASE_NAME);
-    expect(() => {
-      JSON.parse(createText);
-    }).toThrow();
-    const rediscovered = matchExactDatabase(
-      parseD1ListOutput(JSON.stringify([{ uuid: REMOTE_ID, name: DATABASE_NAME }])),
-      DATABASE_NAME,
-    );
-    expect(rediscovered).toEqual([{ name: DATABASE_NAME, uuid: REMOTE_ID }]);
-  });
 });
 
 // Worker discovery is read-only: provisioning reports whether the Worker is

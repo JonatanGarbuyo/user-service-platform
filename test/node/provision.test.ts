@@ -414,24 +414,93 @@ describe('provisioning failure boundaries', () => {
     expect(harness.writes).toEqual([]);
   });
 
-  it('fails closed when post-create rediscovery output is malformed', async () => {
+  it('fails closed when post-create rediscovery output is malformed with the exact recovery action', async () => {
     const harness = createHarness({
-      d1ListStdoutAfterCreate: '{"value":"not-an-array"}',
+      d1ListStdoutAfterCreate: `not json ${CANARY}`,
     });
-    await expect(
-      runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
-    ).rejects.toThrow();
+    const error = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      harness.io,
+      harness.runner,
+    ).then(
+      () => {
+        throw new Error('expected provisioning to fail closed');
+      },
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(SANDBOX_DB);
+    expect((error as Error).message).toContain('npx wrangler d1 list --json');
+    expect((error as Error).message).toMatch(/rerun with --apply/i);
+    expect((error as Error).message).not.toContain(CANARY);
+    expect(harness.logs.join('\n')).not.toContain(CANARY);
     expect(harness.writes).toEqual([]);
+    expect(harness.commands).toHaveLength(3);
   });
 
-  it('fails closed when post-create rediscovery carries an invalid identifier', async () => {
+  it('fails closed when post-create rediscovery carries an invalid identifier with the exact recovery action', async () => {
     const harness = createHarness({
-      d1ListStdoutAfterCreate: JSON.stringify([{ name: SANDBOX_DB, uuid: 'not-a-uuid' }]),
+      d1ListStdoutAfterCreate: JSON.stringify([{ name: SANDBOX_DB, uuid: CANARY }]),
+    });
+    const error = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      harness.io,
+      harness.runner,
+    ).then(
+      () => {
+        throw new Error('expected provisioning to fail closed');
+      },
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(SANDBOX_DB);
+    expect((error as Error).message).toContain('npx wrangler d1 list --json');
+    expect((error as Error).message).toMatch(/rerun with --apply/i);
+    expect((error as Error).message).not.toContain(CANARY);
+    expect(harness.logs.join('\n')).not.toContain(CANARY);
+    expect(harness.writes).toEqual([]);
+    expect(harness.commands).toHaveLength(3);
+  });
+
+  it('fails closed when post-create rediscovery exits nonzero with the exact recovery action', async () => {
+    const harness = createHarness({
+      d1ListExitAfterCreate: 1,
+    });
+    const error = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      harness.io,
+      harness.runner,
+    ).then(
+      () => {
+        throw new Error('expected provisioning to fail closed');
+      },
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('npx wrangler d1 list --json');
+    expect((error as Error).message).toMatch(/rerun with --apply/i);
+    expect(harness.writes).toEqual([]);
+    expect(harness.commands).toHaveLength(3);
+  });
+
+  it('adopts the existing database on rerun after a failed post-create rediscovery without another create', async () => {
+    const failing = createHarness({
+      d1ListStdoutAfterCreate: `not json ${CANARY}`,
     });
     await expect(
-      runProvision(sandboxRequest({ mode: 'apply' }), harness.io, harness.runner),
-    ).rejects.toThrow();
-    expect(harness.writes).toEqual([]);
+      runProvision(sandboxRequest({ mode: 'apply' }), failing.io, failing.runner),
+    ).rejects.toThrow(/npx wrangler d1 list --json/);
+    expect(failing.writes).toEqual([]);
+    const recovery = createHarness({ remotes: [{ name: SANDBOX_DB, uuid: REMOTE_SANDBOX_ID }] });
+    const outcome = await runProvision(
+      sandboxRequest({ mode: 'apply' }),
+      recovery.io,
+      recovery.runner,
+    );
+    expect(outcome.d1Action).toBe('adopt');
+    expect(outcome.databaseId).toBe(REMOTE_SANDBOX_ID);
+    expect(recovery.commands.some(({ args }) => args.includes('create'))).toBe(false);
+    expect(recovery.writes).toHaveLength(1);
   });
 
   it('never adopts another environment database by prefix', async () => {
