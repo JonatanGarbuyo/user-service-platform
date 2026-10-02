@@ -177,31 +177,6 @@ jobs:
           npm install -g opencode-ai@1.18.30
           opencode --version | grep -F '1.18.30'
 
-      - name: Refresh Standards model catalog for PR 109
-        # Temporary same-model recovery probe; remove after diagnosis.
-        # Probe output cannot satisfy either configured review gate.
-        if: steps.guard.outputs.run == 'true' && steps.guard.outputs.pr == '109' && steps.guard.outputs.head == '834be0b446dde17c5d8bc0924e7ca4f0ad031ed0'
-        timeout-minutes: 3
-        env:
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-          OPENCODE_CONFIG_CONTENT: '{"permission":{"*":"deny"}}'
-        run: |
-          set -euo pipefail
-          PROBE_DIR="$(mktemp -d "$RUNNER_TEMP/standards-refresh-82.XXXXXX")"
-          trap 'rm -f "$PROBE_DIR/models.log" "$PROBE_DIR/cli.log"; rmdir "$PROBE_DIR"' EXIT
-          REFRESH_CODE=0
-          timeout --signal=TERM --kill-after=10s 30s opencode models opencode --refresh > "$PROBE_DIR/models.log" 2>&1 || REFRESH_CODE=$?
-          MODEL_LISTED=false
-          if grep -Fxq 'opencode/mimo-v2.5-free' "$PROBE_DIR/models.log"; then MODEL_LISTED=true; fi
-          echo "[DEBUG-82] refresh_exit=$REFRESH_CODE model_listed=$MODEL_LISTED"
-          CLI_CODE=0
-          timeout --signal=TERM --kill-after=10s 90s opencode run --auto --agent reviewer-standards --model opencode/mimo-v2.5-free "Connectivity probe only. Do not call tools, inspect files, perform a review, publish GitHub comments, or modify anything. Reply exactly STANDARDS_PROBE_OK." > "$PROBE_DIR/cli.log" 2>&1 || CLI_CODE=$?
-          CLI_REPLY=false
-          if sed 's/\x1b\[[0-9;]*m//g' "$PROBE_DIR/cli.log" | grep -Fxq 'STANDARDS_PROBE_OK'; then CLI_REPLY=true; fi
-          CLI_ERROR_REF="$(grep -oE 'err_[a-zA-Z0-9]{1,64}' "$PROBE_DIR/cli.log" | head -n 1 || true)"
-          echo "[DEBUG-82] refreshed_cli_exit=$CLI_CODE expected_reply=$CLI_REPLY error_ref=$CLI_ERROR_REF"
-          echo "[DEBUG-82] recovery probe complete; actual configured reviews still required"
-
       - name: Run address-review correction
         # Bounded like the repository-owned address-review worker (ticket #31):
         # `timeout` terminates a hung correction run instead of leaving the
