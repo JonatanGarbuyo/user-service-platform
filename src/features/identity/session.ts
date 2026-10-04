@@ -10,7 +10,7 @@ import {
 import { resolveAuthPolicy } from './policy.js';
 import { resolveAuthSecret } from './secret.js';
 
-// Stable application-owned authenticated identity (ADR-0005, CONTEXT.md).
+// Stable application-owned authenticated identity (ADR-0005, GLOSSARY.md).
 // Feature slices consume this contract instead of Better Auth persistence
 // models, provider-specific types, session tokens or D1 row representations.
 // It mirrors the public `/v1/me` representation: only the stable identity

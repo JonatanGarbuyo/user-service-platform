@@ -1,0 +1,213 @@
+--- repository/.agents/skills/domain-modeling/CONTEXT-FORMAT.md
++++ upstream/v1.3.1/skills/engineering/domain-modeling/CONTEXT-FORMAT.md
+@@ -1,60 +0,0 @@
+-# CONTEXT.md Format
+-
+-## Structure
+-
+-```md
+-# {Context Name}
+-
+-{One or two sentence description of what this context is and why it exists.}
+-
+-## Language
+-
+-**Order**:
+-{A one or two sentence description of the term}
+-_Avoid_: Purchase, transaction
+-
+-**Invoice**:
+-A request for payment sent to a customer after delivery.
+-_Avoid_: Bill, payment request
+-
+-**Customer**:
+-A person or organization that places orders.
+-_Avoid_: Client, buyer, account
+-```
+-
+-## Rules
+-
+-- **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
+-- **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
+-- **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
+-- **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
+-
+-## Single vs multi-context repos
+-
+-**Single context (most repos):** One `CONTEXT.md` at the repo root.
+-
+-**Multiple contexts:** A `CONTEXT-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
+-
+-```md
+-# Context Map
+-
+-## Contexts
+-
+-- [Ordering](./src/ordering/CONTEXT.md): receives and tracks customer orders
+-- [Billing](./src/billing/CONTEXT.md): generates invoices and processes payments
+-- [Fulfillment](./src/fulfillment/CONTEXT.md): manages warehouse picking and shipping
+-
+-## Relationships
+-
+-- **Ordering → Fulfillment**: Ordering emits `OrderPlaced` events; Fulfillment consumes them to start picking
+-- **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
+-- **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
+-```
+-
+-The skill infers which structure applies:
+-
+-- If `CONTEXT-MAP.md` exists, read it to find contexts
+-- If only a root `CONTEXT.md` exists, single context
+-- If neither exists, create a root `CONTEXT.md` lazily when the first term is resolved
+-
+-When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
+
+--- repository/.agents/skills/domain-modeling/GLOSSARY-FORMAT.md
++++ upstream/v1.3.1/skills/engineering/domain-modeling/GLOSSARY-FORMAT.md
+@@ -0,0 +1,60 @@
++# GLOSSARY.md Format
++
++## Structure
++
++```md
++# {Context Name}
++
++{One or two sentence description of what this context is and why it exists.}
++
++## Language
++
++**Order**:
++{A one or two sentence description of the term}
++_Avoid_: Purchase, transaction
++
++**Invoice**:
++A request for payment sent to a customer after delivery.
++_Avoid_: Bill, payment request
++
++**Customer**:
++A person or organization that places orders.
++_Avoid_: Client, buyer, account
++```
++
++## Rules
++
++- **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
++- **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
++- **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
++- **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
++
++## Single vs multi-context repos
++
++**Single context (most repos):** One `GLOSSARY.md` at the repo root.
++
++**Multiple contexts:** A `GLOSSARY-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
++
++```md
++# Glossary Map
++
++## Contexts
++
++- [Ordering](./src/ordering/GLOSSARY.md): receives and tracks customer orders
++- [Billing](./src/billing/GLOSSARY.md): generates invoices and processes payments
++- [Fulfillment](./src/fulfillment/GLOSSARY.md): manages warehouse picking and shipping
++
++## Relationships
++
++- **Ordering → Fulfillment**: Ordering emits `OrderPlaced` events; Fulfillment consumes them to start picking
++- **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
++- **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
++```
++
++The skill infers which structure applies:
++
++- If `GLOSSARY-MAP.md` exists, read it to find contexts
++- If only a root `GLOSSARY.md` exists, single context
++- If neither exists, create a root `GLOSSARY.md` lazily when the first term is resolved
++
++When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
+
+--- repository/.agents/skills/domain-modeling/SKILL.md
++++ upstream/v1.3.1/skills/engineering/domain-modeling/SKILL.md
+@@ -3 +3 @@
+-description: Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR.
++description: Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a GLOSSARY.md, or recording or editing an ADR.
+@@ -8 +8 @@
+-Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `CONTEXT.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
++Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `GLOSSARY.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
+@@ -16 +16 @@
+-├── CONTEXT.md
++├── GLOSSARY.md
+@@ -24 +24 @@
+-If a `CONTEXT-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
++If a `GLOSSARY-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+@@ -28 +28 @@
+-├── CONTEXT-MAP.md
++├── GLOSSARY-MAP.md
+@@ -33 +33 @@
+-│   │   ├── CONTEXT.md
++│   │   ├── GLOSSARY.md
+@@ -36 +36 @@
+-│       ├── CONTEXT.md
++│       ├── GLOSSARY.md
+@@ -40 +40 @@
+-Create files lazily: only when you have something to write. If no `CONTEXT.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
++Create files lazily: only when you have something to write. If no `GLOSSARY.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
+@@ -46 +46 @@
+-When the user uses a term that conflicts with the existing language in `CONTEXT.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y. Which is it?"
++When the user uses a term that conflicts with the existing language in `GLOSSARY.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y. Which is it?"
+@@ -60 +60 @@
+-### Update CONTEXT.md inline
++### Update GLOSSARY.md inline
+@@ -62 +62 @@
+-When a term is resolved, update `CONTEXT.md` right there. Don't batch these up: capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
++When a term is resolved, update `GLOSSARY.md` right there. Don't batch these up: capture them as they happen. Use the format in [GLOSSARY-FORMAT.md](./GLOSSARY-FORMAT.md).
+@@ -64 +64 @@
+-`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
++`GLOSSARY.md` should be totally devoid of implementation details. Do not treat `GLOSSARY.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+
+--- repository/.agents/skills/setup-matt-pocock-skills/SKILL.md
++++ upstream/v1.3.1/skills/engineering/setup-matt-pocock-skills/SKILL.md
+@@ -13 +13 @@
+-- **Domain docs**: where `CONTEXT.md` and ADRs live, and the consumer rules for reading them
++- **Domain docs**: where `GLOSSARY.md` and ADRs live, and the consumer rules for reading them
+@@ -25 +25 @@
+-- `CONTEXT.md` and `CONTEXT-MAP.md` at the repo root
++- `GLOSSARY.md` and `GLOSSARY-MAP.md` at the repo root
+@@ -59 +59 @@
+-**Section C: Domain docs.** Default to **single-context** (one `CONTEXT.md` + `docs/adr/` at the repo root). This fits almost every repo; write it without asking.
++**Section C: Domain docs.** Default to **single-context** (one `GLOSSARY.md` + `docs/adr/` at the repo root). This fits almost every repo; write it without asking.
+@@ -61 +61 @@
+-Offer **multi-context** (a root `CONTEXT-MAP.md` pointing to per-context `CONTEXT.md` files) only when exploration found monorepo signals. Then confirm which layout they want.
++Offer **multi-context** (a root `GLOSSARY-MAP.md` pointing to per-context `GLOSSARY.md` files) only when exploration found monorepo signals. Then confirm which layout they want.
+
+--- repository/.agents/skills/setup-matt-pocock-skills/domain.md
++++ upstream/v1.3.1/skills/engineering/setup-matt-pocock-skills/domain.md
+@@ -7,2 +7,2 @@
+-- **`CONTEXT.md`** at the repo root, or
+-- **`CONTEXT-MAP.md`** at the repo root if it exists: it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
++- **`GLOSSARY.md`** at the repo root, or
++- **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
+@@ -19 +19 @@
+-├── CONTEXT.md
++├── GLOSSARY.md
+@@ -26 +26 @@
+-Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
++Multi-context repo (presence of `GLOSSARY-MAP.md` at the root):
+@@ -30 +30 @@
+-├── CONTEXT-MAP.md
++├── GLOSSARY-MAP.md
+@@ -34 +34 @@
+-    │   ├── CONTEXT.md
++    │   ├── GLOSSARY.md
+@@ -37 +37 @@
+-        ├── CONTEXT.md
++        ├── GLOSSARY.md
+@@ -43 +43 @@
+-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
++When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `GLOSSARY.md`. Don't drift to synonyms the glossary explicitly avoids.
+
+--- repository/.agents/skills/tdd/SKILL.md
++++ upstream/v1.3.1/skills/engineering/tdd/SKILL.md
+@@ -10 +10 @@
+-When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
++When exploring the codebase, read `GLOSSARY.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.

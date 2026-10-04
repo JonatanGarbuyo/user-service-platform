@@ -2,20 +2,20 @@
 
 Last verified: 2026-10-02
 
-This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `CONTEXT.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
+This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
 ## Authority and bootstrap
 
 Use canonical sources in this order for their respective concerns:
 
-1. `CONTEXT.md` for domain vocabulary.
+1. `GLOSSARY.md` for domain vocabulary.
 2. Accepted ADRs under `docs/adr/` for architecture/technical decisions.
 3. Current spec/ticket bodies plus comments for product intent.
 4. Current repository HEAD, GitHub PR/issue state, CI, and exact-HEAD review evidence for implementation truth.
 5. `AGENTS.md`, `docs/agents/`, `.agents/skills/`, and `.opencode/` for engineering process.
 6. This file only as a cross-session handoff.
 
-Fresh substantial sessions should read `AGENTS.md`, this file, `CONTEXT.md`, the current ticket/spec, relevant ADRs, and the applicable project-local skill. Do not reconstruct project-local workflow from model memory.
+Fresh substantial sessions should read `AGENTS.md`, this file, `GLOSSARY.md`, the current ticket/spec, relevant ADRs, and the applicable project-local skill. Do not reconstruct project-local workflow from model memory.
 
 Required progression for broad work remains:
 
@@ -35,7 +35,7 @@ wayfinder -> to-spec -> to-tickets -> implement
 
 ## Architecture baseline
 
-Canonical detail lives in `CONTEXT.md`, ADR-0001 through ADR-0011, Wayfinder #1, and spec #8.
+Canonical detail lives in `GLOSSARY.md`, ADR-0001 through ADR-0011, Wayfinder #1, and spec #8.
 
 Key durable decisions:
 
