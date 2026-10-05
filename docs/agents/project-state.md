@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-02
+Last verified: 2026-10-05
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -76,7 +76,7 @@ Concrete model assignments are deliberately not duplicated here; read live `.ope
 
 ## Product frontier
 
-Verified on 2026-10-02:
+Verified on 2026-10-05 against live GitHub state; main is `ab6b3da672ccc9f463957a6e87d0a6e93a8e3f57`:
 
 - #9 health endpoint: closed/completed.
 - #10 register + verify email: closed/completed.
@@ -85,18 +85,21 @@ Verified on 2026-10-02:
 - #13 production auth email: closed/completed. PR #53 passed Standards, Spec, repository gates, and exact-HEAD CI on `364bc5afddb93bdbfd4aedf6dd7b2c9b63228943`; ChatGPT performed the final squash merge with expected-head protection. Main commit: `66cc6fe85f12dae516d7226abb5867acce0ed823`.
 - #14 sandbox promotion: closed/completed. Canonical target is sandbox, not staging.
 - #78 client-aware deployer/target registry, #104 required-secret declarations, and #106 rejection of plaintext required-secret bindings: closed/completed. Their isolation and secret-binding contracts govern provisioning.
-- #82 Actions noise/trusted-handoff CI provenance: open, with draft PR #109 at `43afb43c0fc3a95f16fc0fc12f7a6b14848b061e`. The configured Standards execution has recovered; its two valid blockers were corrected and repository gates passed before safe publication. Fresh Spec is PASS on that HEAD; Standards is running in [run37007213406](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37007213406). [Exact-HEAD CI37007788316](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37007788316) is `action_required`, not PASS.
-- #80 unified target provisioning: `enhancement` / `ready-for-agent`. The existing architecture decision and [agent brief](https://github.com/JonatanGarbuyo/user-service-platform/issues/80#issuecomment-5944301295) specify plan/apply, D1 discovery/recovery, Worker discovery without deployment, and names/types-only secret handling. The previous attempt failed on a temporary implementation-provider overload without creating a PR. [Run 37007216614](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37007216614) restarts implementation from the recovered operational configuration; no live provisioning is authorized.
+- #82 Actions noise/trusted-handoff CI provenance: open, with non-draft PR #109 at `3bd2c030287c1783d668888aa4fd60c2434c418e`. [Standards](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5961762044) and [Spec](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5961613539) PASS on that exact HEAD, as does [CI37065342546](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37065342546). [Cycle37065341168](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37065341168) reached READY. Final verification is complete; merge remains pending separately authorized deployment effects.
+- #80 unified target provisioning: open, with non-draft PR #110 at `4ffea00d3fc50c91c1185e37d94744ffa4165554`. The supported pinned-Wrangler create/rediscovery contract correction is implemented. [Standards](https://github.com/JonatanGarbuyo/user-service-platform/pull/110#issuecomment-5962145354), [Spec](https://github.com/JonatanGarbuyo/user-service-platform/pull/110#issuecomment-5962137332), and [CI37069008402](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37069008402) PASS on that HEAD; the [cycle](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37065171413) reached READY. Final verification is complete; merge remains pending. No live provisioning was performed or authorized.
+- #111 Matt skills v1.3/glossary migration: open, with draft PR #112. It preserves glossary content, updates all consumers and three skill hashes, and records the tagged upstream comparison in [the audit](../research/matt-skills-v1.3-audit.md). CI passed on the initial published HEAD. This checkpoint correction changes the HEAD; fresh configured Standards/Spec reviews and exact-HEAD CI are required before final acceptance. Resolve the live PR SHA and evidence rather than using the initial HEAD's CI.
 
 Current execution frontier:
 
 ```text
-#80 provisioning implementation
-  -> repository gates + configured dual review + exact-HEAD CI
+#111 glossary migration + current checkpoint
+  -> configured dual review + exact-HEAD CI
   -> final acceptance
+#82 and #80 verified PRs
+  -> separately authorized merge/deployment effects
 ```
 
-Configured Standards execution has recovered. Resolve valid review findings and require both configured axes plus exact-HEAD CI before accepting either open effort. Final merge and live infrastructure operations retain their separate controls.
+Do not restart #80 or #82 implementation while their unchanged HEADs retain valid evidence. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls.
 
 ## Remote execution/review gate
 
@@ -126,15 +129,17 @@ Review/execution invariants:
 
 The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5944424053) is historical. The maintainer approved the Standards model recovery in [source-ticket decision5952117927](https://github.com/JonatanGarbuyo/user-service-platform/issues/82#issuecomment-5952117927). Main commit `9cc8e30d0d5ac002d0b5a82d2ff9863b1bc56d88` adopts only the independently reviewed and exact-HEAD-CI-tested operational configuration, matching marker identity, provenance instructions and regression fixtures. Read live reviewer configuration rather than copying model assignments from this checkpoint.
 
-[Run37004855993](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37004855993) proves the configured Standards worker executed, published its own report and completed exit0; Spec published only its own axis. This validates execution, not PR acceptance: Standards reported FAIL for incomplete YAML run-step security coverage and an undeclared direct parser dependency. Correction commit `43afb43c0fc3a95f16fc0fc12f7a6b14848b061e` replaces the incomplete run-block regex with YAML step selection and declares the pinned parser dependency; gates passed before publication. Fresh Spec is PASS, including the source-ticket authorization. Fresh Standards is still running. Exact-HEAD CI is `action_required`; inspect the trusted approval/publication path after both review axes pass rather than treating the previous HEAD's CI as current evidence. Main still uses the pre-#82 approver policy.
+The former Standards startup and trusted-approval blockers are resolved on PR #109's current exact HEAD, as demonstrated by the evidence above. Main still uses the pre-#82 workflow policy until that PR is merged: branch pushes and PR events both run CI, ordinary comments may allocate agent runners before the downstream guard skips them, and the schedule remains the existing backstop. Do not attribute the unmerged PR's prefilters, PR-only branch CI, or approver changes to main.
 
 The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; dependency restoration remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-#80 implementation has been restarted independently. Inspect its live run/PR evidence before issuing another trigger; final acceptance requires the same configured dual review and exact-HEAD CI.
+For #112, run the configured review cycle only after publishing the checkpoint correction. Preserve independent reviewer identities and exact-HEAD evidence. The last-25-session skill-usage audit remains blocked: Personal Context is disabled and no session exports were supplied. The available-evidence recommendations do not establish invocation frequencies.
 
 ## Maintenance debt
 
-- #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed. The live open inventory is #80 and #82, plus draft PR #109; query GitHub before selecting new work.
+- #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
+- The current open ticket inventory is #80, #82 and #111, with PRs #110, #109 and #112 respectively; query GitHub before selecting new work.
+- The v1.3 audit identifies missing local `grilling` and `codebase-design` dependencies. Add them through a separate scoped ticket; retro/pr adoption and an implement-spec integration workflow are follow-up decisions, not part of the glossary migration.
 
 ## Maintaining this checkpoint
 
