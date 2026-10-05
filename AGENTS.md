@@ -14,7 +14,7 @@ Use the default Matt Pocock triage vocabulary: `needs-triage`, `needs-info`, `re
 
 ### Domain docs
 
-This is a single-context repository. Read `CONTEXT.md` and relevant ADRs under `docs/adr/` before changing code. See `docs/agents/domain.md`.
+This is a single-context repository. Read `GLOSSARY.md` and relevant ADRs under `docs/adr/` before changing code. See `docs/agents/domain.md`.
 
 ### Session checkpoint
 
@@ -76,4 +76,4 @@ Do not skip directly from a broad idea to implementation.
 - Schema changes require migrations and tests at the agreed seam.
 - New externally observable behaviour requires tests.
 - Architectural exceptions require an ADR before implementation.
-- Keep `CONTEXT.md` vocabulary current when a domain term is introduced or materially changed.
+- Keep `GLOSSARY.md` vocabulary current when a domain term is introduced or materially changed.

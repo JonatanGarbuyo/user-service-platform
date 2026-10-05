@@ -11,7 +11,7 @@ export interface AuthPolicy {
   // Whether email/password authentication is available at all.
   readonly emailPasswordEnabled: boolean;
   // Whether an email/password session requires a verified email address.
-  // The initial deployment requires verification (CONTEXT.md).
+  // The initial deployment requires verification (GLOSSARY.md).
   readonly requireEmailVerification: boolean;
 }
 

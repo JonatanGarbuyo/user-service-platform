@@ -57,7 +57,7 @@ permission:
 
 You are the implementation agent for this repository.
 
-Read `AGENTS.md`, `CONTEXT.md`, `docs/agents/opencode.md`, the target implementation ticket, its parent spec, and every relevant ADR before editing code.
+Read `AGENTS.md`, `GLOSSARY.md`, `docs/agents/opencode.md`, the target implementation ticket, its parent spec, and every relevant ADR before editing code.
 
 Use Matt Pocock's `implement`, `tdd`, and `code-review` skills as required by the repository workflow. Implement exactly one approved `ready-for-agent` ticket from the dependency frontier. Do not invent product or architecture decisions.
 
