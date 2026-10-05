@@ -254,6 +254,25 @@ export function resolveTargetDeployment(
   file: TargetsFile,
   selection: ResolveTargetSelection,
 ): ResolvedDeployment {
+  return resolveDeployment(file, selection, { requireProvisionedDatabase: true });
+}
+
+// Provisioning target resolution (ticket #80): first-time provisioning must
+// accept an empty database id so the exact-name remote resource can be
+// discovered or created and then staged. The deployment boundary above keeps
+// refusing unprovisioned ids; this entry point never weakens that gate.
+export function resolveProvisioningTarget(
+  file: TargetsFile,
+  selection: ResolveTargetSelection,
+): ResolvedDeployment {
+  return resolveDeployment(file, selection, { requireProvisionedDatabase: false });
+}
+
+function resolveDeployment(
+  file: TargetsFile,
+  selection: ResolveTargetSelection,
+  options: { readonly requireProvisionedDatabase: boolean },
+): ResolvedDeployment {
   const environment = parseDeployEnvironment(selection.environment);
   const targetKey = typeof selection.target === 'string' ? selection.target.trim() : '';
   const target = file.targets.find((entry) => entry.key === targetKey);
@@ -262,7 +281,9 @@ export function resolveTargetDeployment(
     throw new Error(`Unknown deployment target "${targetKey}": available targets: ${available}.`);
   }
   const config = target.environments[environment];
-  assertProvisionedDatabaseId(target.key, environment, config.databaseId);
+  if (options.requireProvisionedDatabase) {
+    assertProvisionedDatabaseId(target.key, environment, config.databaseId);
+  }
   const identity = {
     company: target.company,
     site: target.site,
