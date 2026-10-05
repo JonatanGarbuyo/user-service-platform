@@ -16,7 +16,7 @@ This repository follows Matt Pocock's engineering skills workflow:
 4. `to-tickets` — split the spec into dependency-aware tracer-bullet vertical slices.
 5. `implement` — build one approved ticket at a time using TDD and code review.
 
-See `AGENTS.md`, `CONTEXT.md`, `docs/agents/`, and `docs/adr/` before making changes.
+See `AGENTS.md`, `GLOSSARY.md`, `docs/agents/`, and `docs/adr/` before making changes.
 
 ## Toolchain
 

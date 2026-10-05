@@ -7,7 +7,7 @@ Read `AGENTS.md` and `docs/agents/opencode.md`, then load the `implement` skill.
 
 Implement exactly the GitHub implementation ticket identified by `$ARGUMENTS`.
 
-The target must be an approved `ready-for-agent` implementation ticket produced from the parent spec, not a Wayfinder decision ticket or broad spec issue. Read the ticket, its comments, its parent spec, `CONTEXT.md`, and all relevant ADRs before editing code.
+The target must be an approved `ready-for-agent` implementation ticket produced from the parent spec, not a Wayfinder decision ticket or broad spec issue. Read the ticket, its comments, its parent spec, `GLOSSARY.md`, and all relevant ADRs before editing code.
 
 Work only in the current isolated ticket branch/worktree. Follow the agreed test seam, TDD and code-review workflow, and verify every acceptance criterion before completion. Do not broaden scope or invent product/architecture decisions that are absent from the source artifacts.
 

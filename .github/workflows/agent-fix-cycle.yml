@@ -22,8 +22,13 @@ permissions:
 
 jobs:
   run:
-    # Pull requests only; plain issues are handled by agent-ticket.
-    if: ${{ github.event.issue.pull_request }}
+    # Ticket #82 cheap prefilter (no runner cost for ordinary comments):
+    # pull requests only, exact one-line command body, authorized actor. See
+    # agent-ticket.yml for the accepted case-insensitive prefilter policy:
+    # uppercase variants may allocate a runner but the downstream guard keeps
+    # exact lowercase validation. Whitespace/extra-text variants stay
+    # ineligible here; the guard after checkout stays authoritative.
+    if: ${{ github.event.issue.pull_request && github.event.comment.body == '/agent-fix-cycle' && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') }}
     runs-on: ubuntu-latest
     # Backstop only: repository-owned worker bounds (ticket #31) terminate hung
     # workers well before this; the terminal step below still runs and

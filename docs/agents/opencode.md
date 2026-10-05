@@ -1,6 +1,6 @@
 # OpenCode implementation workflow
 
-Use OpenCode as an implementation harness. Product/architecture decisions remain in `CONTEXT.md`, ADRs, Wayfinder/spec issues, and approved implementation tickets.
+Use OpenCode as an implementation harness. Product/architecture decisions remain in `GLOSSARY.md`, ADRs, Wayfinder/spec issues, and approved implementation tickets.
 
 ## Bootstrap
 
@@ -60,7 +60,7 @@ Before implementation or review, read:
 
 1. `AGENTS.md`.
 2. `docs/agents/project-state.md`.
-3. `CONTEXT.md`.
+3. `GLOSSARY.md`.
 4. The implementation ticket in full, including comments.
 5. Its parent spec.
 6. Relevant ADRs referenced by the ticket/spec.
