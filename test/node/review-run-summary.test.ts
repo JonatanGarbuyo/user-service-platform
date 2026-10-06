@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   RUN_SUMMARY_DIR,
@@ -145,5 +146,95 @@ describe('review run summary safe persistence', () => {
       command: 'review:cycle',
       outcome: 'READY',
     });
+  });
+});
+
+describe('review run summary skill evidence pointers (ticket #116)', () => {
+  it('omits skill evidence paths when no evidence worker ran', () => {
+    const recorder = createRunSummaryRecorder({ now: () => 0 });
+    recorder.setReviewedHead('a'.repeat(40));
+
+    const summary = recorder.finish('READY');
+
+    expect(summary.skillEvidencePaths).toBeUndefined();
+  });
+
+  it('accumulates evidence paths in invocation order', () => {
+    const recorder = createRunSummaryRecorder({ now: () => 0 });
+    recorder.setReviewedHead('a'.repeat(40));
+
+    recorder.recordSkillEvidencePath(
+      '.agent-ticket/skill-evidence/review-cycle-review-standards-standards-1.json',
+    );
+    recorder.recordSkillEvidencePath(
+      '.agent-ticket/skill-evidence/review-cycle-review-spec-spec-1.json',
+    );
+    const summary = recorder.finish('READY');
+
+    expect(summary.skillEvidencePaths).toEqual([
+      '.agent-ticket/skill-evidence/review-cycle-review-standards-standards-1.json',
+      '.agent-ticket/skill-evidence/review-cycle-review-spec-spec-1.json',
+    ]);
+  });
+
+  it('persists evidence paths additively without transcripts or secrets', async () => {
+    const recorder = createRunSummaryRecorder({ now: () => 0 });
+    recorder.setReviewedHead('a'.repeat(40));
+    recorder.recordSkillEvidencePath(
+      '.agent-ticket/skill-evidence/review-cycle-review-standards-standards-1.json',
+    );
+    const summary = recorder.finish('READY');
+
+    let latestContents = '';
+    await persistRunSummary(summary, {
+      mkdir: () => Promise.resolve(),
+      writeFile: (path: string, contents: string) => {
+        if (path.endsWith('latest.json')) {
+          latestContents = contents;
+        }
+        return Promise.resolve();
+      },
+    });
+
+    const parsed = JSON.parse(latestContents) as Record<string, unknown>;
+    expect(parsed.skillEvidencePaths).toEqual([
+      '.agent-ticket/skill-evidence/review-cycle-review-standards-standards-1.json',
+    ]);
+    expect(latestContents).not.toContain('Loaded skill');
+    expect(latestContents).not.toContain('ghp_');
+  });
+});
+
+describe('review-cycle evidence executor wiring (ticket #116)', () => {
+  function readReviewCycleSource(): string {
+    return readFileSync('scripts/review-cycle.ts', 'utf8');
+  }
+
+  it('routes standards, spec and address-review workers through the evidence seam', () => {
+    const source = readReviewCycleSource();
+
+    expect(source).toMatch(/function evidenceStreamingWorkerExecutor/);
+    const usages = source.match(/evidenceStreamingWorkerExecutor\(/g) ?? [];
+    expect(usages.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('captures JSON worker lines while keeping live lifecycle output usable', () => {
+    const source = readReviewCycleSource();
+
+    expect(source).toMatch(/createEvidenceCapture\(\)/);
+    expect(source).toMatch(/finalizeSkillEvidence\(/);
+    expect(source).toMatch(/recordSkillEvidencePath/);
+    expect(source).toMatch(/suppressJsonWorkerLines/);
+    expect(source).toMatch(/onStdoutLine/);
+  });
+
+  it('finalizes evidence best-effort on success and failure without changing the worker outcome', () => {
+    const source = readReviewCycleSource();
+
+    expect(source).toMatch(/await settle\(\)/);
+    // The executor settles on both paths: after success and after a worker error.
+    expect(source.match(/await settle\(\)/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source).toMatch(/catch\s*\{[^}]*Best-effort/s);
+    expect(source).toMatch(/throw error/);
   });
 });

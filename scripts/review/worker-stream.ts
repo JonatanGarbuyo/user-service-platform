@@ -18,6 +18,12 @@ export interface WorkerStreamOptions {
   // short deterministic commands stay on the buffered `runCommand` path.
   timeoutMs?: number;
   killGraceMs?: number;
+  // Evidence-enabled workers (ticket #116) stream `--format json`, whose raw
+  // tool parts, text, reasoning and output must never become console logs.
+  // When provided, a stdout line is echoed only when the filter returns true;
+  // the line is still captured in `stdout` and delivered to `onStdoutLine`.
+  // Lifecycle messages (started/completed/failed/heartbeat) are unaffected.
+  stdoutLogFilter?: (line: string) => boolean;
 }
 
 export type SpawnFn = (command: string, args: readonly string[]) => SpawnedWorker;
@@ -159,7 +165,9 @@ export function runWorkerStream(
         const line = stripCarriageReturn(stdoutBuffer.text);
         stdout += `${line}\n`;
         handlers.onStdoutLine?.(line);
-        console.log(`[${options.label}] ${line}`);
+        if (options.stdoutLogFilter?.(line) ?? true) {
+          console.log(`[${options.label}] ${line}`);
+        }
       }
       if (stderrBuffer.text !== '') {
         const line = stripCarriageReturn(stderrBuffer.text);
@@ -188,7 +196,9 @@ export function runWorkerStream(
       pushChunk(stdoutBuffer, String(chunk), (line) => {
         stdout += `${line}\n`;
         handlers.onStdoutLine?.(line);
-        console.log(`[${options.label}] ${line}`);
+        if (options.stdoutLogFilter?.(line) ?? true) {
+          console.log(`[${options.label}] ${line}`);
+        }
       });
     });
     child.stderr?.on('data', (chunk: Buffer | string) => {

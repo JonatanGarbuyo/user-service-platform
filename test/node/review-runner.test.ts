@@ -20,6 +20,8 @@ describe('review worker invocation', () => {
     expect(buildReviewAxisArgs('review-standards', 17)).toEqual([
       'run',
       '--auto',
+      '--format',
+      'json',
       '--command',
       'review-standards',
       '17',
@@ -30,6 +32,8 @@ describe('review worker invocation', () => {
     expect(buildReviewAxisArgs('review-spec', 17)).toEqual([
       'run',
       '--auto',
+      '--format',
+      'json',
       '--command',
       'review-spec',
       '17',
@@ -46,6 +50,8 @@ describe('review worker invocation', () => {
     expect(buildAddressReviewArgs(17)).toEqual([
       'run',
       '--auto',
+      '--format',
+      'json',
       '--command',
       'address-review',
       '17',

@@ -163,6 +163,8 @@ jobs:
           path: |
             .review-cycle/latest.json
             .agent-ticket/outcome.json
+            .agent-ticket/skill-evidence/latest.json
+            .agent-ticket/skill-evidence/*.json
             .agent-ticket/workflow-handoff.json
             .agent-ticket/workflow-handoff.patch
           if-no-files-found: warn

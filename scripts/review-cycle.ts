@@ -66,6 +66,13 @@ import {
   type WorkerLabel,
 } from './review/worker-timeout.js';
 import { runWorkerStream } from './review/worker-stream.js';
+import {
+  buildEvidenceInvocation,
+  commandSessionExporter,
+  createEvidenceCapture,
+  finalizeSkillEvidence,
+  suppressJsonWorkerLines,
+} from './review/evidence-worker.js';
 
 interface CycleOptions {
   maxCycles: number;
@@ -101,16 +108,66 @@ async function refreshPrUntilHead(
   return null;
 }
 
-// OpenCode workers stream live prefixed output (PR #17 dogfood finding) so
-// the single long-running command shows liveness. Short git/gh/npm commands
-// stay on the buffered path. The injected `CommandExecutor` seam is unchanged,
-// so tests still observe exact invocations without real subprocesses.
-// Every worker runs under its bounded timeout (ticket #31): a hung reviewer
-// or address-review is terminated with a distinguishable TIMEOUT instead of
-// printing heartbeats indefinitely.
-function streamingWorkerExecutor(label: WorkerLabel): CommandExecutor {
-  return (command, args) =>
-    runWorkerStream(command, args, { label, timeoutMs: timeoutForWorker(label) });
+// Evidence-capable worker seam (ticket #116): Standards, Spec and
+// address-review workers stream the same live output under the same bounds,
+// while real JSON tool records are captured into minimal attributable skill
+// evidence. Raw JSON tool/text/reasoning lines are captured but not echoed so
+// transcripts never become logs; lifecycle, heartbeat and watchdog messages
+// are preserved. Collection is best-effort and additive: persistence
+// failures and incomplete coverage never change the worker outcome, reviewer
+// markers, gates or exact-HEAD CI.
+function evidenceStreamingWorkerExecutor(
+  label: WorkerLabel,
+  evidence: {
+    command: string;
+    axis: string;
+    attempt: number;
+    workerStartHead: string;
+  },
+  recorder: RunSummaryRecorder,
+): CommandExecutor {
+  return async (command, args) => {
+    const capture = createEvidenceCapture();
+    const settle = async (): Promise<void> => {
+      try {
+        const result = await finalizeSkillEvidence({
+          invocation: buildEvidenceInvocation({
+            worker: 'review-cycle',
+            command: evidence.command,
+            axis: evidence.axis,
+            attempt: evidence.attempt,
+            workerStartHead: evidence.workerStartHead,
+          }),
+          lines: capture.lines,
+          exporter: commandSessionExporter(),
+          truncatedStream: capture.wasTruncated(),
+        });
+        if (result.evidencePath !== undefined) {
+          recorder.recordSkillEvidencePath(result.evidencePath);
+        }
+      } catch {
+        // Best-effort: evidence collection never changes the worker outcome.
+      }
+    };
+    try {
+      const result = await runWorkerStream(
+        command,
+        args,
+        { label, timeoutMs: timeoutForWorker(label), stdoutLogFilter: suppressJsonWorkerLines },
+        undefined,
+        {
+          onStdoutLine: (line) => {
+            capture.pushLine(line);
+          },
+        },
+      );
+      await settle();
+      return result;
+    } catch (error) {
+      await settle();
+      throw error;
+    }
+  };
 }
 
 // Quality gates run on the same bounded streaming path as OpenCode workers
@@ -472,7 +529,9 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
   for (
     let cycles = 0,
       markerRetries: MarkerRetries = { standards: 0, spec: 0 },
-      pendingAxes: ('standards' | 'spec')[] | null = null;
+      pendingAxes: ('standards' | 'spec')[] | null = null,
+      standardsInvocations = 0,
+      specInvocations = 0;
     ;
   ) {
     recorder.setMarkerRetries({ ...markerRetries });
@@ -496,17 +555,42 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
         await Promise.all([
           (async (): Promise<void> => {
             standardsStart = Date.now();
+            standardsInvocations += 1;
             await runReviewAxis(
               'review-standards',
               pr.number,
               [],
-              streamingWorkerExecutor('standards'),
+              evidenceStreamingWorkerExecutor(
+                'standards',
+                {
+                  command: 'review-standards',
+                  axis: 'standards',
+                  attempt: standardsInvocations,
+                  workerStartHead: head,
+                },
+                recorder,
+              ),
             );
             standardsEnd = Date.now();
           })(),
           (async (): Promise<void> => {
             specStart = Date.now();
-            await runReviewAxis('review-spec', pr.number, [], streamingWorkerExecutor('spec'));
+            specInvocations += 1;
+            await runReviewAxis(
+              'review-spec',
+              pr.number,
+              [],
+              evidenceStreamingWorkerExecutor(
+                'spec',
+                {
+                  command: 'review-spec',
+                  axis: 'spec',
+                  attempt: specInvocations,
+                  workerStartHead: head,
+                },
+                recorder,
+              ),
+            );
             specEnd = Date.now();
           })(),
         ]);
@@ -518,7 +602,26 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
         for (const axis of pendingAxes) {
           const worker = reviewAxisWorker(axis);
           const startedAt = Date.now();
-          await runReviewAxis(worker.command, pr.number, [], streamingWorkerExecutor(axis));
+          if (axis === 'standards') {
+            standardsInvocations += 1;
+          } else {
+            specInvocations += 1;
+          }
+          await runReviewAxis(
+            worker.command,
+            pr.number,
+            [],
+            evidenceStreamingWorkerExecutor(
+              axis,
+              {
+                command: worker.command,
+                axis,
+                attempt: axis === 'standards' ? standardsInvocations : specInvocations,
+                workerStartHead: head,
+              },
+              recorder,
+            ),
+          );
           timings.set(axis, { start: startedAt, end: Date.now() });
           markerRetries[axis] += 1;
         }
@@ -820,7 +923,19 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
     );
     const addressStartedAt = Date.now();
     try {
-      await runAddressReview(pr.number, streamingWorkerExecutor('address-review'));
+      await runAddressReview(
+        pr.number,
+        evidenceStreamingWorkerExecutor(
+          'address-review',
+          {
+            command: 'address-review',
+            axis: 'address-review',
+            attempt: cycles,
+            workerStartHead: head,
+          },
+          recorder,
+        ),
+      );
     } catch (addressError) {
       recorder.recordAddressReviewAttempt('error', addressStartedAt, Date.now());
       throw addressError;

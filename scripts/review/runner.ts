@@ -17,6 +17,40 @@ export async function runCommand(command: string, args: readonly string[]): Prom
   return { stdout: stdout, stderr: stderr };
 }
 
+export interface BoundedCommandOptions {
+  timeoutMs: number;
+  maxBufferBytes: number;
+  killSignal?: NodeJS.Signals;
+}
+
+// Bounded read-only subprocess seam (ticket #116): unlike `runCommand`, the
+// child is terminated on timeout (`timeout` kills with `killSignal`) and
+// output is capped at `maxBufferBytes`, so a hung or gigantic session export
+// can neither stall the worker nor exhaust memory. Rejections (including
+// timeout kills) carry the command context without payload contents.
+export async function runBoundedCommand(
+  command: string,
+  args: readonly string[],
+  options: BoundedCommandOptions,
+): Promise<CommandResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, [...args], {
+      maxBuffer: options.maxBufferBytes,
+      timeout: options.timeoutMs,
+      killSignal: options.killSignal ?? 'SIGTERM',
+    });
+    return { stdout: stdout, stderr: stderr };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `bounded command ${command} ${args.join(' ')} failed: ${detail.slice(0, 200)}`,
+      {
+        cause: error,
+      },
+    );
+  }
+}
+
 export async function getCurrentHead(execute: CommandExecutor = runCommand): Promise<string> {
   const { stdout } = await execute('git', ['rev-parse', 'HEAD']);
   return stdout.trim();
@@ -127,17 +161,34 @@ export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
 // definitions remain effective under `--auto`. No `--agent` flag is passed:
 // each custom command's frontmatter already pins its subagent/model, and
 // passing `--agent` with a subagent triggers an "subagent, not a primary
-// agent" warning.
+// agent" warning. `--format json` streams real pinned CLI tool records for
+// attributable skill evidence (ticket #116) without changing model, agent or
+// permission resolution.
+//
+// The flag is additive through a single helper so the shipped builders share
+// one seam: frontmatter model/agent resolution, permissions and live
+// streaming behavior are unchanged.
+export function withJsonFormat(args: readonly string[]): string[] {
+  if (args.includes('--format')) {
+    return [...args];
+  }
+  const autoIndex = args.indexOf('--auto');
+  if (autoIndex >= 0) {
+    return [...args.slice(0, autoIndex + 1), '--format', 'json', ...args.slice(autoIndex + 1)];
+  }
+  return [...args, '--format', 'json'];
+}
+
 export function buildReviewAxisArgs(
   command: ReviewAxisName,
   prNumber: number,
   extraArgs: readonly string[] = [],
 ): string[] {
-  return ['run', '--auto', '--command', command, ...extraArgs, String(prNumber)];
+  return withJsonFormat(['run', '--auto', '--command', command, ...extraArgs, String(prNumber)]);
 }
 
 export function buildAddressReviewArgs(prNumber: number): string[] {
-  return ['run', '--auto', '--command', 'address-review', String(prNumber)];
+  return withJsonFormat(['run', '--auto', '--command', 'address-review', String(prNumber)]);
 }
 
 export async function runReviewAxis(
