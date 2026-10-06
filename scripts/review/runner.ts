@@ -127,17 +127,28 @@ export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
 // definitions remain effective under `--auto`. No `--agent` flag is passed:
 // each custom command's frontmatter already pins its subagent/model, and
 // passing `--agent` with a subagent triggers an "subagent, not a primary
-// agent" warning.
+// agent" warning. `--format json` streams real pinned CLI tool records for
+// attributable skill evidence (ticket #116) without changing model, agent or
+// permission resolution.
 export function buildReviewAxisArgs(
   command: ReviewAxisName,
   prNumber: number,
   extraArgs: readonly string[] = [],
 ): string[] {
-  return ['run', '--auto', '--command', command, ...extraArgs, String(prNumber)];
+  return [
+    'run',
+    '--auto',
+    '--format',
+    'json',
+    '--command',
+    command,
+    ...extraArgs,
+    String(prNumber),
+  ];
 }
 
 export function buildAddressReviewArgs(prNumber: number): string[] {
-  return ['run', '--auto', '--command', 'address-review', String(prNumber)];
+  return ['run', '--auto', '--format', 'json', '--command', 'address-review', String(prNumber)];
 }
 
 export async function runReviewAxis(

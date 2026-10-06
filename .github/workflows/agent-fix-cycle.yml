@@ -183,28 +183,19 @@ jobs:
           opencode --version | grep -F '1.18.30'
 
       - name: Run address-review correction
-        # Bounded like the repository-owned address-review worker (ticket #31):
-        # `timeout` terminates a hung correction run instead of leaving the
-        # workflow at `still running` indefinitely. Exit 124 leaves a sentinel
-        # that the terminal step maps to TIMEOUT (distinct from model, gate,
-        # CI, or cancellation failures).
+        # Deterministic evidence-capable correction seam (ticket #116):
+        # `npm run agent:fix-cycle-correction` runs the same bounded
+        # address-review worker as before through the repository-owned worker
+        # seam, adding best-effort attributable skill evidence without
+        # changing bounds, live output, or the timeout sentinel contract
+        # (`.address-review-timeout` still maps TIMEOUT in the terminal step).
         if: steps.guard.outputs.run == 'true'
         env:
           OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
         run: |
           set -euo pipefail
           PR_NUMBER="${{ steps.guard.outputs.pr }}"
-          if timeout --signal=TERM --kill-after=60s 20m opencode run --auto --command address-review "$PR_NUMBER"; then
-            echo "address-review completed within its bound."
-          else
-            CODE=$?
-            if [ "$CODE" -eq 124 ]; then
-              echo "address-review exceeded its 20m bound (TIMEOUT)."
-              printf 'address-review timed out after 20m' > .address-review-timeout
-              exit 1
-            fi
-            exit "$CODE"
-          fi
+          npm run agent:fix-cycle-correction -- "$PR_NUMBER"
 
       - name: Require clean correction or explicit no-code outcome
         if: steps.guard.outputs.run == 'true'
@@ -334,6 +325,8 @@ jobs:
           name: agent-fix-cycle-evidence-${{ github.event.issue.number }}
           path: |
             .review-cycle/latest.json
+            .agent-ticket/skill-evidence/latest.json
+            .agent-ticket/skill-evidence/*.json
             .agent-ticket/workflow-handoff.json
             .agent-ticket/workflow-handoff.patch
           if-no-files-found: warn

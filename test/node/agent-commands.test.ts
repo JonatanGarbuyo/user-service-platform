@@ -431,14 +431,18 @@ describe('agent workflow contracts', () => {
         expect(installSection).toMatch(/1\.18\.30/);
         const verifyIndex = installSection.indexOf('opencode --version');
         // agent-ticket invokes through `npm run agent:ticket` (which spawns
-        // `opencode run` internally); agent-fix-cycle invokes `opencode run`
-        // directly for address-review. Search after the install step so the
+        // `opencode run` internally); agent-fix-cycle invokes the initial
+        // correction through the deterministic evidence-capable seam
+        // `npm run agent:fix-cycle-correction` (ticket #116, which spawns
+        // `opencode run` internally). Search after the install step so the
         // acknowledge comment (which names the flow) is not mistaken for the
         // invocation.
         const tail = workflow.slice(installIndex);
         const directInvoke = tail.indexOf('opencode run');
         const ticketInvoke = tail.indexOf('npm run agent:ticket', verifyIndex);
-        const invokeIndex = directInvoke === -1 ? ticketInvoke : directInvoke;
+        const fixCycleInvoke = tail.indexOf('npm run agent:fix-cycle-correction', verifyIndex);
+        const invokeIndex =
+          directInvoke === -1 ? Math.max(ticketInvoke, fixCycleInvoke) : directInvoke;
         expect(verifyIndex).toBeGreaterThan(-1);
         expect(invokeIndex).toBeGreaterThan(-1);
         expect(verifyIndex).toBeLessThan(invokeIndex);

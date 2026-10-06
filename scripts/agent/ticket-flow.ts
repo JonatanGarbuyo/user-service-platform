@@ -23,6 +23,11 @@ import {
 } from '../review/runner.js';
 import { checkSafePush, type SafePushCheck } from '../review/safe-push.js';
 import { requestApprovalDispatch } from '../review/approve-agent-ci.js';
+import {
+  buildEvidenceInvocation,
+  commandSessionExporter,
+  finalizeSkillEvidence,
+} from '../review/evidence-worker.js';
 import { getRepoSlug } from '../review/pr-checks.js';
 import { runWorkerStream } from '../review/worker-stream.js';
 import { isWorkerTimeout, timeoutForWorker, type WorkerLabel } from '../review/worker-timeout.js';
@@ -61,6 +66,10 @@ export interface AgentTicketOutcome {
   startedAt: string;
   completedStages: string[];
   actionRequired?: string;
+  // Additive skill-evidence pointer (ticket #116): the normalized evidence
+  // path for the initial implementation worker when collection succeeded.
+  // Absent when collection was unavailable; never affects outcome semantics.
+  skillEvidencePath?: string;
 }
 
 export interface AgentTicketTerminal {
@@ -141,6 +150,9 @@ export async function writeAgentTicketOutcome(
   if (input.actionRequired !== undefined) {
     record.actionRequired = input.actionRequired;
   }
+  if (input.skillEvidencePath !== undefined) {
+    record.skillEvidencePath = input.skillEvidencePath;
+  }
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(record, null, 2)}\n`);
   return path;
@@ -183,9 +195,11 @@ export function ticketBranchName(ticket: number, title: string): string {
 // `/implement` runs headlessly with `opencode run --auto --command implement`.
 // No `--agent` flag is passed: the implement command frontmatter remains the
 // single source of truth for the implementer model, mirroring the review
-// workers in `scripts/review/runner.ts`.
+// workers in `scripts/review/runner.ts`. `--format json` streams real pinned
+// CLI tool records so attributable skill evidence can be collected
+// (ticket #116); live streaming, heartbeats and timeout bounds are unchanged.
 export function buildImplementArgs(ticket: number): string[] {
-  return ['run', '--auto', '--command', 'implement', String(ticket)];
+  return ['run', '--auto', '--format', 'json', '--command', 'implement', String(ticket)];
 }
 
 // The existing `review:cycle` stays separately usable; the wrapper invokes it
@@ -402,6 +416,11 @@ export interface AgentTicketDeps {
   execute?: CommandExecutor;
   runWorker?: WorkerRunner;
   runGates?: (execute: CommandExecutor) => Promise<GateResult[]>;
+  // Attributable skill-evidence finalizer (ticket #116). Defaults to the
+  // deterministic evidence-capable seam over the worker's real stdout lines;
+  // tests inject a captor so unit runs never touch the filesystem. Failures
+  // are best-effort and never change the orchestration outcome.
+  finalizeEvidence?: EvidenceFinalizer;
   // Stage reporter for the durable run-status surface (ticket #31). Called
   // once per reached stage, in order; defaults to silence so local runs stay
   // quiet and existing callers are unaffected.
@@ -419,6 +438,41 @@ export interface AgentTicketDeps {
   // patch/metadata bundle when the correction touches `.github/workflows/**`;
   // defaults to the repository-local handoff paths, tests inject a captor.
   writeHandoff?: (input: { record: WorkflowHandoffRecord; patch: string }) => Promise<void> | void;
+}
+
+export type EvidenceFinalizer = (input: {
+  command: string;
+  axis: string;
+  attempt: number;
+  workerStartHead: string;
+  lines: readonly string[];
+}) => Promise<string | undefined>;
+
+async function defaultFinalizeEvidence(
+  execute: CommandExecutor,
+  input: {
+    command: string;
+    axis: string;
+    attempt: number;
+    workerStartHead: string;
+    lines: readonly string[];
+  },
+): Promise<string | undefined> {
+  try {
+    const result = await finalizeSkillEvidence({
+      invocation: buildEvidenceInvocation({
+        command: input.command,
+        axis: input.axis,
+        attempt: input.attempt,
+        workerStartHead: input.workerStartHead,
+      }),
+      lines: input.lines,
+      exporter: commandSessionExporter(execute),
+    });
+    return result.evidencePath;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface AgentTicketResult {
@@ -497,6 +551,34 @@ export async function runAgentTicket(
   const completedStages: string[] = [];
   const statusTarget = deps.status;
 
+  // Attributable skill evidence for the initial implementation worker
+  // (ticket #116). Persisted best-effort on success, error and timeout
+  // finalization; the pointer rides the existing outcome record additively
+  // and never changes orchestration semantics.
+  let skillEvidencePath: string | undefined;
+  const finalizeEvidence: EvidenceFinalizer =
+    deps.finalizeEvidence ?? ((input) => defaultFinalizeEvidence(execute, input));
+
+  async function settleImplementEvidence(
+    lines: readonly string[],
+    workerStartHead: string,
+  ): Promise<void> {
+    try {
+      const path = await finalizeEvidence({
+        command: 'implement',
+        axis: 'implement',
+        attempt: 1,
+        workerStartHead,
+        lines,
+      });
+      if (path !== undefined) {
+        skillEvidencePath = path;
+      }
+    } catch {
+      // Best-effort: evidence collection never changes the outcome.
+    }
+  }
+
   function workerForStage(stage: TicketStageName): string | undefined {
     if (stage === 'implementation') {
       return 'implement';
@@ -558,6 +640,7 @@ export async function runAgentTicket(
         startedAt: startedAtIso,
         completedStages: [...completedStages],
         ...(actionRequired === undefined ? {} : { actionRequired }),
+        ...(skillEvidencePath === undefined ? {} : { skillEvidencePath }),
       });
     } catch {
       // Best-effort: recording never changes the terminal outcome.
@@ -718,8 +801,12 @@ export async function runAgentTicket(
   reportStage('implementation');
   await publishStage('implementation', { branch, head: headBefore });
   try {
-    await runWorker('opencode', buildImplementArgs(ticket), 'implement');
+    const output = await runWorker('opencode', buildImplementArgs(ticket), 'implement');
+    await settleImplementEvidence(output.stdout.split('\n'), headBefore);
   } catch (error) {
+    // Error/timeout finalization still persists useful minimal evidence
+    // without masking the original exit or timeout (ticket #116).
+    await settleImplementEvidence([], headBefore);
     const timedOut = isWorkerTimeout(error);
     const reason = timedOut
       ? `/implement timed out for ticket #${String(ticket)}: ${errorMessage(error)}`

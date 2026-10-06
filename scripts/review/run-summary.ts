@@ -92,6 +92,10 @@ export interface RunSummary {
   // Worker timeout evidence where relevant: which worker exceeded which
   // bound. Absent when no timeout occurred.
   timeout?: TimeoutSummary;
+  // Additive attributable skill-evidence pointers (ticket #116): normalized
+  // evidence paths produced by evidence-capable workers in this cycle.
+  // Absent when no evidence was collected; never affects outcome semantics.
+  skillEvidencePaths?: string[];
 }
 
 export interface RecorderOptions {
@@ -143,6 +147,9 @@ export interface RunSummaryRecorder {
   // stale marker must never be marked completed.
   markCompleted(stage: string): void;
   recordTimeout(worker: string, timeoutMs: number): void;
+  // Additive skill-evidence pointer (ticket #116): records one normalized
+  // evidence path per evidence-capable worker invocation. Order preserved.
+  recordSkillEvidencePath(path: string): void;
   setMarkerRetries(retries: Record<ReviewAxis, number>): void;
   setQualityGates(gates: GateSummary[]): void;
   setCi(decision: CiDecision, runs?: CheckRunSummary[]): void;
@@ -177,6 +184,7 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
   let stage: string | undefined;
   const completedStages: string[] = [];
   let timeout: TimeoutSummary | undefined;
+  const skillEvidencePaths: string[] = [];
 
   function build(outcome: TerminalOutcome, detail: string | undefined): RunSummary {
     const endedAtMs = now();
@@ -217,6 +225,9 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
     }
     if (timeout !== undefined) {
       summary.timeout = { ...timeout };
+    }
+    if (skillEvidencePaths.length > 0) {
+      summary.skillEvidencePaths = [...skillEvidencePaths];
     }
     return summary;
   }
@@ -269,6 +280,9 @@ export function createRunSummaryRecorder(options: RecorderOptions = {}): RunSumm
     },
     recordTimeout(worker: string, timeoutMs: number) {
       timeout = { worker, timeoutMs };
+    },
+    recordSkillEvidencePath(path: string) {
+      skillEvidencePaths.push(path);
     },
     setMarkerRetries(retries: Record<ReviewAxis, number>) {
       markerRetries = { ...retries };

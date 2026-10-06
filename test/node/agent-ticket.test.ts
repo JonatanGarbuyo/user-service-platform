@@ -86,7 +86,15 @@ describe('agent:ticket state validation', () => {
 
 describe('agent:ticket command construction', () => {
   it('runs /implement headlessly without --agent (frontmatter owns the model)', () => {
-    expect(buildImplementArgs(10)).toEqual(['run', '--auto', '--command', 'implement', '10']);
+    expect(buildImplementArgs(10)).toEqual([
+      'run',
+      '--auto',
+      '--format',
+      'json',
+      '--command',
+      'implement',
+      '10',
+    ]);
     expect(buildImplementArgs(10)).not.toContain('--agent');
   });
 
@@ -268,7 +276,7 @@ function successScript(): Record<string, unknown> {
       'https://github.com/o/r/pull/42\n',
     'gh pr view --json number,headRefName,baseRefName,headRefOid,url':
       '{"number":42,"headRefName":"ticket/10-register-and-verify-an-email-identity","baseRefName":"main","headRefOid":"bbb","url":"https://github.com/o/r/pull/42"}\n',
-    'worker opencode run --auto --command implement 10': '',
+    'worker opencode run --auto --format json --command implement 10': '',
     'worker npm run review:cycle':
       'READY FOR FINAL ACCEPTANCE\nRun summary: .review-cycle/latest.json\n',
   };
@@ -484,7 +492,7 @@ describe('agent:ticket failure and escalation paths', () => {
 
   it('stops with durable branch evidence when /implement fails', async () => {
     const script = successScript();
-    script['worker opencode run --auto --command implement 10'] = Object.assign(
+    script['worker opencode run --auto --format json --command implement 10'] = Object.assign(
       new Error('opencode run --auto --command implement 10 failed (exit 1)'),
       { code: 1 },
     );

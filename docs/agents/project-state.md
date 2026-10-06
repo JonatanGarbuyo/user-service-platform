@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-05
+Last verified: 2026-10-06
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -76,7 +76,7 @@ Concrete model assignments are deliberately not duplicated here; read live `.ope
 
 ## Product frontier
 
-Verified on 2026-10-05 against live GitHub state; main is `48f7fecbb31680f9d9d1b188ee974c8e27eea28f`:
+Verified on 2026-10-06 against live GitHub state; main is `e885e1c84460b2af6c7aeceac156314645febba1`:
 
 - #9 health endpoint: closed/completed.
 - #10 register + verify email: closed/completed.
@@ -89,17 +89,21 @@ Verified on 2026-10-05 against live GitHub state; main is `48f7fecbb31680f9d9d1b
 - #80 unified target provisioning: closed/completed. PR #110 squash-merged as main commit `350d38f946f62353e735f3fca1f86f39a782efa3`; main CI `37332977075`, sandbox `37332976990`, Pages `37332975575` — all SUCCESS. No live provisioning was performed or authorized.
 - #111 Matt skills v1.3/glossary migration: closed/completed. PR #112 squash-merged as main commit `48f7fecbb31680f9d9d1b188ee974c8e27eea28f`; main CI `37333302162`, sandbox `37333302192`, Pages `37333300942` — all SUCCESS. It preserves glossary content, updates all consumers and three skill hashes, and records the tagged upstream comparison in [the audit](../research/matt-skills-v1.3-audit.md).
 - Integration-only PR #113 closed without merging; CI `37316405798` passed 142 Workers + 643 harness tests at combined tree `3685d7f1eaa376588909ae5133ac754b6bdd12e3`.
-- #114 complete local Matt skill dependencies and reconcile post-merge checkpoint: open. It vendors pinned `grilling` and `codebase-design` and reconciles this checkpoint with the merged main above.
+- #114 complete local Matt skill dependencies and reconcile post-merge checkpoint: closed/completed. PR #115 squash-merged as main commit `e885e1c84460b2af6c7aeceac156314645febba1`.
+- #116 spec (record attributable skill-tool evidence for remote agent runs): open parent specification; not for direct implementation.
+- #117 implementation (persist attributable skill evidence across remote workers and reconcile checkpoint): current work. Single approved slice of #116; no previous ticket reopened.
+
+GitHub-only skill-usage audit (25 worker runs: 16 fix-cycle + 9 ticket executions; 19 runs belong to #82; not productivity comparisons) is recorded separately from unavailable ChatGPT conversation data — no ChatGPT session dataset exists and none is inferred. Observed skill-tool minima: implement 17, code-review 13, tdd 10, custom better-typescript 5.
 
 Current execution frontier:
 
 ```text
-#114 local Matt skill dependencies + reconciled checkpoint
+#117 attributable skill evidence + reconciled checkpoint
   -> configured dual review + exact-HEAD CI
   -> final acceptance
 ```
 
-Merges #109/#110/#112 are complete on main. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls.
+Merges #109/#110/#112/#115 are complete on main. No stale unresolved dependency frontier remains. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls. Exact-HEAD CI for the #117 branch is pending PR publication and review.
 
 ## Remote execution/review gate
 
@@ -136,8 +140,8 @@ For #114, run the configured review cycle on the published HEAD. Preserve indepe
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The current open ticket inventory is #114 only; issues #80, #82 and #111 are closed and PRs #109, #110 and #112 are merged. Query GitHub before selecting new work.
-- #114 vendors the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
+- The current open ticket inventory is #116 (parent spec) and #117 (its single approved implementation slice); issues #80, #82, #111 and #114 are closed and PRs #109, #110, #112 and #115 are merged. Query GitHub before selecting new work.
+- #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
 
