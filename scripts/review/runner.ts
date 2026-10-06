@@ -164,25 +164,31 @@ export function reviewAxisWorker(axis: 'standards' | 'spec'): ReviewAxisWorker {
 // agent" warning. `--format json` streams real pinned CLI tool records for
 // attributable skill evidence (ticket #116) without changing model, agent or
 // permission resolution.
+//
+// The flag is additive through a single helper so the shipped builders share
+// one seam: frontmatter model/agent resolution, permissions and live
+// streaming behavior are unchanged.
+export function withJsonFormat(args: readonly string[]): string[] {
+  if (args.includes('--format')) {
+    return [...args];
+  }
+  const autoIndex = args.indexOf('--auto');
+  if (autoIndex >= 0) {
+    return [...args.slice(0, autoIndex + 1), '--format', 'json', ...args.slice(autoIndex + 1)];
+  }
+  return [...args, '--format', 'json'];
+}
+
 export function buildReviewAxisArgs(
   command: ReviewAxisName,
   prNumber: number,
   extraArgs: readonly string[] = [],
 ): string[] {
-  return [
-    'run',
-    '--auto',
-    '--format',
-    'json',
-    '--command',
-    command,
-    ...extraArgs,
-    String(prNumber),
-  ];
+  return withJsonFormat(['run', '--auto', '--command', command, ...extraArgs, String(prNumber)]);
 }
 
 export function buildAddressReviewArgs(prNumber: number): string[] {
-  return ['run', '--auto', '--format', 'json', '--command', 'address-review', String(prNumber)];
+  return withJsonFormat(['run', '--auto', '--command', 'address-review', String(prNumber)]);
 }
 
 export async function runReviewAxis(

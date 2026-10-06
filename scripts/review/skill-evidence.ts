@@ -18,7 +18,6 @@
 
 export const SKILL_EVIDENCE_VERSION = 1 as const;
 export const SKILL_EVIDENCE_DIR = '.agent-ticket/skill-evidence';
-export const SKILL_EVIDENCE_SUMMARY = '.agent-ticket/skill-evidence.json';
 
 // Explicit traversal bounds: missing/malformed/truncated streams, missing
 // exports, incorrect parentage, absent identifiers and bound exhaustion
@@ -338,21 +337,6 @@ export function parsePrimaryToolRecord(
     readLimit,
     childSessionId,
   };
-}
-
-// Splits streamed stdout chunks into complete lines, keeping a trailing
-// partial line buffered. Malformed/truncated trailing content stays buffered
-// and is reported as incomplete coverage rather than parsed.
-export function splitStreamLines(buffer: { text: string }, chunk: string): string[] {
-  buffer.text += chunk;
-  const lines: string[] = [];
-  let index = buffer.text.indexOf('\n');
-  while (index >= 0) {
-    lines.push(buffer.text.slice(0, index));
-    buffer.text = buffer.text.slice(index + 1);
-    index = buffer.text.indexOf('\n');
-  }
-  return lines;
 }
 
 export function collectPrimaryToolCalls(

@@ -11,7 +11,6 @@ import {
   parsePrimaryToolRecord,
   serializeSkillEvidence,
   skillNameFromRepoPath,
-  splitStreamLines,
   validatedSkillDir,
   type SkillEvidenceInvocation,
 } from '../../scripts/review/skill-evidence.js';
@@ -118,17 +117,15 @@ describe('primary tool record parsing', () => {
     expect(skillNameFromRepoPath('/etc/passwd')).toBeNull();
   });
 
-  it('splits chunked streams and reports malformed records honestly', () => {
-    const buffer = { text: '' };
-    const first = splitStreamLines(buffer, toolLine({ call: 'c1' }).slice(0, 20));
-    expect(first).toEqual([]);
-    const rest = splitStreamLines(buffer, `${toolLine({ call: 'c1' }).slice(20)}\nnot-json\n`);
-    expect(rest).toHaveLength(2);
-    const collected = collectPrimaryToolCalls(rest);
+  it('reports malformed stream fragments honestly', () => {
+    const lines = [toolLine({ call: 'c1' }), 'not-json'];
+    expect(lines).toHaveLength(2);
+    const collected = collectPrimaryToolCalls(lines);
     expect(collected.calls).toHaveLength(1);
     // A non-JSON line in a `--format json` stream is a truncated fragment or
     // unexpected payload: never a skill source, but counted so coverage
-    // cannot claim false completeness.
+    // cannot claim false completeness. Chunk splitting itself is covered on
+    // the shipped `runWorkerStream` seam, not a separate splitter helper.
     expect(collected.malformed).toBe(1);
   });
 

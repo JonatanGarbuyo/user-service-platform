@@ -19,6 +19,7 @@ import {
   getPrForBranch,
   isWorktreeClean,
   runCommand,
+  withJsonFormat,
   type CommandExecutor,
 } from '../review/runner.js';
 import { checkSafePush, type SafePushCheck } from '../review/safe-push.js';
@@ -201,7 +202,7 @@ export function ticketBranchName(ticket: number, title: string): string {
 // CLI tool records so attributable skill evidence can be collected
 // (ticket #116); live streaming, heartbeats and timeout bounds are unchanged.
 export function buildImplementArgs(ticket: number): string[] {
-  return ['run', '--auto', '--format', 'json', '--command', 'implement', String(ticket)];
+  return withJsonFormat(['run', '--auto', '--command', 'implement', String(ticket)]);
 }
 
 // The existing `review:cycle` stays separately usable; the wrapper invokes it

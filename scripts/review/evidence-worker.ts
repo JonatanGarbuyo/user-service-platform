@@ -23,7 +23,7 @@ import {
   type SkillEvidenceRecord,
   type SkillEvidenceWorker,
 } from './skill-evidence.js';
-import { runBoundedCommand, type CommandExecutor } from './runner.js';
+import { runBoundedCommand, withJsonFormat, type CommandExecutor } from './runner.js';
 
 export const SKILL_EVIDENCE_PATH_MESSAGE_PREFIX = 'Skill evidence:';
 
@@ -46,26 +46,19 @@ export function formatEvidencePathMessage(latestPath: string): string {
   return `${SKILL_EVIDENCE_PATH_MESSAGE_PREFIX} ${latestPath}`;
 }
 
-// Workers emit real JSON tool records with `--format json` on the pinned
-// CLI. The flag is additive: frontmatter model/agent resolution, permissions
-// and live streaming behavior are unchanged.
-export function withJsonFormat(args: readonly string[]): string[] {
-  if (args.includes('--format')) {
-    return [...args];
-  }
-  return [...args, '--format', 'json'];
-}
+// `withJsonFormat` is the single additive `--format json` seam for shipped
+// worker builders in `runner.ts`/`ticket-flow.ts`. Re-exported here so
+// existing evidence-worker imports keep working on the same production path.
+export { withJsonFormat };
 
 export interface EvidenceCapture {
   lines: string[];
   pushLine: (line: string) => void;
-  pushChunk: (chunk: string) => void;
   wasTruncated: () => boolean;
 }
 
 export function createEvidenceCapture(): EvidenceCapture {
   const lines: string[] = [];
-  let trailing = '';
   let truncated = false;
   const pushLine = (line: string): void => {
     if (line.length > MAX_CAPTURED_LINE_LENGTH) {
@@ -81,19 +74,6 @@ export function createEvidenceCapture(): EvidenceCapture {
     lines,
     pushLine,
     wasTruncated: () => truncated,
-    pushChunk: (chunk: string): void => {
-      trailing += chunk.slice(0, MAX_CAPTURED_LINE_LENGTH);
-      if (trailing.length > MAX_CAPTURED_LINE_LENGTH * 2) {
-        trailing = trailing.slice(-MAX_CAPTURED_LINE_LENGTH);
-        truncated = true;
-      }
-      let index = trailing.indexOf('\n');
-      while (index >= 0) {
-        pushLine(trailing.slice(0, index));
-        trailing = trailing.slice(index + 1);
-        index = trailing.indexOf('\n');
-      }
-    },
   };
 }
 
@@ -294,9 +274,10 @@ export async function finalizeSkillEvidence(
   const discovered = discoverChildSessionIds(collected.calls, primarySessionId);
   const childExports: Record<string, SessionExportInput | null> = {};
   const exportFailures: string[] = [...(input.exportFailures ?? [])];
-  if (collected.truncated) {
-    exportFailures.push('primary stream truncated at bound');
-  }
+  // Truncation reasons are single-sourced in `buildSkillEvidence` (which
+  // re-examines the same lines plus `truncatedStream`): pushing the same
+  // reason here would persist it twice. `collected`/`discovered` above stay
+  // only to know which verified child exports to fetch before building.
   if (input.exporter !== undefined) {
     for (const childId of discovered.childIds) {
       try {

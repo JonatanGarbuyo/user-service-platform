@@ -22,7 +22,8 @@ import {
   withJsonFormat,
 } from '../../scripts/review/evidence-worker.js';
 import { buildSkillEvidence } from '../../scripts/review/skill-evidence.js';
-import { buildAddressReviewArgs } from '../../scripts/review/runner.js';
+import { buildAddressReviewArgs, buildReviewAxisArgs } from '../../scripts/review/runner.js';
+import { buildImplementArgs } from '../../scripts/agent/ticket-flow.js';
 import { runWorkerStream, type SpawnedWorker } from '../../scripts/review/worker-stream.js';
 
 // Seam under test: evidence-capable worker routing (ticket #116).
@@ -80,15 +81,34 @@ describe('evidence worker invocation shape', () => {
     expect(withJsonFormat(['run', '--auto', '--command', 'implement', '10'])).toEqual([
       'run',
       '--auto',
+      '--format',
+      'json',
+      '--command',
+      'implement',
+      '10',
+    ]);
+    expect(withJsonFormat(['run', '--format', 'json'])).toEqual(['run', '--format', 'json']);
+    expect(withJsonFormat(['run', '--command', 'implement', '10'])).toEqual([
+      'run',
       '--command',
       'implement',
       '10',
       '--format',
       'json',
     ]);
-    expect(withJsonFormat(['run', '--format', 'json'])).toEqual(['run', '--format', 'json']);
     expect(buildAddressReviewArgs(7)).toContain('--format');
     expect(buildAddressReviewArgs(7)).not.toContain('--agent');
+    // The shipped builders share the single helper seam, so the flag
+    // invariant is protected where the code runs, not only on the helper.
+    expect(buildImplementArgs(10)).toEqual(
+      withJsonFormat(['run', '--auto', '--command', 'implement', '10']),
+    );
+    expect(buildReviewAxisArgs('review-standards', 17)).toEqual(
+      withJsonFormat(['run', '--auto', '--command', 'review-standards', '17']),
+    );
+    expect(buildAddressReviewArgs(7)).toEqual(
+      withJsonFormat(['run', '--auto', '--command', 'address-review', '7']),
+    );
   });
 
   it('attributes invocations to worker/command/axis/attempt/HEAD with unknown GitHub IDs locally', () => {
@@ -502,6 +522,55 @@ describe('evidence-enabled worker diagnostics', () => {
       expect(result.evidencePath).toContain('review-cycle-review-standards-standards-1.json');
       const persisted = [...written.values()].join('\n');
       expect(persisted).toContain('"status": "incomplete"');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('reports the primary-stream bound once through capture -> finalizer -> artifact', async () => {
+    const lines = Array.from({ length: 600 }, (_, index) =>
+      toolLine(`c-bound-${String(index)}`, 'ses-1'),
+    );
+    const capture = createEvidenceCapture();
+    for (const line of lines) {
+      capture.pushLine(line);
+    }
+    expect(capture.wasTruncated()).toBe(false);
+
+    const written = new Map<string, string>();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const result = await finalizeSkillEvidence(
+        {
+          invocation: buildEvidenceInvocation({
+            worker: 'agent-ticket',
+            command: 'implement',
+            axis: 'implement',
+            attempt: 1,
+            workerStartHead: 'a'.repeat(40),
+            env: {},
+          }),
+          lines: capture.lines,
+          truncatedStream: capture.wasTruncated(),
+        },
+        {
+          mkdir: () => Promise.resolve(),
+          writeFile: (path: string, contents: string) => {
+            written.set(path, contents);
+            return Promise.resolve();
+          },
+        },
+      );
+
+      expect(result.record.coverage.status).toBe('incomplete');
+      const boundReasons = result.record.coverage.reasons.filter(
+        (reason) => reason === 'primary stream truncated at bound',
+      );
+      expect(boundReasons).toHaveLength(1);
+      const persisted = written.get(result.evidencePath ?? '') ?? [...written.values()].join('\n');
+      expect(persisted).toContain('primary stream truncated at bound');
+      const persistedCount = persisted.split('primary stream truncated at bound').length - 1;
+      expect(persistedCount).toBe(1);
     } finally {
       logSpy.mockRestore();
     }
