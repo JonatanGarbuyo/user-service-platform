@@ -47,8 +47,12 @@ npx skills@latest add mattpocock/skills \
   --skill code-review \
   --skill implement \
   --skill handoff \
+  --skill grilling \
+  --skill codebase-design \
   -y
 ```
+
+`grilling` (`skills/productivity/grilling`) and `codebase-design` (`skills/engineering/codebase-design`) were vendored from `mattpocock/skills` tag `v1.3.1` at commit `24fe0ef7737efae15c87225755e9f6f5965e4888`.
 
 OpenCode discovers these from `.agents/skills/`. The installed skills and lock metadata should be committed so implementation agents share the same workflow version. See `docs/agents/opencode.md`.
 

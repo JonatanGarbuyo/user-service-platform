@@ -76,7 +76,7 @@ Concrete model assignments are deliberately not duplicated here; read live `.ope
 
 ## Product frontier
 
-Verified on 2026-10-05 against live GitHub state; main is `ab6b3da672ccc9f463957a6e87d0a6e93a8e3f57`:
+Verified on 2026-10-05 against live GitHub state; main is `48f7fecbb31680f9d9d1b188ee974c8e27eea28f`:
 
 - #9 health endpoint: closed/completed.
 - #10 register + verify email: closed/completed.
@@ -85,21 +85,21 @@ Verified on 2026-10-05 against live GitHub state; main is `ab6b3da672ccc9f463957
 - #13 production auth email: closed/completed. PR #53 passed Standards, Spec, repository gates, and exact-HEAD CI on `364bc5afddb93bdbfd4aedf6dd7b2c9b63228943`; ChatGPT performed the final squash merge with expected-head protection. Main commit: `66cc6fe85f12dae516d7226abb5867acce0ed823`.
 - #14 sandbox promotion: closed/completed. Canonical target is sandbox, not staging.
 - #78 client-aware deployer/target registry, #104 required-secret declarations, and #106 rejection of plaintext required-secret bindings: closed/completed. Their isolation and secret-binding contracts govern provisioning.
-- #82 Actions noise/trusted-handoff CI provenance: open, with non-draft PR #109 at `3bd2c030287c1783d668888aa4fd60c2434c418e`. [Standards](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5961762044) and [Spec](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5961613539) PASS on that exact HEAD, as does [CI37065342546](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37065342546). [Cycle37065341168](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37065341168) reached READY. Final verification is complete; merge remains pending separately authorized deployment effects.
-- #80 unified target provisioning: open, with non-draft PR #110 at `4ffea00d3fc50c91c1185e37d94744ffa4165554`. The supported pinned-Wrangler create/rediscovery contract correction is implemented. [Standards](https://github.com/JonatanGarbuyo/user-service-platform/pull/110#issuecomment-5962145354), [Spec](https://github.com/JonatanGarbuyo/user-service-platform/pull/110#issuecomment-5962137332), and [CI37069008402](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37069008402) PASS on that HEAD; the [cycle](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/37065171413) reached READY. Final verification is complete; merge remains pending. No live provisioning was performed or authorized.
-- #111 Matt skills v1.3/glossary migration: open, with draft PR #112. It preserves glossary content, updates all consumers and three skill hashes, and records the tagged upstream comparison in [the audit](../research/matt-skills-v1.3-audit.md). CI passed on the initial published HEAD. This checkpoint correction changes the HEAD; fresh configured Standards/Spec reviews and exact-HEAD CI are required before final acceptance. Resolve the live PR SHA and evidence rather than using the initial HEAD's CI.
+- #82 Actions noise/trusted-handoff CI provenance: closed/completed. PR #109 squash-merged as main commit `1244fd71885acea3fff4a274deda8e7e78a683cd`; main CI `37332657770`, sandbox `37332657707`, Pages `37332655536` — all SUCCESS.
+- #80 unified target provisioning: closed/completed. PR #110 squash-merged as main commit `350d38f946f62353e735f3fca1f86f39a782efa3`; main CI `37332977075`, sandbox `37332976990`, Pages `37332975575` — all SUCCESS. No live provisioning was performed or authorized.
+- #111 Matt skills v1.3/glossary migration: closed/completed. PR #112 squash-merged as main commit `48f7fecbb31680f9d9d1b188ee974c8e27eea28f`; main CI `37333302162`, sandbox `37333302192`, Pages `37333300942` — all SUCCESS. It preserves glossary content, updates all consumers and three skill hashes, and records the tagged upstream comparison in [the audit](../research/matt-skills-v1.3-audit.md).
+- Integration-only PR #113 closed without merging; CI `37316405798` passed 142 Workers + 643 harness tests at combined tree `3685d7f1eaa376588909ae5133ac754b6bdd12e3`.
+- #114 complete local Matt skill dependencies and reconcile post-merge checkpoint: open. It vendors pinned `grilling` and `codebase-design` and reconciles this checkpoint with the merged main above.
 
 Current execution frontier:
 
 ```text
-#111 glossary migration + current checkpoint
+#114 local Matt skill dependencies + reconciled checkpoint
   -> configured dual review + exact-HEAD CI
   -> final acceptance
-#82 and #80 verified PRs
-  -> separately authorized merge/deployment effects
 ```
 
-Do not restart #80 or #82 implementation while their unchanged HEADs retain valid evidence. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls.
+Merges #109/#110/#112 are complete on main. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls.
 
 ## Remote execution/review gate
 
@@ -129,17 +129,15 @@ Review/execution invariants:
 
 The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-platform/pull/109#issuecomment-5944424053) is historical. The maintainer approved the Standards model recovery in [source-ticket decision5952117927](https://github.com/JonatanGarbuyo/user-service-platform/issues/82#issuecomment-5952117927). Main commit `9cc8e30d0d5ac002d0b5a82d2ff9863b1bc56d88` adopts only the independently reviewed and exact-HEAD-CI-tested operational configuration, matching marker identity, provenance instructions and regression fixtures. Read live reviewer configuration rather than copying model assignments from this checkpoint.
 
-The former Standards startup and trusted-approval blockers are resolved on PR #109's current exact HEAD, as demonstrated by the evidence above. Main still uses the pre-#82 workflow policy until that PR is merged: branch pushes and PR events both run CI, ordinary comments may allocate agent runners before the downstream guard skips them, and the schedule remains the existing backstop. Do not attribute the unmerged PR's prefilters, PR-only branch CI, or approver changes to main.
+The former Standards startup and trusted-approval blockers are resolved and merged on main through PR #109. The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; dependency restoration remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; dependency restoration remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
-
-For #112, run the configured review cycle only after publishing the checkpoint correction. Preserve independent reviewer identities and exact-HEAD evidence. The last-25-session skill-usage audit remains blocked: Personal Context is disabled and no session exports were supplied. The available-evidence recommendations do not establish invocation frequencies.
+For #114, run the configured review cycle on the published HEAD. Preserve independent reviewer identities and exact-HEAD evidence. The last-25-session skill-usage audit remains blocked: Personal Context is disabled and no session exports were supplied. The available-evidence recommendations do not establish invocation frequencies.
 
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The current open ticket inventory is #80, #82 and #111, with PRs #110, #109 and #112 respectively; query GitHub before selecting new work.
-- The v1.3 audit identifies missing local `grilling` and `codebase-design` dependencies. Add them through a separate scoped ticket; retro/pr adoption and an implement-spec integration workflow are follow-up decisions, not part of the glossary migration.
+- The current open ticket inventory is #114 only; issues #80, #82 and #111 are closed and PRs #109, #110 and #112 are merged. Query GitHub before selecting new work.
+- #114 vendors the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
 
