@@ -227,6 +227,50 @@ function extractRunSteps(workflowText: string): string[] {
   return steps;
 }
 
+// Ordered step reader: name/uses/run of every step across all jobs, so
+// ordering contracts (checkout -> install -> invoke) are checked against the
+// parsed document rather than against raw text.
+interface WorkflowStep {
+  name?: string;
+  uses?: string;
+  run?: string;
+}
+
+function extractWorkflowSteps(workflowText: string): WorkflowStep[] {
+  const parsed: unknown = parseYaml(workflowText);
+  const doc = asRecord(parsed);
+  const jobs = doc === undefined ? undefined : asRecord(doc.jobs);
+  if (jobs === undefined) {
+    return [];
+  }
+  const steps: WorkflowStep[] = [];
+  for (const job of Object.values(jobs)) {
+    const jobRecord = asRecord(job);
+    const jobSteps = jobRecord === undefined ? undefined : jobRecord.steps;
+    if (!Array.isArray(jobSteps)) {
+      continue;
+    }
+    for (const entry of jobSteps) {
+      const step = asRecord(entry);
+      if (step === undefined) {
+        continue;
+      }
+      const parsedStep: WorkflowStep = {};
+      if (typeof step.name === 'string') {
+        parsedStep.name = step.name;
+      }
+      if (typeof step.uses === 'string') {
+        parsedStep.uses = step.uses;
+      }
+      if (typeof step.run === 'string') {
+        parsedStep.run = step.run;
+      }
+      steps.push(parsedStep);
+    }
+  }
+  return steps;
+}
+
 function runStepsReferenceCommentBody(runSteps: string[]): boolean {
   return runSteps.some((step) => step.includes('github.event.comment.body'));
 }
@@ -340,6 +384,32 @@ describe('agent workflow contracts', () => {
     expect(verificationIndex).toBeGreaterThan(-1);
     expect(verificationIndex).toBeLessThan(addressReviewIndex);
   });
+
+  it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
+    'installs dependencies for the checked-out tree after the last checkout before agent commands on %s',
+    (name) => {
+      const steps = extractWorkflowSteps(readWorkflow(name));
+      const invocations = steps.filter((step) => /\bnpm run \S/.test(step.run ?? ''));
+
+      // Fail closed: the invariant must never pass vacuously.
+      expect(invocations.length).toBeGreaterThan(0);
+      for (const invocation of invocations) {
+        const invokeIndex = steps.indexOf(invocation);
+        let lastCheckout = -1;
+        for (let index = 0; index < invokeIndex; index += 1) {
+          if (steps[index]?.uses?.startsWith('actions/checkout')) {
+            lastCheckout = index;
+          }
+        }
+        const installIndex = steps.findIndex(
+          (step, index) =>
+            index > lastCheckout && index < invokeIndex && step.run?.trim() === 'npm ci',
+        );
+        expect(installIndex).toBeGreaterThan(-1);
+        expect(installIndex).toBeGreaterThan(lastCheckout);
+      }
+    },
+  );
 
   it.each(['agent-ticket.yml', 'agent-fix-cycle.yml'])(
     'never merges, deploys, publishes, or pushes main on %s',
