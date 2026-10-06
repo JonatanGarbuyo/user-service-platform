@@ -21,8 +21,9 @@ import {
   type SessionExportInput,
   type SkillEvidenceInvocation,
   type SkillEvidenceRecord,
+  type SkillEvidenceWorker,
 } from './skill-evidence.js';
-import type { CommandExecutor } from './runner.js';
+import { runBoundedCommand, type CommandExecutor } from './runner.js';
 
 export const SKILL_EVIDENCE_PATH_MESSAGE_PREFIX = 'Skill evidence:';
 
@@ -30,6 +31,11 @@ export const SKILL_EVIDENCE_PATH_MESSAGE_PREFIX = 'Skill evidence:';
 // an export that never returns becomes an honest export failure, never a
 // hung evidence step. The worker's own watchdog bound still owns the worker.
 export const SESSION_EXPORT_TIMEOUT_MS = 60_000;
+
+// Output-size bound for a single session export: exports larger than this are
+// truncated before parsing (which then yields an honest export failure
+// instead of unbounded memory growth).
+export const SESSION_EXPORT_MAX_BYTES = 5 * 1024 * 1024;
 
 // Capture bounds: streamed worker output is unbounded, so evidence keeps a
 // bounded prefix of complete lines plus a bounded trailing fragment.
@@ -62,6 +68,9 @@ export function createEvidenceCapture(): EvidenceCapture {
   let trailing = '';
   let truncated = false;
   const pushLine = (line: string): void => {
+    if (line.length > MAX_CAPTURED_LINE_LENGTH) {
+      truncated = true;
+    }
     if (lines.length < MAX_CAPTURED_LINES) {
       lines.push(line.slice(0, MAX_CAPTURED_LINE_LENGTH));
     } else {
@@ -90,33 +99,94 @@ export function createEvidenceCapture(): EvidenceCapture {
 
 export type SessionExporter = (sessionId: string) => Promise<SessionExportInput | null>;
 
-export function commandSessionExporter(execute: CommandExecutor): SessionExporter {
+export interface SessionExportBounds {
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+// Structured `--format json` worker event lines (ticket #116) carry raw tool
+// parts, model text, reasoning and tool output. Evidence-enabled workers
+// capture these lines but must not echo them to the console: pass
+// `suppressJsonWorkerLines` as `stdoutLogFilter` so only unstructured
+// lifecycle/progress lines are logged while every line is still captured.
+const JSON_WORKER_EVENT_TYPES = new Set([
+  'tool_use',
+  'text',
+  'reasoning',
+  'step_start',
+  'step_finish',
+  'error',
+]);
+
+export function isJsonWorkerEventLine(line: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return false;
+  }
+  const type = (parsed as Record<string, unknown>).type;
+  return typeof type === 'string' && JSON_WORKER_EVENT_TYPES.has(type);
+}
+
+export function suppressJsonWorkerLines(line: string): boolean {
+  return !isJsonWorkerEventLine(line);
+}
+
+export function commandSessionExporter(
+  execute: CommandExecutor = (command, args) =>
+    runBoundedCommand(command, args, {
+      timeoutMs: SESSION_EXPORT_TIMEOUT_MS,
+      maxBufferBytes: SESSION_EXPORT_MAX_BYTES,
+    }),
+  bounds: SessionExportBounds = {},
+): SessionExporter {
+  const timeoutMs = bounds.timeoutMs ?? SESSION_EXPORT_TIMEOUT_MS;
+  const maxBytes = bounds.maxBytes ?? SESSION_EXPORT_MAX_BYTES;
   return async (sessionId: string): Promise<SessionExportInput | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         resolve(null);
-      }, SESSION_EXPORT_TIMEOUT_MS);
+      }, timeoutMs);
       if (typeof timer.unref === 'function') {
         timer.unref();
       }
     });
+    // The default executor terminates the export child on timeout and caps
+    // output; the race backstop additionally bounds injectable executors.
+    // Either way the timer is always cleaned up and no payload is logged:
+    // diagnostics stay fixed metadata-only strings at the caller.
     const fetched = (async (): Promise<SessionExportInput | null> => {
       try {
         const { stdout } = await execute('opencode', ['export', sessionId]);
-        const parsed: unknown = JSON.parse(stdout) as unknown;
+        const bounded = stdout.length > maxBytes ? stdout.slice(0, maxBytes) : stdout;
+        const parsed: unknown = JSON.parse(bounded) as unknown;
         if (typeof parsed !== 'object' || parsed === null) {
           return null;
         }
         return parsed;
       } catch {
         return null;
+      } finally {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
       }
     })();
-    return Promise.race([fetched, timeout]);
+    const result = await Promise.race([fetched, timeout]);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    return result;
   };
 }
 
 export interface EvidenceInvocationInput {
+  worker: SkillEvidenceWorker;
   command: string;
   axis: string;
   attempt?: number;
@@ -127,6 +197,7 @@ export interface EvidenceInvocationInput {
 export function buildEvidenceInvocation(input: EvidenceInvocationInput): SkillEvidenceInvocation {
   const attribution = readGitHubAttribution(input.env ?? process.env);
   return {
+    worker: input.worker,
     command: input.command,
     axis: input.axis,
     attempt: input.attempt ?? 1,
@@ -202,6 +273,7 @@ export interface FinalizeEvidenceInput {
   exporter?: SessionExporter;
   exportFailures?: readonly string[];
   truncatedStream?: boolean;
+  worktreeRoot?: string;
 }
 
 export interface FinalizeEvidenceResult {
@@ -251,6 +323,7 @@ export async function finalizeSkillEvidence(
     childExports,
     exportFailures,
     truncatedStream: input.truncatedStream,
+    ...(input.worktreeRoot === undefined ? {} : { worktreeRoot: input.worktreeRoot }),
   });
   try {
     const { evidencePath } = await persistSkillEvidence(record, deps);

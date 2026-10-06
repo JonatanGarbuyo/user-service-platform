@@ -17,6 +17,40 @@ export async function runCommand(command: string, args: readonly string[]): Prom
   return { stdout: stdout, stderr: stderr };
 }
 
+export interface BoundedCommandOptions {
+  timeoutMs: number;
+  maxBufferBytes: number;
+  killSignal?: NodeJS.Signals;
+}
+
+// Bounded read-only subprocess seam (ticket #116): unlike `runCommand`, the
+// child is terminated on timeout (`timeout` kills with `killSignal`) and
+// output is capped at `maxBufferBytes`, so a hung or gigantic session export
+// can neither stall the worker nor exhaust memory. Rejections (including
+// timeout kills) carry the command context without payload contents.
+export async function runBoundedCommand(
+  command: string,
+  args: readonly string[],
+  options: BoundedCommandOptions,
+): Promise<CommandResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, [...args], {
+      maxBuffer: options.maxBufferBytes,
+      timeout: options.timeoutMs,
+      killSignal: options.killSignal ?? 'SIGTERM',
+    });
+    return { stdout: stdout, stderr: stderr };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `bounded command ${command} ${args.join(' ')} failed: ${detail.slice(0, 200)}`,
+      {
+        cause: error,
+      },
+    );
+  }
+}
+
 export async function getCurrentHead(execute: CommandExecutor = runCommand): Promise<string> {
   const { stdout } = await execute('git', ['rev-parse', 'HEAD']);
   return stdout.trim();

@@ -26,7 +26,9 @@ import { requestApprovalDispatch } from '../review/approve-agent-ci.js';
 import {
   buildEvidenceInvocation,
   commandSessionExporter,
+  createEvidenceCapture,
   finalizeSkillEvidence,
+  suppressJsonWorkerLines,
 } from '../review/evidence-worker.js';
 import { getRepoSlug } from '../review/pr-checks.js';
 import { runWorkerStream } from '../review/worker-stream.js';
@@ -441,33 +443,36 @@ export interface AgentTicketDeps {
 }
 
 export type EvidenceFinalizer = (input: {
+  worker: 'agent-ticket';
   command: string;
   axis: string;
   attempt: number;
   workerStartHead: string;
   lines: readonly string[];
+  truncatedStream?: boolean;
 }) => Promise<string | undefined>;
 
-async function defaultFinalizeEvidence(
-  execute: CommandExecutor,
-  input: {
-    command: string;
-    axis: string;
-    attempt: number;
-    workerStartHead: string;
-    lines: readonly string[];
-  },
-): Promise<string | undefined> {
+async function defaultFinalizeEvidence(input: {
+  worker: 'agent-ticket';
+  command: string;
+  axis: string;
+  attempt: number;
+  workerStartHead: string;
+  lines: readonly string[];
+  truncatedStream?: boolean;
+}): Promise<string | undefined> {
   try {
     const result = await finalizeSkillEvidence({
       invocation: buildEvidenceInvocation({
+        worker: input.worker,
         command: input.command,
         axis: input.axis,
         attempt: input.attempt,
         workerStartHead: input.workerStartHead,
       }),
       lines: input.lines,
-      exporter: commandSessionExporter(execute),
+      exporter: commandSessionExporter(),
+      ...(input.truncatedStream === undefined ? {} : { truncatedStream: input.truncatedStream }),
     });
     return result.evidencePath;
   } catch {
@@ -557,19 +562,22 @@ export async function runAgentTicket(
   // and never changes orchestration semantics.
   let skillEvidencePath: string | undefined;
   const finalizeEvidence: EvidenceFinalizer =
-    deps.finalizeEvidence ?? ((input) => defaultFinalizeEvidence(execute, input));
+    deps.finalizeEvidence ?? ((input) => defaultFinalizeEvidence(input));
 
   async function settleImplementEvidence(
     lines: readonly string[],
     workerStartHead: string,
+    truncatedStream?: boolean,
   ): Promise<void> {
     try {
       const path = await finalizeEvidence({
+        worker: 'agent-ticket',
         command: 'implement',
         axis: 'implement',
         attempt: 1,
         workerStartHead,
         lines,
+        ...(truncatedStream === undefined ? {} : { truncatedStream }),
       });
       if (path !== undefined) {
         skillEvidencePath = path;
@@ -577,6 +585,17 @@ export async function runAgentTicket(
     } catch {
       // Best-effort: evidence collection never changes the outcome.
     }
+  }
+
+  // Worker failures carry no stdout through the `WorkerRunner` seam, but an
+  // injected runner may attach the partial stream it observed. The default
+  // streaming route below always has its capture instead.
+  function partialStdoutLines(error: unknown): readonly string[] {
+    const stdout: unknown = (error as { stdout?: unknown }).stdout;
+    if (typeof stdout !== 'string' || stdout === '') {
+      return [];
+    }
+    return stdout.split('\n');
   }
 
   function workerForStage(stage: TicketStageName): string | undefined {
@@ -800,13 +819,46 @@ export async function runAgentTicket(
   const headBefore = mainHead;
   reportStage('implementation');
   await publishStage('implementation', { branch, head: headBefore });
+  // The default route streams worker stdout through an evidence capture so
+  // events observed before an error or timeout survive with the original
+  // outcome. Injected runners (tests) report their own completed stdout, or
+  // partial stdout attached to a thrown error.
+  const implementCapture = deps.runWorker === undefined ? createEvidenceCapture() : null;
   try {
-    const output = await runWorker('opencode', buildImplementArgs(ticket), 'implement');
-    await settleImplementEvidence(output.stdout.split('\n'), headBefore);
+    if (runWorker === defaultWorkerRunner) {
+      const capture = implementCapture ?? createEvidenceCapture();
+      await runWorkerStream(
+        'opencode',
+        buildImplementArgs(ticket),
+        {
+          label: 'implement',
+          timeoutMs: timeoutForWorker('implement'),
+          stdoutLogFilter: suppressJsonWorkerLines,
+        },
+        undefined,
+        {
+          onStdoutLine: (line) => {
+            capture.pushLine(line);
+          },
+        },
+      );
+      await settleImplementEvidence([...capture.lines], headBefore, capture.wasTruncated());
+    } else {
+      const output = await runWorker('opencode', buildImplementArgs(ticket), 'implement');
+      await settleImplementEvidence(output.stdout.split('\n'), headBefore);
+    }
   } catch (error) {
     // Error/timeout finalization still persists useful minimal evidence
     // without masking the original exit or timeout (ticket #116).
-    await settleImplementEvidence([], headBefore);
+    if (implementCapture !== null) {
+      await settleImplementEvidence(
+        [...implementCapture.lines],
+        headBefore,
+        implementCapture.wasTruncated(),
+      );
+    } else {
+      await settleImplementEvidence(partialStdoutLines(error), headBefore);
+    }
     const timedOut = isWorkerTimeout(error);
     const reason = timedOut
       ? `/implement timed out for ticket #${String(ticket)}: ${errorMessage(error)}`

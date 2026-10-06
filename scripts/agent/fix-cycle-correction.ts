@@ -9,12 +9,13 @@
 // and leaves `.address-review-timeout` for the workflow terminal step, while
 // evidence failures never mask the correction outcome.
 import * as fs from 'node:fs/promises';
-import { buildAddressReviewArgs, getCurrentHead, runCommand } from '../review/runner.js';
+import { buildAddressReviewArgs, getCurrentHead } from '../review/runner.js';
 import {
   buildEvidenceInvocation,
   commandSessionExporter,
   createEvidenceCapture,
   finalizeSkillEvidence,
+  suppressJsonWorkerLines,
 } from '../review/evidence-worker.js';
 import { isWorkerTimeout, timeoutForWorker } from '../review/worker-timeout.js';
 import { runWorkerStream } from '../review/worker-stream.js';
@@ -39,11 +40,13 @@ export type FixCycleWorker = (
 ) => Promise<void>;
 
 export type FixCycleEvidence = (input: {
+  worker: 'agent-fix-cycle';
   command: string;
   axis: string;
   attempt: number;
   workerStartHead: string;
   lines: readonly string[];
+  truncatedStream?: boolean;
 }) => Promise<string | undefined>;
 
 export interface FixCycleCorrectionDeps {
@@ -68,29 +71,37 @@ async function defaultRunWorker(
   await runWorkerStream(
     command,
     args,
-    { label: 'address-review', timeoutMs: timeoutForWorker('address-review') },
+    {
+      label: 'address-review',
+      timeoutMs: timeoutForWorker('address-review'),
+      stdoutLogFilter: suppressJsonWorkerLines,
+    },
     undefined,
     { onStdoutLine: onLine },
   );
 }
 
 async function defaultFinalizeEvidence(input: {
+  worker: 'agent-fix-cycle';
   command: string;
   axis: string;
   attempt: number;
   workerStartHead: string;
   lines: readonly string[];
+  truncatedStream?: boolean;
 }): Promise<string | undefined> {
   try {
     const result = await finalizeSkillEvidence({
       invocation: buildEvidenceInvocation({
+        worker: input.worker,
         command: input.command,
         axis: input.axis,
         attempt: input.attempt,
         workerStartHead: input.workerStartHead,
       }),
       lines: input.lines,
-      exporter: commandSessionExporter(runCommand),
+      exporter: commandSessionExporter(),
+      ...(input.truncatedStream === undefined ? {} : { truncatedStream: input.truncatedStream }),
     });
     return result.evidencePath;
   } catch {
@@ -126,11 +137,13 @@ export async function runFixCycleCorrection(
   const settleEvidence = async (): Promise<string | undefined> => {
     try {
       return await finalizeEvidence({
+        worker: 'agent-fix-cycle',
         command: 'address-review',
         axis: 'address-review',
         attempt: 1,
         workerStartHead,
         lines: capture.lines,
+        truncatedStream: capture.wasTruncated(),
       });
     } catch {
       return undefined;

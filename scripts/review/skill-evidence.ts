@@ -33,7 +33,16 @@ export type SkillEvidenceKind = 'skill-invocation' | 'skill-attempt' | 'skill-fi
 
 export type SkillCoverageStatus = 'complete' | 'incomplete' | 'unavailable';
 
+// Deterministic worker-invocation identity (ticket #116). `worker` names the
+// orchestration context (`agent-ticket`, `review-cycle`, `agent-fix-cycle`)
+// so separate correction invocations that share command/axis/attempt — the
+// initial fix-cycle correction and the first review-loop correction — persist
+// distinct artifacts instead of overwriting each other. Concurrent axes keep
+// their own command/axis alongside it.
+export type SkillEvidenceWorker = 'agent-ticket' | 'review-cycle' | 'agent-fix-cycle';
+
 export interface SkillEvidenceInvocation {
+  worker: SkillEvidenceWorker;
   command: string;
   axis: string;
   attempt: number;
@@ -147,17 +156,82 @@ export function normalizeSkillName(raw: unknown): string | null {
 
 const REPO_SKILL_PATH_PATTERN = /^\.agents\/skills\/([a-z0-9][a-z0-9-]{0,63})\/SKILL\.md$/;
 
-export function skillNameFromRepoPath(raw: unknown): string | null {
+// The pinned read tool reports `input.filePath` (normally absolute) with
+// optional `input.offset`/`input.limit`; completed reads also carry
+// `state.metadata.display` (`path`, `lineStart`, `lineEnd`, `totalLines`,
+// `truncated`). Tool output text is never parsed for paths: only structured
+// input/metadata fields become evidence. Absolute paths are normalized
+// against the worker worktree root (defaulting to the current working
+// directory) so only in-worktree `.agents/skills/*/SKILL.md` reads validate;
+// worktree-external paths stay unknown instead of matching by substring.
+export function normalizeRepoSkillPath(
+  raw: unknown,
+  worktreeRoot: string = process.cwd(),
+): string | null {
   const path = asNonEmptyString(raw);
   if (path === null) {
     return null;
   }
-  const normalized = path.replace(/^\.\//, '');
-  const match = REPO_SKILL_PATH_PATTERN.exec(normalized);
+  const trimmedRoot = worktreeRoot.trim() === '' ? process.cwd() : worktreeRoot;
+  const root = trimmedRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+  const forward = path.replace(/\\/g, '/');
+  let relative = forward;
+  if (forward.startsWith('/')) {
+    const prefix = `${root}/`;
+    if (forward !== root && !forward.startsWith(prefix)) {
+      return null;
+    }
+    relative = forward === root ? '' : forward.slice(prefix.length);
+  }
+  relative = relative.replace(/^\.\//, '').replace(/^\/+/, '');
+  if (relative === '' || relative.startsWith('..')) {
+    return null;
+  }
+  return relative;
+}
+
+export function skillNameFromRepoPath(
+  raw: unknown,
+  worktreeRoot: string = process.cwd(),
+): string | null {
+  const relative = normalizeRepoSkillPath(raw, worktreeRoot);
+  if (relative === null) {
+    return null;
+  }
+  const match = REPO_SKILL_PATH_PATTERN.exec(relative);
   if (match?.[1] === undefined) {
     return null;
   }
   return normalizeSkillName(match[1]);
+}
+
+// Skill-tool metadata carries `name` plus `dir` (the skill directory). Only
+// an exact `.agents/skills/<name>` directory validates: substring matching
+// would falsely recognize unrelated paths such as
+// `/tmp/other.agents/skills/implement-backup`. Returns the bounded directory
+// when it validates, otherwise null so arbitrary strings never persist.
+export function validatedSkillDir(
+  dir: unknown,
+  skillName: string,
+  worktreeRoot: string = process.cwd(),
+): string | null {
+  const raw = asNonEmptyString(dir);
+  if (raw === null) {
+    return null;
+  }
+  const relative = normalizeRepoSkillPath(raw, worktreeRoot);
+  if (relative === null) {
+    return null;
+  }
+  const segments = relative.split('/').filter((segment) => segment !== '');
+  if (segments.length < 3) {
+    return null;
+  }
+  const tail = segments.slice(-3);
+  if (tail[0] !== '.agents' || tail[1] !== 'skills' || tail[2] !== skillName) {
+    return null;
+  }
+  return raw.slice(0, MAX_PERSISTED_ID_LENGTH);
 }
 
 function readRangeOf(offset: number | null, limit: number | null): string | null {
@@ -180,7 +254,10 @@ function toFiniteInt(value: unknown): number | null {
 // model text, tool output, grep/diff/list output, shell commands, test
 // messages, malformed/truncated JSON and any non-tool record. String fields
 // are never reparsed for nested JSON.
-export function parsePrimaryToolRecord(line: string): NormalizedToolCall | null {
+export function parsePrimaryToolRecord(
+  line: string,
+  worktreeRoot: string = process.cwd(),
+): NormalizedToolCall | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line) as unknown;
@@ -232,8 +309,14 @@ export function parsePrimaryToolRecord(line: string): NormalizedToolCall | null 
     skillName = normalizeSkillName(input?.name);
     skillDir = asBoundedId(metadata?.dir);
   } else if (tool === 'read') {
-    const rawPath = asNonEmptyString(input?.path) ?? asNonEmptyString(input?.file);
-    readPath = rawPath === null ? null : rawPath.slice(0, 256);
+    const rawPath =
+      asNonEmptyString(input?.filePath) ??
+      asNonEmptyString(input?.path) ??
+      asNonEmptyString(input?.file);
+    const relative = rawPath === null ? null : normalizeRepoSkillPath(rawPath, worktreeRoot);
+    // Only the normalized in-worktree relative path persists; absolute
+    // prefixes and worktree-external paths never reach evidence artifacts.
+    readPath = relative === null ? null : relative.slice(0, 256);
     readOffset = toFiniteInt(input?.offset);
     readLimit = toFiniteInt(input?.limit);
   } else {
@@ -272,7 +355,10 @@ export function splitStreamLines(buffer: { text: string }, chunk: string): strin
   return lines;
 }
 
-export function collectPrimaryToolCalls(lines: readonly string[]): {
+export function collectPrimaryToolCalls(
+  lines: readonly string[],
+  worktreeRoot: string = process.cwd(),
+): {
   calls: NormalizedToolCall[];
   truncated: boolean;
   malformed: number;
@@ -291,13 +377,24 @@ export function collectPrimaryToolCalls(lines: readonly string[]): {
       isJson = false;
     }
     if (!isJson) {
+      // A non-JSON line in a `--format json` stream is a truncated fragment
+      // or unexpected payload: never a skill source, but honest coverage
+      // records it instead of silently dropping it.
+      malformed += 1;
       continue;
     }
     const record = asRecord(parsed);
     if (record?.type !== 'tool_use') {
+      // Valid non-tool CLI records (text, reasoning, step markers, errors)
+      // are never skill sources and never malformed.
       continue;
     }
-    const call = parsePrimaryToolRecord(line);
+    if (isIrrelevantPrimaryTool(record)) {
+      // Supported non-evidence tools (bash, grep, edits, lists, …) are
+      // ignored as skill sources without counting as malformed records.
+      continue;
+    }
+    const call = parsePrimaryToolRecord(line, worktreeRoot);
     if (call === null) {
       malformed += 1;
       continue;
@@ -308,6 +405,19 @@ export function collectPrimaryToolCalls(lines: readonly string[]): {
     calls.push(call);
   }
   return { calls, truncated: false, malformed };
+}
+
+// Supported tool records that are never skill evidence: any `tool_use` whose
+// part is not a `skill`/`read`/`task` tool call (shell commands, search,
+// diffs, lists, …). They are ignored rather than counted as malformed
+// attributable records.
+function isIrrelevantPrimaryTool(record: Record<string, unknown>): boolean {
+  const part = asRecord(record.part);
+  if (part?.type !== 'tool') {
+    return true;
+  }
+  const tool = asNonEmptyString(part.tool);
+  return tool !== 'skill' && tool !== 'read' && tool !== 'task';
 }
 
 // Child IDs come only from harness-owned task tool metadata on real tool
@@ -346,13 +456,17 @@ export interface SessionExportInput {
 }
 
 // Reads tool records from a read-only export of one explicit session ID and
-// verifies `export.info.parentID` against the known primary parent. A wrong
-// parent, missing export, malformed shape or unrelated session yields no
-// records plus an explicit coverage reason — never silent inclusion.
+// verifies `export.info.parentID` against the known parent plus the exported
+// identity itself: a missing `info.id`, a wrong parent, a missing export, a
+// malformed shape or an unrelated session yields no records plus an explicit
+// coverage reason — never silent inclusion. Part/message session identifiers
+// are validated against the exported session when present; records claiming
+// another session are skipped as unverified rather than attributed.
 export function collectExportToolRecords(
   sessionId: string,
   exported: SessionExportInput | null | undefined,
   expectedParentId: string | null,
+  worktreeRoot: string = process.cwd(),
 ): { calls: NormalizedToolCall[]; reason: string | null } {
   if (exported === null || exported === undefined) {
     return { calls: [], reason: `missing export for session ${sessionId}` };
@@ -362,7 +476,10 @@ export function collectExportToolRecords(
     return { calls: [], reason: `malformed export for session ${sessionId}` };
   }
   const exportedId = asBoundedId(info.id);
-  if (exportedId !== null && exportedId !== sessionId) {
+  if (exportedId === null) {
+    return { calls: [], reason: `missing export id for session ${sessionId}` };
+  }
+  if (exportedId !== sessionId) {
     return { calls: [], reason: `export identity mismatch for session ${sessionId}` };
   }
   const parentId = asBoundedId(info.parentID ?? info.parentId);
@@ -378,23 +495,38 @@ export function collectExportToolRecords(
     return { calls: [], reason: `malformed messages for session ${sessionId}` };
   }
   const calls: NormalizedToolCall[] = [];
+  let unverified = 0;
+  let unsupported = 0;
   for (const message of exported.messages) {
     const messageRecord = asRecord(message);
     if (messageRecord === null) {
+      unsupported += 1;
       continue;
     }
     const messageInfo = asRecord(messageRecord.info);
     const messageId = asBoundedId(messageInfo?.id);
     if (messageId === null) {
+      unsupported += 1;
+      continue;
+    }
+    const messageSession = asBoundedId(messageInfo?.sessionID ?? messageInfo?.sessionId);
+    if (messageSession !== null && messageSession !== sessionId) {
+      unverified += 1;
       continue;
     }
     const parts = messageRecord.parts;
     if (!Array.isArray(parts)) {
+      unsupported += 1;
       continue;
     }
     for (const entry of parts) {
       const part = asRecord(entry);
       if (part?.type !== 'tool') {
+        continue;
+      }
+      const partSession = asBoundedId(part.sessionID ?? part.sessionId);
+      if (partSession !== null && partSession !== sessionId) {
+        unverified += 1;
         continue;
       }
       const tool = asNonEmptyString(part.tool);
@@ -423,9 +555,11 @@ export function collectExportToolRecords(
         skillDir = metadata === null ? null : asBoundedId(metadata.dir);
       } else if (tool === 'read') {
         const rawPath =
+          (input === null ? null : asNonEmptyString(input.filePath)) ??
           (input === null ? null : asNonEmptyString(input.path)) ??
           (input === null ? null : asNonEmptyString(input.file));
-        readPath = rawPath === null ? null : rawPath.slice(0, 256);
+        const relative = rawPath === null ? null : normalizeRepoSkillPath(rawPath, worktreeRoot);
+        readPath = relative === null ? null : relative.slice(0, 256);
         readOffset = input === null ? null : toFiniteInt(input.offset);
         readLimit = input === null ? null : toFiniteInt(input.limit);
       } else {
@@ -453,18 +587,39 @@ export function collectExportToolRecords(
       }
     }
   }
+  // Unknown/unverified descendants stay explicitly incomplete: records that
+  // fail session validation or arrive in unsupported shapes never produce
+  // silent complete zero coverage.
+  if (unverified > 0 || unsupported > 0) {
+    return {
+      calls,
+      reason:
+        `unverified export records for session ${sessionId}: ` +
+        `${String(unverified)} wrong-session, ${String(unsupported)} unsupported`,
+    };
+  }
   return { calls, reason: null };
 }
 
-function provenanceFor(call: NormalizedToolCall): SkillEvidenceEvent['sourceProvenance'] {
+function provenanceFor(
+  call: NormalizedToolCall,
+  worktreeRoot: string,
+): SkillEvidenceEvent['sourceProvenance'] {
   if (call.tool === 'skill' && call.skillName !== null) {
-    if (call.skillDir?.includes(`.agents/skills/${call.skillName}`) === true) {
+    // Exact verified tool metadata only: the skill directory must end in the
+    // `.agents/skills/<name>` segments. Substring matching would falsely
+    // recognize unrelated paths; unproven or external origins stay unknown,
+    // and no current lock/source version is ever inferred from the name.
+    if (
+      call.skillDir !== null &&
+      validatedSkillDir(call.skillDir, call.skillName, worktreeRoot) !== null
+    ) {
       return 'verified-tool-metadata';
     }
     return 'unknown';
   }
   if (call.tool === 'read' && call.readPath !== null) {
-    if (skillNameFromRepoPath(call.readPath) !== null) {
+    if (skillNameFromRepoPath(call.readPath, worktreeRoot) !== null) {
       return 'verified-repo-path';
     }
   }
@@ -478,17 +633,25 @@ function provenanceFor(call: NormalizedToolCall): SkillEvidenceEvent['sourceProv
 function toEvidenceEvent(
   call: NormalizedToolCall,
   invocation: SkillEvidenceInvocation,
+  worktreeRoot: string,
 ): SkillEvidenceEvent | null {
+  const eventId = `${invocation.worker}/${invocation.command}/${invocation.axis}/${String(invocation.attempt)}/${call.identity}`;
   if (call.tool === 'skill') {
     if (call.skillName === null) {
       return null;
     }
+    // Only validated skill directories persist; arbitrary metadata strings
+    // never reach evidence artifacts.
+    const skillPath =
+      call.skillDir === null
+        ? null
+        : validatedSkillDir(call.skillDir, call.skillName, worktreeRoot);
     if (call.status === 'completed') {
       return {
-        id: `${invocation.command}/${invocation.axis}/${String(invocation.attempt)}/${call.identity}`,
+        id: eventId,
         kind: 'skill-invocation',
         skillName: call.skillName,
-        skillPath: call.skillDir,
+        skillPath,
         sessionId: call.sessionId,
         messageId: call.messageId,
         callId: call.callId,
@@ -496,16 +659,16 @@ function toEvidenceEvent(
         timestamp: call.timestamp,
         readRange: null,
         readFullness: 'unknown',
-        sourceProvenance: provenanceFor(call),
+        sourceProvenance: provenanceFor(call, worktreeRoot),
         collectionNote: null,
       };
     }
     if (call.status === 'error') {
       return {
-        id: `${invocation.command}/${invocation.axis}/${String(invocation.attempt)}/${call.identity}`,
+        id: eventId,
         kind: 'skill-attempt',
         skillName: call.skillName,
-        skillPath: call.skillDir,
+        skillPath,
         sessionId: call.sessionId,
         messageId: call.messageId,
         callId: call.callId,
@@ -513,7 +676,7 @@ function toEvidenceEvent(
         timestamp: call.timestamp,
         readRange: null,
         readFullness: 'unknown',
-        sourceProvenance: provenanceFor(call),
+        sourceProvenance: provenanceFor(call, worktreeRoot),
         collectionNote: null,
       };
     }
@@ -523,7 +686,7 @@ function toEvidenceEvent(
     if (call.readPath === null) {
       return null;
     }
-    const skillName = skillNameFromRepoPath(call.readPath);
+    const skillName = skillNameFromRepoPath(call.readPath, worktreeRoot);
     if (skillName === null) {
       return null;
     }
@@ -532,7 +695,7 @@ function toEvidenceEvent(
     }
     const range = readRangeOf(call.readOffset, call.readLimit);
     return {
-      id: `${invocation.command}/${invocation.axis}/${String(invocation.attempt)}/${call.identity}`,
+      id: eventId,
       kind: 'skill-file-read',
       skillName,
       skillPath: call.readPath,
@@ -558,13 +721,15 @@ export interface BuildEvidenceInput {
   exportFailures?: readonly string[];
   truncatedStream?: boolean;
   collectedAt?: string;
+  worktreeRoot?: string;
 }
 
 // Deduplicates repeated streamed updates and export copies of the same
 // attributed tool identity while preserving different actual tool calls,
 // separate retries and concurrent axes (each axis keeps its own invocation).
 export function buildSkillEvidence(input: BuildEvidenceInput): SkillEvidenceRecord {
-  const collected = collectPrimaryToolCalls(input.primaryLines);
+  const worktreeRoot = input.worktreeRoot ?? process.cwd();
+  const collected = collectPrimaryToolCalls(input.primaryLines, worktreeRoot);
   const discovered = discoverChildSessionIds(collected.calls, input.primarySessionId);
   const seen = new Set<string>();
   const events: SkillEvidenceEvent[] = [];
@@ -586,7 +751,7 @@ export function buildSkillEvidence(input: BuildEvidenceInput): SkillEvidenceReco
       return;
     }
     seen.add(call.identity);
-    const event = toEvidenceEvent(call, input.invocation);
+    const event = toEvidenceEvent(call, input.invocation, worktreeRoot);
     if (event === null) {
       return;
     }
@@ -599,14 +764,27 @@ export function buildSkillEvidence(input: BuildEvidenceInput): SkillEvidenceReco
   for (const call of collected.calls) {
     pushCall(call);
   }
-  const childIds: string[] = [...discovered.childIds];
+  // Only verified children persist in lineage: candidates whose export is
+  // missing, mismatched or wrong-parent are excluded (their reason is
+  // already recorded above) so unverified sessions never read as covered.
+  // Nested candidates discovered inside verified exports are listed with an
+  // explicit unvisited reason until a bounded traversal verifies them.
+  const verifiedChildIds: string[] = [];
+  const childIds: string[] = [];
   for (const childId of discovered.childIds) {
     const exported = input.childExports[childId];
-    const { calls, reason } = collectExportToolRecords(childId, exported, input.primarySessionId);
+    const { calls, reason } = collectExportToolRecords(
+      childId,
+      exported,
+      input.primarySessionId,
+      worktreeRoot,
+    );
     if (reason !== null) {
       reasons.push(reason);
       continue;
     }
+    verifiedChildIds.push(childId);
+    childIds.push(childId);
     for (const call of calls) {
       pushCall(call);
     }
@@ -639,8 +817,10 @@ export function buildSkillEvidence(input: BuildEvidenceInput): SkillEvidenceReco
             childSessionIds: childIds,
             reasons: [],
           };
+  // Verified lineage is explicit: the primary session followed by each
+  // verified child in discovery order. Unverified candidates never appear.
   const parentIds =
-    input.primarySessionId === null ? [] : [input.primarySessionId, ...childIds.slice(0, 0)];
+    input.primarySessionId === null ? [] : [input.primarySessionId, ...verifiedChildIds];
   return {
     version: SKILL_EVIDENCE_VERSION,
     invocation: { ...input.invocation },
@@ -683,5 +863,5 @@ export function evidenceFileName(invocation: SkillEvidenceInvocation): string {
       .replace(/^-+/, '')
       .replace(/-+$/, '')
       .slice(0, 40) || 'worker';
-  return `${safe(invocation.command)}-${safe(invocation.axis)}-${String(invocation.attempt)}.json`;
+  return `${safe(invocation.worker)}-${safe(invocation.command)}-${safe(invocation.axis)}-${String(invocation.attempt)}.json`;
 }

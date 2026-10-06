@@ -71,6 +71,7 @@ import {
   commandSessionExporter,
   createEvidenceCapture,
   finalizeSkillEvidence,
+  suppressJsonWorkerLines,
 } from './review/evidence-worker.js';
 
 interface CycleOptions {
@@ -110,12 +111,19 @@ async function refreshPrUntilHead(
 // Evidence-capable worker seam (ticket #116): Standards, Spec and
 // address-review workers stream the same live output under the same bounds,
 // while real JSON tool records are captured into minimal attributable skill
-// evidence. Collection is best-effort and additive: persistence failures and
-// incomplete coverage never change the worker outcome, reviewer markers,
-// gates or exact-HEAD CI.
+// evidence. Raw JSON tool/text/reasoning lines are captured but not echoed so
+// transcripts never become logs; lifecycle, heartbeat and watchdog messages
+// are preserved. Collection is best-effort and additive: persistence
+// failures and incomplete coverage never change the worker outcome, reviewer
+// markers, gates or exact-HEAD CI.
 function evidenceStreamingWorkerExecutor(
   label: WorkerLabel,
-  evidence: { command: string; axis: string; attempt: number; workerStartHead: string },
+  evidence: {
+    command: string;
+    axis: string;
+    attempt: number;
+    workerStartHead: string;
+  },
   recorder: RunSummaryRecorder,
 ): CommandExecutor {
   return async (command, args) => {
@@ -124,13 +132,15 @@ function evidenceStreamingWorkerExecutor(
       try {
         const result = await finalizeSkillEvidence({
           invocation: buildEvidenceInvocation({
+            worker: 'review-cycle',
             command: evidence.command,
             axis: evidence.axis,
             attempt: evidence.attempt,
             workerStartHead: evidence.workerStartHead,
           }),
           lines: capture.lines,
-          exporter: commandSessionExporter(runCommand),
+          exporter: commandSessionExporter(),
+          truncatedStream: capture.wasTruncated(),
         });
         if (result.evidencePath !== undefined) {
           recorder.recordSkillEvidencePath(result.evidencePath);
@@ -143,7 +153,7 @@ function evidenceStreamingWorkerExecutor(
       const result = await runWorkerStream(
         command,
         args,
-        { label, timeoutMs: timeoutForWorker(label) },
+        { label, timeoutMs: timeoutForWorker(label), stdoutLogFilter: suppressJsonWorkerLines },
         undefined,
         {
           onStdoutLine: (line) => {

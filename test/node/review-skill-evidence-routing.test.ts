@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import {
@@ -11,11 +12,18 @@ import { runAgentTicket, type AgentTicketOutcome } from '../../scripts/agent/tic
 import type { CommandExecutor } from '../../scripts/review/runner.js';
 import {
   buildEvidenceInvocation,
+  commandSessionExporter,
+  createEvidenceCapture,
   finalizeSkillEvidence,
+  isJsonWorkerEventLine,
+  persistSkillEvidence,
   primarySessionIdFromLines,
+  suppressJsonWorkerLines,
   withJsonFormat,
 } from '../../scripts/review/evidence-worker.js';
+import { buildSkillEvidence } from '../../scripts/review/skill-evidence.js';
 import { buildAddressReviewArgs } from '../../scripts/review/runner.js';
+import { runWorkerStream, type SpawnedWorker } from '../../scripts/review/worker-stream.js';
 
 // Seam under test: evidence-capable worker routing (ticket #116).
 // The initial fix-cycle correction must run through the deterministic
@@ -83,8 +91,9 @@ describe('evidence worker invocation shape', () => {
     expect(buildAddressReviewArgs(7)).not.toContain('--agent');
   });
 
-  it('attributes invocations to command/axis/attempt/HEAD with unknown GitHub IDs locally', () => {
+  it('attributes invocations to worker/command/axis/attempt/HEAD with unknown GitHub IDs locally', () => {
     const invocation = buildEvidenceInvocation({
+      worker: 'review-cycle',
       command: 'review-standards',
       axis: 'standards',
       attempt: 2,
@@ -93,6 +102,7 @@ describe('evidence worker invocation shape', () => {
     });
 
     expect(invocation).toMatchObject({
+      worker: 'review-cycle',
       command: 'review-standards',
       axis: 'standards',
       attempt: 2,
@@ -114,6 +124,7 @@ describe('evidence finalization preserves the worker outcome', () => {
       const result = await finalizeSkillEvidence(
         {
           invocation: buildEvidenceInvocation({
+            worker: 'agent-ticket',
             command: 'implement',
             axis: 'implement',
             attempt: 1,
@@ -157,6 +168,7 @@ describe('evidence finalization preserves the worker outcome', () => {
     const result = await finalizeSkillEvidence(
       {
         invocation: buildEvidenceInvocation({
+          worker: 'agent-ticket',
           command: 'implement',
           axis: 'implement',
           attempt: 1,
@@ -193,7 +205,7 @@ describe('fix-cycle correction seam', () => {
         return Promise.resolve();
       },
       finalizeEvidence: (input) => {
-        finalized.push(`${input.command}/${input.axis}/${String(input.attempt)}`);
+        finalized.push(`${input.worker}/${input.command}/${input.axis}/${String(input.attempt)}`);
         return Promise.resolve('.agent-ticket/skill-evidence/address-review-1.json');
       },
       getHead: () => Promise.resolve('a'.repeat(40)),
@@ -204,7 +216,7 @@ describe('fix-cycle correction seam', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.command).toBe('opencode');
     expect(seen[0]?.args).toEqual(buildAddressReviewArgs(42));
-    expect(finalized).toEqual(['address-review/address-review/1']);
+    expect(finalized).toEqual(['agent-fix-cycle/address-review/address-review/1']);
   });
 
   it('keeps a distinct timeout with the sentinel while preserving evidence', async () => {
@@ -392,5 +404,235 @@ describe('real workflow evidence wiring', () => {
     }
     const ticketRuns = workflowStepRuns(readWorkflow('agent-ticket.yml')).join('\n');
     expect(ticketRuns).toContain('.agent-ticket/outcome.json');
+  });
+});
+
+describe('evidence-enabled worker diagnostics', () => {
+  it('classifies structured worker event lines for log suppression', () => {
+    expect(isJsonWorkerEventLine(toolLine('c1', 'ses-1'))).toBe(true);
+    expect(isJsonWorkerEventLine(JSON.stringify({ type: 'text', part: { text: 'hi' } }))).toBe(
+      true,
+    );
+    expect(isJsonWorkerEventLine(JSON.stringify({ type: 'reasoning', part: {} }))).toBe(true);
+    expect(isJsonWorkerEventLine('plain progress line')).toBe(false);
+    expect(isJsonWorkerEventLine('')).toBe(false);
+    expect(suppressJsonWorkerLines(toolLine('c1', 'ses-1'))).toBe(false);
+    expect(suppressJsonWorkerLines('plain progress line')).toBe(true);
+  });
+
+  it('captures raw JSON through the spawned stream without logging payloads', async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as SpawnedWorker;
+    child.stdout = stdout;
+    child.stderr = stderr;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const seen: string[] = [];
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto', '--format', 'json'],
+        { label: 'implement', stdoutLogFilter: suppressJsonWorkerLines },
+        () => child,
+        {
+          onStdoutLine: (line) => {
+            seen.push(line);
+          },
+        },
+      );
+      const sentinelTool = toolLine('c-sentinel', 'ses-1').replace(
+        '"name":"implement"',
+        '"name":"implement","debug":"sk-ant-testsecret"',
+      );
+      stdout.emit('data', `${sentinelTool}\nplain progress\n`);
+      child.emit('close', 0);
+      const result = await pending;
+
+      // Both lines are captured for evidence, but the raw JSON payload —
+      // including tool arguments — never reaches the console.
+      expect(seen).toHaveLength(2);
+      expect(result.stdout).toContain('plain progress');
+      expect(result.stdout).toContain('c-sentinel');
+      expect(logSpy).toHaveBeenCalledWith('[implement] started: opencode run --auto --format json');
+      expect(logSpy).toHaveBeenCalledWith('[implement] plain progress');
+      expect(logSpy).toHaveBeenCalledWith('[implement] completed (exit 0)');
+      const logged = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logged).not.toContain('sk-ant-testsecret');
+      expect(logged).not.toContain('c-sentinel');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('propagates capture truncation through finalization to the persisted artifact', async () => {
+    const capture = createEvidenceCapture();
+    capture.pushLine(toolLine('c0', 'ses-1'));
+    capture.pushLine(`${toolLine('c1', 'ses-1')} ${'x'.repeat(70_000)}`);
+    expect(capture.wasTruncated()).toBe(true);
+
+    const written = new Map<string, string>();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const result = await finalizeSkillEvidence(
+        {
+          invocation: buildEvidenceInvocation({
+            worker: 'review-cycle',
+            command: 'review-standards',
+            axis: 'standards',
+            attempt: 1,
+            workerStartHead: 'a'.repeat(40),
+            env: {},
+          }),
+          lines: capture.lines,
+          truncatedStream: capture.wasTruncated(),
+        },
+        {
+          mkdir: () => Promise.resolve(),
+          writeFile: (path: string, contents: string) => {
+            written.set(path, contents);
+            return Promise.resolve();
+          },
+        },
+      );
+
+      expect(result.record.coverage.status).toBe('incomplete');
+      expect(result.record.coverage.reasons.join(' ')).toMatch(/truncated/);
+      // The overlong line was sliced, so it no longer parses — but the bound
+      // itself is reported honestly instead of claiming completeness.
+      expect(result.evidencePath).toContain('review-cycle-review-standards-standards-1.json');
+      const persisted = [...written.values()].join('\n');
+      expect(persisted).toContain('"status": "incomplete"');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('keeps separate correction invocations in distinct artifacts', async () => {
+    const written = new Map<string, string>();
+    const deps = {
+      mkdir: () => Promise.resolve(),
+      writeFile: (path: string, contents: string) => {
+        written.set(path, contents);
+        return Promise.resolve();
+      },
+    };
+    const first = await persistSkillEvidence(
+      buildSkillEvidence({
+        invocation: buildEvidenceInvocation({
+          worker: 'agent-fix-cycle',
+          command: 'address-review',
+          axis: 'address-review',
+          attempt: 1,
+          workerStartHead: 'a'.repeat(40),
+          env: {},
+        }),
+        primaryLines: [toolLine('c1', 'ses-1')],
+        primarySessionId: 'ses-1',
+        childExports: {},
+      }),
+      deps,
+    );
+    const second = await persistSkillEvidence(
+      buildSkillEvidence({
+        invocation: buildEvidenceInvocation({
+          worker: 'review-cycle',
+          command: 'address-review',
+          axis: 'address-review',
+          attempt: 1,
+          workerStartHead: 'b'.repeat(40),
+          env: {},
+        }),
+        primaryLines: [toolLine('c2', 'ses-2')],
+        primarySessionId: 'ses-2',
+        childExports: {},
+      }),
+      deps,
+    );
+
+    expect(first.evidencePath).not.toBe(second.evidencePath);
+    expect(written.has(first.evidencePath)).toBe(true);
+    expect(written.has(second.evidencePath)).toBe(true);
+    expect(written.get(first.evidencePath)).toContain('c1');
+    expect(written.get(second.evidencePath)).toContain('c2');
+  });
+});
+
+describe('bounded session export seam', () => {
+  it('treats a hung export as an honest failure and cleans up', async () => {
+    const exporter = commandSessionExporter(() => new Promise<never>(() => undefined), {
+      timeoutMs: 20,
+    });
+
+    const started = Date.now();
+    const result = await exporter('ses-hung');
+    expect(result).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('bounds oversized export output before parsing', async () => {
+    const oversized = `${JSON.stringify({ info: { id: 'ses-big' }, messages: [] })}${' '.repeat(100)}`;
+    const exporter = commandSessionExporter(
+      () => Promise.resolve({ stdout: oversized, stderr: '' }),
+      { maxBytes: 10 },
+    );
+
+    expect(await exporter('ses-big')).toBeNull();
+  });
+
+  it('still exports small bounded payloads', async () => {
+    const payload = JSON.stringify({ info: { id: 'ses-1' }, messages: [] });
+    const exporter = commandSessionExporter(() => Promise.resolve({ stdout: payload, stderr: '' }));
+
+    expect(await exporter('ses-1')).toEqual({ info: { id: 'ses-1' }, messages: [] });
+  });
+});
+
+describe('implement error finalization keeps observed evidence', () => {
+  it('finalizes partial stdout attached to a worker failure without masking it', async () => {
+    const { runAgentTicket } = await import('../../scripts/agent/ticket-flow.js');
+    const MAIN_HEAD = 'a'.repeat(40);
+    const ISSUE_VIEW = JSON.stringify({
+      number: 10,
+      title: 'Register and verify an email identity',
+      state: 'OPEN',
+      labels: [{ name: 'ready-for-agent' }],
+    });
+    const script: Record<string, unknown> = {
+      'git rev-parse --abbrev-ref HEAD': 'main\n',
+      'git status --porcelain': '',
+      'git rev-parse HEAD': `${MAIN_HEAD}\n`,
+      'git ls-remote origin refs/heads/main': `${MAIN_HEAD}\trefs/heads/main\n`,
+      'gh issue view 10 --json number,title,state,labels': `${ISSUE_VIEW}\n`,
+      'git show-ref --verify refs/heads/ticket/10-register-and-verify-an-email-identity': new Error(
+        "fatal: 'refs/heads/ticket/10-register-and-verify-an-email-identity' - not a valid ref",
+      ),
+      'git checkout -b ticket/10-register-and-verify-an-email-identity': '',
+    };
+    const execute: CommandExecutor = (command, args) => {
+      const key = `${command} ${args.join(' ')}`;
+      const scripted = script[key];
+      if (scripted instanceof Error) {
+        return Promise.reject(scripted);
+      }
+      if (typeof scripted === 'string') {
+        return Promise.resolve({ stdout: scripted, stderr: '' });
+      }
+      throw new Error(`unexpected command in test script: ${key}`);
+    };
+    const finalized: { lines: readonly string[] }[] = [];
+    const failing = Object.assign(new Error('boom'), { stdout: `${toolLine('c1', 'ses-1')}\n` });
+    const result = await runAgentTicket('10', {
+      execute,
+      runWorker: () => Promise.reject(failing),
+      finalizeEvidence: (input) => {
+        finalized.push({ lines: input.lines });
+        return Promise.resolve(undefined);
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.failedStage).toBe('implement');
+    expect(finalized).toHaveLength(1);
+    expect(finalized[0]?.lines.join('\n')).toContain('c1');
   });
 });
