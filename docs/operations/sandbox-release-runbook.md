@@ -131,17 +131,18 @@ npx wrangler d1 create rch-rugbychampagne-user-service-sandbox-db --update-confi
 ```
 
 Sandbox non-secret mail values are versioned per target in
-`deploy/targets.json` (RCH sandbox, tickets #88/#119:
+`deploy/targets.json` (RCH sandbox, tickets #88/#119/#121:
 `AUTH_MAIL_TRANSPORT=smtp`, `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`,
 `SMTP_SECURE=false`, `AUTH_MAIL_FROM=User Service <jonatangarbuyo@gmail.com>`,
-`AUTH_MAIL_ALLOWLIST=jonatangarbuyo@gmail.com,cronistadev@gmail.com`). Gmail
+`AUTH_MAIL_ALLOWLIST=jonatangarbuyo@gmail.com,cronistadev@gmail.com,ingaladev@gmail.com`). Gmail
 submission is represented only through these ordinary provider-neutral SMTP
 settings; there is no Gmail-specific application branch. `AUTH_MAIL_FROM` must
 correspond to a sender authorized by the selected mail provider, and the
 RCH sandbox sender/allowlist no longer depend on `ingalatech.com`. The
-allowlist holds exactly two recipients: the stable smoke recipient
-`jonatangarbuyo@gmail.com` and the manual register/verify/reset QA mailbox
-`cronistadev@gmail.com`. The SMTP credentials (`SMTP_USER`/`SMTP_PASSWORD`)
+allowlist holds exactly three recipients: the stable automated smoke
+recipient `jonatangarbuyo@gmail.com`, the regular manual register/verify/reset
+QA mailbox `cronistadev@gmail.com`, and the administrator QA mailbox
+`ingaladev@gmail.com`. The SMTP credentials (`SMTP_USER`/`SMTP_PASSWORD`)
 stay runtime secrets configured directly on the Worker and never enter
 versioned config.
 
@@ -157,12 +158,13 @@ Repository secrets required for automation:
 | `SANDBOX_SMOKE_PASSWORD`     | Stable operator-owned smoke credential for exact-recipient mode (ticket #91; wired as `SMOKE_PASSWORD` at runtime, never committed or logged) |
 
 When the sandbox `AUTH_MAIL_ALLOWLIST` holds exact emails rather than a
-domain (RCH sandbox: `jonatangarbuyo@gmail.com` for the stable smoke plus
-`cronistadev@gmail.com` for manual register/verify/reset QA), configure
+domain (RCH sandbox: `jonatangarbuyo@gmail.com` for stable automated smoke,
+`cronistadev@gmail.com` for regular manual register/verify/reset QA, and
+`ingaladev@gmail.com` for administrator QA), configure
 `SANDBOX_SMOKE_EMAIL` with the stable smoke recipient
 (`jonatangarbuyo@gmail.com`) only. The smoke then registers that address
 directly (`SMOKE_SANDBOX_EMAIL` at runtime) instead of generating a per-run
-domain address. Keep the allowlist limited to these two exact recipients.
+domain address. Keep the allowlist limited to these three exact recipients.
 Never broaden `AUTH_MAIL_ALLOWLIST` merely to make the smoke pass.
 
 Sandbox mail must stay allowlisted: `AUTH_MAIL_ALLOWLIST` covers only
@@ -360,9 +362,9 @@ transactional mail.
 
 ```bash
 export SMOKE_SANDBOX_BASE_URL="https://rch-rugbychampagne-user-service-sandbox.jonatangarbuyo.workers.dev"
-# Exact-recipient mode (RCH sandbox allowlist holds the stable smoke Gmail
-# recipient plus the manual QA mailbox; the smoke keeps using the stable
-# recipient only):
+# Exact-recipient mode (RCH sandbox allowlist holds the stable automated
+# smoke recipient, the regular manual QA mailbox, and the administrator QA
+# mailbox; the smoke keeps using the stable recipient only):
 export SMOKE_SANDBOX_EMAIL="jonatangarbuyo@gmail.com"  # stable smoke recipient only
 # Exact-recipient mode requires a stable operator-owned credential (never
 # committed or logged; automation provides it from SANDBOX_SMOKE_PASSWORD):
@@ -371,9 +373,10 @@ export SMOKE_PASSWORD="<operator-owned-sandbox-smoke-password>"
 # export SMOKE_SANDBOX_EMAIL_DOMAIN="ops.example.org"  # sandbox-allowlisted only
 # Optional: complete the full verify -> sign-in path with a token pasted from
 # the stable smoke mailbox while reusing the same SMOKE_PASSWORD. Without it
-# the smoke proves the verification gate. The second allowlisted mailbox
-# (cronistadev@gmail.com) is reserved for manual register/verify/reset QA and
-# is never used by the automated smoke.
+# the smoke proves the verification gate. The regular manual QA mailbox
+# (cronistadev@gmail.com) and the administrator QA mailbox
+# (ingaladev@gmail.com) are reserved for manual QA and are never used by the
+# automated smoke.
 export SMOKE_VERIFICATION_TOKEN="<token-from-allowlisted-mailbox>"
 npm run smoke:sandbox
 ```
