@@ -45,7 +45,7 @@ describe('deployment targets', () => {
     expect(resolved.vars.SMTP_SECURE).toBe('false');
     expect(resolved.vars.AUTH_MAIL_FROM).toBe('User Service <jonatangarbuyo@gmail.com>');
     expect(resolved.vars.AUTH_MAIL_ALLOWLIST).toBe(
-      'jonatangarbuyo@gmail.com,cronistadev@gmail.com',
+      'jonatangarbuyo@gmail.com,cronistadev@gmail.com,ingaladev@gmail.com',
     );
   });
 

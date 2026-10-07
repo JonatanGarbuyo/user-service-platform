@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-06
+Last verified: 2026-10-07
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -95,15 +95,42 @@ Verified on 2026-10-06 against live GitHub state; main is `e885e1c84460b2af6c7ae
 
 GitHub-only skill-usage audit (25 worker runs: 16 fix-cycle + 9 ticket executions; 19 runs belong to #82; not productivity comparisons) is recorded separately from unavailable ChatGPT conversation data — no ChatGPT session dataset exists and none is inferred. Observed skill-tool minima: implement 17, code-review 13, tdd 10, custom better-typescript 5.
 
-Current execution frontier:
+Current execution frontier (verified 2026-10-07 against live GitHub state;
+worktree main matches `origin/main` at `3d19d91`):
 
 ```text
-#117 attributable skill evidence + reconciled checkpoint
+#121 reconcile sandbox recipient checks + record completed Identity QA
   -> configured dual review + exact-HEAD CI
   -> final acceptance
 ```
 
-Merges #109/#110/#112/#115 are complete on main. No stale unresolved dependency frontier remains. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls. Exact-HEAD CI for the #117 branch is pending PR publication and review.
+Closed since the previous checkpoint: parent spec #116, implementation #117
+(PR #118 merged), and #119 (PR #120 merged). Open: #121 only
+(`ready-for-agent`). Spec #8 is closed.
+
+The currently approved RCH sandbox mail allowlist holds exactly three
+recipients (`jonatangarbuyo@gmail.com` stable automated smoke,
+`cronistadev@gmail.com` regular manual QA, `ingaladev@gmail.com`
+administrator QA). The third recipient landed via direct operator commit
+`3d19d91` on main, outside the PR flow, leaving the #119-era two-recipient
+test expectations stale; #121 reconciles them with three-recipient
+configuration contracts plus `SmtpAuthMailer`-seam delivery coverage for
+both auth intents. No domain/wildcard expansion, no production change.
+
+User-reported sandbox manual Identity acceptance completed on 2026-10-07 and
+is recorded in `docs/operations/sandbox-identity-acceptance-2026-10-07.md`
+(operator-attributed; deployed Worker version
+`f30bb97c-f22a-440f-90d0-6438b8c3e7f8` from source commit `3d19d91`).
+Truthful CI/smoke status: CI run `37561376903` passed all 142 Workers tests
+with 697 harness passes and exactly the two stale allowlist failures this
+ticket fixes; sandbox run `37561376905` published the Worker version above
+and health passed, while post-deploy automated smoke fails separately with
+`401 invalid-credentials` for the stable smoke identity (separate operator
+credential reconciliation, not hidden or weakened by this ticket). Old run
+evidence is not acceptance of the new HEAD; exact-HEAD CI for the #121
+branch is pending PR publication and review.
+
+Merges #109/#110/#112/#115/#118/#120 are complete on main. No stale unresolved dependency frontier remains. Reconcile any new finding or moved HEAD against live GitHub. Final merge and live infrastructure operations retain their separate controls.
 
 ## Remote execution/review gate
 
@@ -135,12 +162,12 @@ The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-p
 
 The former Standards startup and trusted-approval blockers are resolved and merged on main through PR #109. The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; the agent workflows reinstall dependencies deterministically (`npm ci`) before quality gates, so no dependency-restoration blocker remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Current work is #117 (single approved slice of parent spec #116) on its ticket branch and PR: run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
+#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. Current work is #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) on its ticket branch: run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
 
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The current open ticket inventory is #116 (parent spec) and #117 (its single approved implementation slice); issues #80, #82, #111 and #114 are closed and PRs #109, #110, #112 and #115 are merged. Query GitHub before selecting new work.
+- The current open ticket inventory is #121 only (single release-reconciliation slice of spec #8); #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed and PRs #118 and #120 are merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint

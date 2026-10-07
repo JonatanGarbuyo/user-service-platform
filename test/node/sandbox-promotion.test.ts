@@ -22,9 +22,9 @@ import {
 } from '../../src/features/identity/smtp-transport.js';
 
 // Seam under test (tickets #14, #78): static deployment-contract assertions plus
-// the sandbox smoke-script guards. Ticket #119 additionally wires the
-// versioned sandbox allowlist through the existing SMTP mailer guard to prove
-// both allowlisted recipients deliver and unrelated recipients stay skipped.
+// the sandbox smoke-script guards. Ticket #121 wires the versioned sandbox
+// allowlist through the existing SMTP mailer guard to prove all three
+// allowlisted recipients deliver and unrelated recipients stay skipped.
 // These tests pin the ADR-0008/ADR-0009/ADR-0010
 // invariants that must hold before the identity service is operable in
 // sandbox: isolated per-target resources, version-controlled secret-free
@@ -243,13 +243,14 @@ describe('target-aware worker configuration (ticket #78)', () => {
   });
 
   it('enforces the sandbox recipient allowlist in target configuration', () => {
-    // Ticket #119: RCH sandbox mail no longer depends on ingalatech.com; the
-    // allowlist holds the stable smoke recipient plus the manual QA mailbox.
+    // Ticket #121: RCH sandbox mail no longer depends on ingalatech.com; the
+    // allowlist holds the stable smoke recipient, the manual QA mailbox, and
+    // the administrator QA mailbox. No domain/wildcard entries.
     const file = loadTargets();
     const sandbox = file.targets.find((entry) => entry.key === 'rch-rugbychampagne');
     expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_TRANSPORT).toBe('smtp');
     expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_ALLOWLIST).toBe(
-      'jonatangarbuyo@gmail.com,cronistadev@gmail.com',
+      'jonatangarbuyo@gmail.com,cronistadev@gmail.com,ingaladev@gmail.com',
     );
     expect(sandbox?.environments.sandbox.vars.AUTH_MAIL_FROM).toBe(
       'User Service <jonatangarbuyo@gmail.com>',
@@ -258,12 +259,13 @@ describe('target-aware worker configuration (ticket #78)', () => {
     expect(sandbox?.environments.production.vars.AUTH_MAIL_ALLOWLIST ?? '').toBe('');
   });
 
-  it('delivers sandbox verification and password-reset mail to both allowlisted recipients (ticket #119)', async () => {
-    // Public mailer seam: the versioned sandbox allowlist must let both the
-    // stable smoke recipient and the manual QA mailbox through the existing
-    // SMTP guard for both auth intents, while unrelated recipients stay
-    // skipped. The allowlist itself comes from deploy/targets.json so this
-    // proves behaviour, not a repeated literal.
+  it('delivers sandbox verification and password-reset mail to all three allowlisted recipients (ticket #121)', async () => {
+    // Public mailer seam: the versioned sandbox allowlist must let the
+    // stable smoke recipient, the manual QA mailbox, and the administrator
+    // QA mailbox through the existing SMTP guard for both auth intents,
+    // while unrelated recipients stay skipped. The allowlist itself comes
+    // from deploy/targets.json so this proves behaviour, not a repeated
+    // literal.
     const file = loadTargets();
     const configured =
       file.targets.find((entry) => entry.key === 'rch-rugbychampagne')?.environments.sandbox.vars
@@ -271,6 +273,7 @@ describe('target-aware worker configuration (ticket #78)', () => {
     const allowlist = parseAllowlist(configured);
     expect(isAllowlisted('jonatangarbuyo@gmail.com', allowlist)).toBe(true);
     expect(isAllowlisted('cronistadev@gmail.com', allowlist)).toBe(true);
+    expect(isAllowlisted('ingaladev@gmail.com', allowlist)).toBe(true);
     expect(isAllowlisted('mallory@evil.example', allowlist)).toBe(false);
 
     const config = resolveSmtpConfig({
@@ -312,22 +315,53 @@ describe('target-aware worker configuration (ticket #78)', () => {
       url: 'https://example.com/verify?token=smoke-token',
       token: 'smoke-token',
     });
+    await mailer.sendPasswordResetEmail({
+      to: 'jonatangarbuyo@gmail.com',
+      url: 'https://example.com/reset?token=smoke-reset',
+      token: 'smoke-reset',
+    });
+    await mailer.sendVerificationEmail({
+      to: 'ingaladev@gmail.com',
+      url: 'https://example.com/verify?token=admin-token',
+      token: 'admin-token',
+    });
+    await mailer.sendPasswordResetEmail({
+      to: 'ingaladev@gmail.com',
+      url: 'https://example.com/reset?token=admin-reset',
+      token: 'admin-reset',
+    });
     expect(delivered).toEqual([
       'cronistadev@gmail.com',
       'cronistadev@gmail.com',
       'jonatangarbuyo@gmail.com',
+      'jonatangarbuyo@gmail.com',
+      'ingaladev@gmail.com',
+      'ingaladev@gmail.com',
     ]);
-    expect(records.filter((record) => record.event === 'auth-mail.sent')).toHaveLength(3);
+    expect(records.filter((record) => record.event === 'auth-mail.sent')).toHaveLength(6);
 
     await mailer.sendVerificationEmail({
       to: 'mallory@evil.example',
       url: 'https://example.com/verify?token=blocked',
       token: 'blocked',
     });
-    expect(delivered).toHaveLength(3);
-    expect(records.at(-1)).toMatchObject({
+    await mailer.sendPasswordResetEmail({
+      to: 'mallory@evil.example',
+      url: 'https://example.com/reset?token=blocked-reset',
+      token: 'blocked-reset',
+    });
+    expect(delivered).toHaveLength(6);
+    expect(records.filter((record) => record.event === 'auth-mail.sandbox-skipped')).toHaveLength(
+      2,
+    );
+    expect(records.at(-2)).toMatchObject({
       event: 'auth-mail.sandbox-skipped',
       purpose: 'email-verification',
+      transport: 'smtp',
+    });
+    expect(records.at(-1)).toMatchObject({
+      event: 'auth-mail.sandbox-skipped',
+      purpose: 'password-reset',
       transport: 'smtp',
     });
   });
