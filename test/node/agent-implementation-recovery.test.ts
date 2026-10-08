@@ -47,7 +47,12 @@ describe('implementation recovery path eligibility', () => {
     expect(isEligibleRecoveryPath('docs/agents/opencode.md')).toBe(true);
     expect(isEligibleRecoveryPath('drizzle/0001_glorious_barracuda.sql')).toBe(true);
     expect(isEligibleRecoveryPath('package.json')).toBe(true);
-    expect(isEligibleRecoveryPath('.env.example')).toBe(true);
+    // `.env.example` is denied like every other dotenv-shaped file: a failed
+    // worker's modified copy may carry secret values, so the committed
+    // template being non-secret does not make the worktree copy safe.
+    expect(isEligibleRecoveryPath('.env.example')).toBe(false);
+    expect(isEligibleRecoveryPath('src/.env.example')).toBe(false);
+    expect(isEligibleRecoveryPath('src/nested/.env.example')).toBe(false);
   });
 
   it('excludes nested env/dev-vars, logs, runtime state and credentials by path', () => {
@@ -267,6 +272,137 @@ describe('implementation recovery summary surface', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('enforces UTF-8 byte budgets for multibyte content without splitting characters', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-multibyte-'));
+    try {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      // `é` is 1 UTF-16 unit but 2 UTF-8 bytes: 20_000 units exceed the
+      // 32 KiB byte bound while staying under the old unit bound.
+      writeFileSync(join(dir, 'src', 'new.ts'), 'é'.repeat(20_000));
+      const base = 'a'.repeat(40);
+      const head = 'b'.repeat(40);
+      const execute: CommandExecutor = (command, args) => {
+        const key = `${command} ${args.join(' ')}`;
+        if (key === 'git rev-parse HEAD') {
+          return Promise.resolve({ stdout: `${head}\n`, stderr: '' });
+        }
+        if (key === 'git rev-parse --abbrev-ref HEAD') {
+          return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
+        }
+        if (key === `git diff --name-only ${base}..${head} --`) {
+          return Promise.resolve({ stdout: '', stderr: '' });
+        }
+        if (key === 'git status --porcelain -uall') {
+          return Promise.resolve({ stdout: '?? src/new.ts\n', stderr: '' });
+        }
+        throw new Error(`unexpected command in test script: ${key}`);
+      };
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        { execute },
+      );
+
+      expect(record.untrackedFiles).toHaveLength(1);
+      const content = record.untrackedFiles[0]?.content ?? '';
+      // Actual UTF-8 bytes, not UTF-16 units, stay within the per-file bound.
+      expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(RECOVERY_MAX_BYTES_PER_FILE);
+      expect(Buffer.byteLength(content, 'utf8')).toBeGreaterThan(0);
+      // Round-trip: no split surrogate or replacement character from truncation.
+      expect(content).not.toContain('�');
+      expect(/^é+$/u.test(content)).toBe(true);
+      expect(record.untrackedTruncated).toBe(true);
+      expect(record.status).toBe('incomplete');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('truncates a multibyte tracked patch at the UTF-8 total byte bound', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const base = 'a'.repeat(40);
+    const head = 'b'.repeat(40);
+    // Each `é` is 2 UTF-8 bytes: the patch exceeds 256 KiB in bytes while the
+    // old unit-length check would need twice as many characters.
+    const oversized = 'é'.repeat(RECOVERY_MAX_TOTAL_BYTES);
+    const execute: CommandExecutor = (command, args) => {
+      const key = `${command} ${args.join(' ')}`;
+      if (key === 'git rev-parse HEAD') {
+        return Promise.resolve({ stdout: `${head}\n`, stderr: '' });
+      }
+      if (key === 'git rev-parse --abbrev-ref HEAD') {
+        return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
+      }
+      if (key === `git diff --name-only ${base}..${head} --`) {
+        return Promise.resolve({ stdout: 'src/big.ts\n', stderr: '' });
+      }
+      if (key === 'git status --porcelain -uall') {
+        return Promise.resolve({ stdout: '', stderr: '' });
+      }
+      if (key.startsWith(`git diff ${base} --`)) {
+        return Promise.resolve({ stdout: oversized, stderr: '' });
+      }
+      throw new Error(`unexpected command in test script: ${key}`);
+    };
+    const record = await captureImplementationRecovery(
+      { base, branch: 'ticket/127-x', lines: [] },
+      { execute },
+    );
+
+    expect(Buffer.byteLength(record.combinedPatch, 'utf8')).toBeLessThanOrEqual(
+      RECOVERY_MAX_TOTAL_BYTES,
+    );
+    expect(record.combinedPatch).not.toContain('�');
+    expect(record.patchTruncated).toBe(true);
+    expect(record.status).toBe('incomplete');
+  });
+
+  it('times out a stalled untracked read instead of hanging terminal reporting', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-stall-'));
+    try {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'new.ts'), 'export const x = 1;\n');
+      const base = 'a'.repeat(40);
+      const head = 'b'.repeat(40);
+      const execute: CommandExecutor = (command, args) => {
+        const key = `${command} ${args.join(' ')}`;
+        if (key === 'git rev-parse HEAD') {
+          return Promise.resolve({ stdout: `${head}\n`, stderr: '' });
+        }
+        if (key === 'git rev-parse --abbrev-ref HEAD') {
+          return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
+        }
+        if (key === `git diff --name-only ${base}..${head} --`) {
+          return Promise.resolve({ stdout: '', stderr: '' });
+        }
+        if (key === 'git status --porcelain -uall') {
+          return Promise.resolve({ stdout: '?? src/new.ts\n', stderr: '' });
+        }
+        throw new Error(`unexpected command in test script: ${key}`);
+      };
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        {
+          execute,
+          // Never-resolving read simulates a stalled filesystem; capture must
+          // degrade to honest incomplete metadata within its finite deadline.
+          readFile: () => new Promise<string>(() => undefined),
+          readTimeoutMs: 50,
+        },
+      );
+
+      expect(record.untrackedFiles).toEqual([]);
+      expect(record.status).toBe('incomplete');
+      expect(record.reasons.join(' ')).toMatch(/unreadable/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function git(cwd: string, args: readonly string[]): string {
@@ -442,6 +578,80 @@ describe('implementation recovery portable snapshot (real temporary Git worktree
     }
   });
 
+  it('excludes a tracked worker-modified root .env.example and nested variants', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-dotenv-'));
+    try {
+      initRepo(dir);
+      mkdirSync(join(dir, 'src', 'nested'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'tracked.ts'), 'export const v = 1;\n');
+      // Committed non-secret template, as in the real repository.
+      writeFileSync(join(dir, '.env.example'), 'PLACEHOLDER=example\n');
+      git(dir, ['add', '.']);
+      git(dir, ['commit', '-qm', 'base']);
+      const base = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      // Failed worker modifies the tracked template with a sentinel and adds
+      // nested dotenv variants: none of these copies is safe to publish.
+      const sentinel = 'sk-ant-sentinel-secret-value';
+      writeFileSync(join(dir, '.env.example'), `TOKEN=${sentinel}\n`);
+      writeFileSync(join(dir, 'src', 'nested', '.env.example'), `KEY=${sentinel}\n`);
+      writeFileSync(join(dir, 'src', 'nested', '.env.local'), `KEY=${sentinel}\n`);
+
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        { execute: realExecutor(dir) },
+      );
+      const serialized = JSON.stringify(record);
+      expect(serialized).not.toContain(sentinel);
+      expect(record.combinedPatch).not.toContain(sentinel);
+      expect(record.untrackedFiles.some((file) => file.path.includes('.env'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('decodes git C-quoted octal status paths instead of dropping eligible source', async () => {
+    const { parseRecoveryStatus } = await import('../../scripts/review/implementation-recovery.js');
+    // `é` (U+00E9) is quoted by git as octal UTF-8 bytes when core.quotepath is on.
+    const parsed = parseRecoveryStatus('?? "src/\\303\\251clair.ts"\n');
+    expect(parsed.untracked).toEqual(['src/éclair.ts']);
+  });
+
+  it('reports disk-level rejections with reasons and excluded counts, not complete', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-disk-'));
+    try {
+      initRepo(dir);
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'tracked.ts'), 'export const v = 1;\n');
+      git(dir, ['add', '.']);
+      git(dir, ['commit', '-qm', 'base']);
+      const base = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      // One eligible untracked source plus one path-eligible symlink leaf that
+      // fails the disk check (never followed).
+      writeFileSync(join(dir, 'src', 'real.ts'), 'export const real = true;\n');
+      symlinkSync('/etc/hostname', join(dir, 'src', 'linked.ts'));
+
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        { execute: realExecutor(dir) },
+      );
+      expect(record.untrackedFiles.some((file) => file.path === 'src/real.ts')).toBe(true);
+      expect(record.untrackedFiles.some((file) => file.path.includes('linked'))).toBe(false);
+      // The symlink was listed by git status but could not be captured: it
+      // must be counted and explained, never silently dropped as complete.
+      expect(record.counts.excluded).toBeGreaterThanOrEqual(1);
+      expect(record.status).toBe('incomplete');
+      expect(record.reasons.join(' ')).toMatch(/excluded|ineligible|symlink|disk/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('bounds snapshots and preserves the original failure on command/filesystem errors', async () => {
     const { captureImplementationRecovery } =
       await import('../../scripts/review/implementation-recovery.js');
@@ -550,6 +760,44 @@ describe('implementation recovery ticket-flow wiring', () => {
       const errors = errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
       expect(errors).toContain('implementation recovery');
       expect(errors).not.toContain('diff --git');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('retains unavailable recovery without capturing when worker termination is unconfirmed', async () => {
+    const { runAgentTicket } = await import('../../scripts/agent/ticket-flow.js');
+    const { WorkerTimeoutError } = await import('../../scripts/review/worker-timeout.js');
+    const outcomes: { outcome: string; stage: string; recovery?: unknown }[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      let captureCalls = 0;
+      const result = await runAgentTicket('10', {
+        execute: wiringExecute(wiringScript()),
+        runWorker: () =>
+          Promise.reject(new WorkerTimeoutError('implement', 1_800_000, 'opencode run', false)),
+        captureRecovery: () => {
+          captureCalls += 1;
+          return Promise.reject(new Error('must not capture a still-writing worktree'));
+        },
+        recordOutcome: (record) => {
+          outcomes.push({
+            outcome: record.outcome,
+            stage: record.stage,
+            recovery: record.recovery,
+          });
+        },
+      });
+
+      // The original TIMEOUT is preserved, but no worktree read was attempted:
+      // the record is honest unavailable evidence, not a torn snapshot.
+      expect(result.exitCode).toBe(1);
+      expect(result.timedOut).toBe(true);
+      expect(captureCalls).toBe(0);
+      expect(result.recovery?.status).toBe('unavailable');
+      expect(result.recovery?.reasons.join(' ') ?? '').toMatch(/termination/i);
+      expect(outcomes.at(-1)).toMatchObject({ outcome: 'TIMEOUT', stage: 'implementation' });
+      expect(outcomes.at(-1)?.recovery).toBeDefined();
     } finally {
       errorSpy.mockRestore();
     }

@@ -10,11 +10,13 @@ changing product scope, timeout bounds, or publication safeguards.
 ## What is captured
 
 When the `agent-ticket` implement worker times out or fails, repository-owned
-code captures a best-effort bounded secret-safe recovery record **after** the
-worker promise has settled and process-group termination has been signalled
-(SIGTERM, SIGKILL after the kill grace; a worker still terminating during that
-grace window may still race the snapshot) and embeds
-it additively in the already-uploaded `.agent-ticket/outcome.json` artifact.
+code captures a bounded secret-safe recovery record **after** bounded worker
+termination has been established (SIGTERM, SIGKILL escalation after the kill
+grace, finite termination deadline; the original `TIMEOUT` is preserved).
+When termination cannot be established within its bound, no worktree snapshot
+is read: honest `unavailable` evidence is retained instead so the record never
+races a still-writing implementer. The record is embedded
+additively in the already-uploaded `.agent-ticket/outcome.json` artifact.
 No workflow-file edit or new credential is needed: the existing
 `agent-ticket` artifact selection already uploads that outcome record.
 
@@ -33,7 +35,11 @@ presented as proof of no progress:
   `.github/workflows/**`, pointing back to the trusted-publication handoff
   policy instead of carrying workflow patch content.
 
-Capture performs read-only Git/filesystem operations only. It never stages,
+Capture performs read-only Git/filesystem operations only, within finite
+deadlines (30s per Git command, 10s per untracked-file read, 60s overall
+capture). Snapshot size limits are enforced as UTF-8 bytes (50 paths, 32 KiB
+per file, 256 KiB total; truncation never splits a character) and untracked
+reads never load more than the remaining budget into memory. It never stages,
 commits, resets, cleans, pushes, opens a PR, merges, or deploys. Its failure
 keeps honest incomplete/unavailable metadata and never replaces the original
 `TIMEOUT`/`BLOCKED` result. Console and issue-status surfaces expose only a
@@ -47,7 +53,9 @@ Eligibility is path-based through an explicit allowlist
 and non-secret build-config roots plus named top-level config files. The
 following never enter recovery artifacts, diagnostics, or console output:
 
-- nested `.env`/`.env.*` and `.dev.vars`/`.dev.vars.*` variants;
+- `.env`/`.env.*` including `.env.example` at the root and in nested variants,
+  and `.dev.vars`/`.dev.vars.*` variants (a worker-modified copy may carry
+  secret values even when the committed template does not);
 - logs, local D1/SQLite state, build outputs, `node_modules`, runtime
   data, exports/transcripts, and other secret-bearing runtime files;
 - credential/key file extensions (`.pem`, `.key`, `.p12`, `.pfx`, `.jks`);

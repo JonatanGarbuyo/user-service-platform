@@ -496,13 +496,12 @@ export type RecoveryCapturer = (
   input: RecoveryCaptureInput,
 ) => Promise<ImplementationRecoveryRecord>;
 
-// Bounded recovery capture (ticket #127). Runs only after the implement
-// worker promise has settled and process-group termination has been signalled
-// (SIGTERM, SIGKILL after the kill grace) — a best-effort snapshot that may
-// still race a worker terminating during that grace window.
-// Read-only Git/filesystem operations through the bounded command seam;
-// every failure degrades to honest incomplete/unavailable metadata and never
-// replaces the original TIMEOUT/BLOCKED result.
+// Bounded recovery capture (ticket #127). Runs only after bounded worker
+// termination has been established by the worker-stream handshake.
+// Read-only Git/filesystem operations through the bounded command seam with a
+// finite capture deadline; every failure degrades to honest
+// incomplete/unavailable metadata and never replaces the original
+// TIMEOUT/BLOCKED result.
 async function defaultCaptureRecovery(
   input: RecoveryCaptureInput,
 ): Promise<ImplementationRecoveryRecord> {
@@ -942,18 +941,32 @@ export async function runAgentTicket(
     } else {
       await settleImplementEvidence(partialStdoutLines(error), headBefore);
     }
-    // Bounded recovery capture (ticket #127): runs after the worker promise
-    // settled and process-group termination above has been signalled
-    // (SIGTERM, SIGKILL after the kill grace). Best-effort snapshot — it may
-    // still race a worker terminating during that grace window:
-    // capture failures keep honest unavailable metadata and never replace the
+    // Bounded recovery capture (ticket #127): runs after bounded worker
+    // termination has been established by the worker-stream handshake
+    // (SIGTERM, SIGKILL escalation, finite termination deadline). When the
+    // timeout reports terminated=false the worktree may still be changing, so
+    // no snapshot is read: honest unavailable evidence is retained instead.
+    // Capture failures keep honest unavailable metadata and never replace the
     // original TIMEOUT/BLOCKED result.
     let recovery: ImplementationRecoveryRecord | undefined;
-    try {
-      const captureRecovery = deps.captureRecovery ?? defaultCaptureRecovery;
-      recovery = await captureRecovery({ base: headBefore, branch, lines: recoveryLines });
-    } catch {
-      recovery = undefined;
+    // Unconfirmed termination (including duck-typed timeouts without a flag)
+    // skips the worktree read conservatively: honest unavailable evidence
+    // instead of a potentially torn snapshot.
+    const terminationUnconfirmed = isWorkerTimeout(error) && !error.terminated;
+    if (terminationUnconfirmed) {
+      recovery = createUnavailableRecovery({
+        base: headBefore,
+        branch,
+        reasons: ['worker termination unconfirmed within bound; snapshot skipped'],
+        diagnostics: summarizeWorkerLifecycle(recoveryLines),
+      });
+    } else {
+      try {
+        const captureRecovery = deps.captureRecovery ?? defaultCaptureRecovery;
+        recovery = await captureRecovery({ base: headBefore, branch, lines: recoveryLines });
+      } catch {
+        recovery = undefined;
+      }
     }
     const timedOut = isWorkerTimeout(error);
     const reason = timedOut

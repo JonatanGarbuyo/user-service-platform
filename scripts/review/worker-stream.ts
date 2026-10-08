@@ -122,30 +122,59 @@ export function runWorkerStream(
       }
     };
 
-    // Bounded watchdog (ticket #31): terminate the hung subprocess tree and
-    // reject with a distinguishable timeout so callers can report TIMEOUT
-    // rather than a generic exit failure. SIGTERM first, SIGKILL after a
-    // short grace so no orphan OpenCode process continues.
+    // Bounded watchdog (ticket #31) with termination handshake (ticket #127):
+    // terminate the hung subprocess tree and reject with a distinguishable
+    // timeout so callers can report TIMEOUT rather than a generic exit
+    // failure. SIGTERM first, SIGKILL after the kill grace so no orphan
+    // OpenCode process continues. The rejection waits for bounded worker exit
+    // so a recovery snapshot taken after the rejection does not race a
+    // still-writing implementer; when exit cannot be established within the
+    // termination deadline the error carries terminated=false and callers must
+    // retain unavailable evidence instead of reading a changing worktree.
     const timeoutMs = options.timeoutMs;
     const killGraceMs = options.killGraceMs ?? WORKER_KILL_GRACE_MS;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     let killEscalation: ReturnType<typeof setTimeout> | undefined;
+    let terminationDeadline: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const clearTerminationTimers = (): void => {
+      if (killEscalation !== undefined) {
+        clearTimeout(killEscalation);
+        killEscalation = undefined;
+      }
+      if (terminationDeadline !== undefined) {
+        clearTimeout(terminationDeadline);
+        terminationDeadline = undefined;
+      }
+    };
     if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
       watchdog = setTimeout(() => {
-        if (settled) {
+        if (settled || timedOut) {
           return;
         }
-        settled = true;
+        timedOut = true;
         clearInterval(heartbeat);
         console.log(`[${options.label}] timed out after ${String(timeoutMs)}ms; terminating`);
         killTree('SIGTERM');
         killEscalation = setTimeout(() => {
+          console.log(`[${options.label}] still terminating; escalating to SIGKILL`);
           killTree('SIGKILL');
         }, killGraceMs);
         if (typeof (killEscalation as unknown as { unref?: unknown }).unref === 'function') {
           (killEscalation as unknown as { unref: () => void }).unref();
         }
-        reject(new WorkerTimeoutError(options.label, timeoutMs, invocation));
+        terminationDeadline = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTerminationTimers();
+          console.log(`[${options.label}] termination unconfirmed; reporting timeout`);
+          reject(new WorkerTimeoutError(options.label, timeoutMs, invocation, false));
+        }, killGraceMs * 2);
+        if (typeof (terminationDeadline as unknown as { unref?: unknown }).unref === 'function') {
+          (terminationDeadline as unknown as { unref: () => void }).unref();
+        }
       }, timeoutMs);
       if (typeof (watchdog as unknown as { unref?: unknown }).unref === 'function') {
         (watchdog as unknown as { unref: () => void }).unref();
@@ -154,6 +183,18 @@ export function runWorkerStream(
 
     const finish = (error: Error | null, exitCode: number | null): void => {
       if (settled) {
+        return;
+      }
+      if (timedOut) {
+        // The bound already fired: the worker exited within its termination
+        // deadline, so preserve the original TIMEOUT with termination
+        // confirmed instead of resolving or reporting a generic exit failure.
+        settled = true;
+        if (watchdog !== undefined) {
+          clearTimeout(watchdog);
+        }
+        clearTerminationTimers();
+        reject(new WorkerTimeoutError(options.label, timeoutMs ?? 0, invocation, true));
         return;
       }
       settled = true;

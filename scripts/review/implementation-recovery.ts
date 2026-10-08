@@ -31,18 +31,23 @@ export const RECOVERY_VERSION = 1 as const;
 
 // Bounded snapshot limits so the record stays embeddable in the existing
 // uploaded `.agent-ticket/outcome.json` artifact without workflow-file edits.
-// `*_BYTES` bounds are applied to string length (UTF-16 code units) as a
-// bounded proxy for UTF-8 bytes: ASCII content (the overwhelmingly common
-// case for source diffs) is exact, while non-ASCII content may overshoot the
-// nominal byte budget slightly. Truncation never splits a surrogate pair.
+// `*_BYTES` bounds are enforced as UTF-8 bytes: truncation never splits a
+// character (surrogate pair or multi-byte sequence).
 export const RECOVERY_MAX_FILES = 50;
 export const RECOVERY_MAX_BYTES_PER_FILE = 32 * 1024;
 export const RECOVERY_MAX_TOTAL_BYTES = 256 * 1024;
 export const RECOVERY_MAX_PATH_LENGTH = 256;
 
-// Bounded read-only Git/filesystem capture so a hung command becomes an
-// honest unavailable/incomplete record instead of hanging terminal reporting.
+// Bounded read-only Git/filesystem capture so a hung command or stalled read
+// becomes an honest unavailable/incomplete record instead of hanging terminal
+// reporting.
 export const RECOVERY_COMMAND_TIMEOUT_MS = 30_000;
+// Finite deadline for a single untracked-file read: a stalled filesystem
+// must degrade to an unreadable-file reason, never hang the capture.
+export const RECOVERY_FILE_READ_TIMEOUT_MS = 10_000;
+// Finite deadline for the whole recovery capture: exceeding it returns honest
+// incomplete/unavailable metadata and preserves the original TIMEOUT/BLOCKED.
+export const RECOVERY_CAPTURE_TIMEOUT_MS = 60_000;
 
 export type RecoveryStatus = 'complete' | 'incomplete' | 'unavailable';
 
@@ -112,9 +117,10 @@ const ALLOWED_TOP_LEVEL_FILES = new Set([
   'AGENTS.md',
   'GLOSSARY.md',
   'skills-lock.json',
-  // `.env.example` is the only dotenv-shaped file admitted: it is the
-  // committed non-secret template (see `.gitignore` negation).
-  '.env.example',
+  // No dotenv-shaped file is admitted, including `.env.example`: a failed
+  // worker's modified copy may carry secret values, so the committed template
+  // being non-secret does not make the worktree copy safe for the uploaded
+  // outcome record. `isDeniedBasename` denies all `.env*` variants by path.
 ]);
 
 const ALLOWED_EXTENSIONS = new Set([
@@ -224,8 +230,8 @@ export function isEligibleRecoveryPath(raw: unknown): boolean {
       return false;
     }
   }
-  // The committed `.env.example` template is explicitly tracked (see
-  // `.gitignore` negation) and safe; every other `.env*` variant stays denied.
+  // The committed `.env.example` template stays denied like every other
+  // `.env*` variant: a worker-modified copy may carry secret values.
   if (ALLOWED_TOP_LEVEL_FILES.has(path)) {
     return true;
   }
@@ -296,17 +302,107 @@ function joinRoot(root: string, relativePath: string): string {
   return resolve(root, relativePath);
 }
 
-// Byte-budget slicing without splitting a surrogate pair: `String.slice` counts
-// UTF-16 code units, so a trailing high surrogate would corrupt the next decode.
-function slicePreservingSurrogates(value: string, end: number): string {
-  const sliced = value.slice(0, end);
-  if (sliced.length > 0) {
-    const last = sliced.charCodeAt(sliced.length - 1);
-    if (last >= 0xd800 && last <= 0xdbff) {
-      return sliced.slice(0, -1);
-    }
+// UTF-8 byte-budget slicing without splitting a character: iterate by code
+// point and stop before exceeding `maxBytes`, so surrogate pairs and
+// multi-byte sequences stay intact and `Buffer.byteLength` of the result is
+// always within budget.
+export function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+export function sliceByUtf8Bytes(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) {
+    return '';
   }
-  return sliced;
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) {
+    return value;
+  }
+  let bytes = 0;
+  let end = 0;
+  for (const char of value) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (bytes + charBytes > maxBytes) {
+      break;
+    }
+    bytes += charBytes;
+    end += char.length;
+  }
+  return value.slice(0, end);
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`timed out after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+    if (typeof (timer as unknown as { unref?: unknown }).unref === 'function') {
+      (timer as unknown as { unref: () => void }).unref();
+    }
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+// Decode at most `maxBytes` of `buffer` as UTF-8 without splitting the final
+// character: trim trailing bytes that form an incomplete sequence, then
+// decode. The result never contains a split-character replacement.
+function decodeUtf8AtBoundary(buffer: Buffer, maxBytes: number): string {
+  const slice = buffer.subarray(0, Math.min(buffer.length, maxBytes));
+  let end = slice.length;
+  let continuation = 0;
+  for (let i = end - 1; i >= 0; i -= 1) {
+    const byte: number = slice[i] ?? 0;
+    if ((byte & 0xc0) !== 0x80) {
+      const lead: number = slice[i] ?? 0;
+      let need = 1;
+      if ((lead & 0x80) === 0) {
+        need = 1;
+      } else if ((lead & 0xe0) === 0xc0) {
+        need = 2;
+      } else if ((lead & 0xf0) === 0xe0) {
+        need = 3;
+      } else if ((lead & 0xf8) === 0xf0) {
+        need = 4;
+      }
+      if (continuation + 1 < need) {
+        end = i;
+      }
+      break;
+    }
+    continuation += 1;
+  }
+  return slice.subarray(0, end).toString('utf8');
+}
+
+// Bounded file read: opens the file and reads at most `maxBytes + 1` bytes so
+// a huge file never loads fully into memory. Returns the decoded content
+// (at most `maxBytes` UTF-8 bytes) plus whether the file was truncated.
+async function readBoundedTextFile(
+  path: string,
+  maxBytes: number,
+): Promise<{ content: string; truncated: boolean }> {
+  const handle = await fs.open(path, 'r');
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error('not a file');
+    }
+    const toRead = Math.min(stat.size, maxBytes + 1);
+    const buffer = Buffer.alloc(Math.max(0, toRead));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const slice = buffer.subarray(0, bytesRead);
+    const truncated = stat.size > maxBytes || bytesRead > maxBytes;
+    if (!truncated) {
+      return { content: slice.toString('utf8'), truncated: false };
+    }
+    return { content: decodeUtf8AtBoundary(slice, maxBytes), truncated: true };
+  } finally {
+    await handle.close();
+  }
 }
 
 const RECOVERY_EVENT_ALLOWLIST = new Set([
@@ -507,8 +603,9 @@ export interface RecoveryStatusLists {
 
 // Minimal `git status --porcelain` parsing for recovery triage: tracked
 // edits/deletions/renames versus `??` untracked additions. Rename entries
-// keep only the new path; quoted paths are unwrapped without evaluating
-// escapes as code.
+// keep only the new path; C-quoted paths are decoded (octal UTF-8 bytes plus
+// standard escapes) so eligible non-ASCII source stays eligible instead of
+// silently dropping through the allowlist.
 export function parseRecoveryStatus(stdout: string): RecoveryStatusLists {
   const tracked: string[] = [];
   const untracked: string[] = [];
@@ -539,9 +636,64 @@ export function parseRecoveryStatus(stdout: string): RecoveryStatusLists {
 function unwrapStatusPath(path: string): string {
   const trimmed = path.trim();
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1);
+    return decodeGitQuotedPath(trimmed.slice(1, -1));
   }
   return trimmed;
+}
+
+// Decode a git C-quoted path body (surrounding quotes already stripped):
+// octal escapes carry UTF-8 bytes for non-ASCII paths when core.quotepath is
+// on, plus the standard `\"`, `\\`, `\n`, `\t` escapes. Decoding keeps
+// eligible source eligible; on undecodable input the raw body is returned so
+// the allowlist still excludes it by path (counted as excluded) rather than
+// silently disappearing from triage counts.
+function decodeGitQuotedPath(body: string): string {
+  const bytes: number[] = [];
+  let text = '';
+  const flushBytes = (): void => {
+    if (bytes.length > 0) {
+      text += Buffer.from(bytes).toString('utf8');
+      bytes.length = 0;
+    }
+  };
+  for (let i = 0; i < body.length; i += 1) {
+    const char: string = body[i] ?? '';
+    if (char !== '\\' || i + 1 >= body.length) {
+      flushBytes();
+      text += char;
+      continue;
+    }
+    const next: string = body[i + 1] ?? '';
+    if (next === 'n') {
+      flushBytes();
+      text += '\n';
+      i += 1;
+      continue;
+    }
+    if (next === 't') {
+      flushBytes();
+      text += '\t';
+      i += 1;
+      continue;
+    }
+    if (next === '"' || next === '\\') {
+      bytes.push(next.charCodeAt(0));
+      i += 1;
+      continue;
+    }
+    const octal = body.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(octal)) {
+      bytes.push(parseInt(octal, 8));
+      i += 3;
+      continue;
+    }
+    // Not a recognized escape: keep the backslash literally so the path still
+    // flows through allowlist exclusion rather than vanishing.
+    flushBytes();
+    text += char;
+  }
+  flushBytes();
+  return text;
 }
 
 function listRecoveryWorkflowFiles(paths: readonly string[]): string[] {
@@ -563,24 +715,53 @@ export interface RecoveryCaptureDeps {
   execute?: CommandExecutor;
   readFile?: (path: string) => Promise<string>;
   now?: () => string;
+  // Test/operator overrides for finite deadlines (defaults are the exported
+  // `RECOVERY_*_TIMEOUT_MS` constants). Short overrides keep stalled-read and
+  // capture-deadline tests fast without weakening production bounds.
+  readTimeoutMs?: number;
+  captureTimeoutMs?: number;
 }
 
 // Portable bounded snapshot of the actual failed worktree state. Read-only
-// Git/filesystem operations only: the caller invokes this after the worker
-// promise has settled and process-group termination has been signalled
-// (SIGTERM, SIGKILL after the kill grace). The snapshot is best-effort and
-// may still race a worker that is still terminating during that grace window.
-// Every failure degrades to honest incomplete/unavailable metadata and never
-// throws, so the original TIMEOUT/BLOCKED result is always preserved.
+// Git/filesystem operations only: the caller invokes this after bounded worker
+// termination has been established (see `runWorkerStream` termination
+// handshake). Every failure degrades to honest incomplete/unavailable metadata
+// and never throws, so the original TIMEOUT/BLOCKED result is always
+// preserved.
 export async function captureImplementationRecovery(
   input: RecoveryCaptureInput,
   deps: RecoveryCaptureDeps = {},
 ): Promise<ImplementationRecoveryRecord> {
   const diagnostics = summarizeWorkerLifecycle(input.lines);
+  const captureTimeoutMs = deps.captureTimeoutMs ?? RECOVERY_CAPTURE_TIMEOUT_MS;
+  try {
+    return await withTimeout(
+      doCaptureImplementationRecovery(input, deps, diagnostics),
+      captureTimeoutMs,
+    );
+  } catch {
+    return {
+      ...createUnavailableRecovery({
+        base: input.base,
+        branch: input.branch,
+        reasons: ['recovery capture timed out before completion'],
+        diagnostics,
+      }),
+      createdAt: (deps.now ?? (() => new Date().toISOString()))(),
+    };
+  }
+}
+
+async function doCaptureImplementationRecovery(
+  input: RecoveryCaptureInput,
+  deps: RecoveryCaptureDeps,
+  diagnostics: RecoveryDiagnostics,
+): Promise<ImplementationRecoveryRecord> {
   const reasons: string[] = [];
   const now = deps.now ?? (() => new Date().toISOString());
   const execute = deps.execute;
-  const readFile = deps.readFile ?? ((path: string) => fs.readFile(path, 'utf8'));
+  const injectedRead = deps.readFile;
+  const readTimeoutMs = deps.readTimeoutMs ?? RECOVERY_FILE_READ_TIMEOUT_MS;
   const worktreeRoot = input.worktreeRoot ?? process.cwd();
 
   if (execute === undefined) {
@@ -635,7 +816,9 @@ export async function captureImplementationRecovery(
         `${base}..${actualHead}`,
         '--',
       ]);
-      committedNames = parseNameOnlyOutput(stdout);
+      // `git diff --name-only` C-quotes non-ASCII paths like status does;
+      // decode through the same helper so eligible source stays eligible.
+      committedNames = parseNameOnlyOutput(stdout).map((name) => unwrapStatusPath(name));
     } catch {
       reasons.push('committed change list unavailable');
     }
@@ -692,8 +875,8 @@ export async function captureImplementationRecovery(
       const { stdout } = await execute('git', ['diff', base, '--', ...budgeted, '--']);
       combinedPatch = stdout;
       includedTracked = budgeted.length;
-      if (combinedPatch.length > RECOVERY_MAX_TOTAL_BYTES) {
-        combinedPatch = slicePreservingSurrogates(combinedPatch, RECOVERY_MAX_TOTAL_BYTES);
+      if (utf8ByteLength(combinedPatch) > RECOVERY_MAX_TOTAL_BYTES) {
+        combinedPatch = sliceByUtf8Bytes(combinedPatch, RECOVERY_MAX_TOTAL_BYTES);
         patchTruncated = true;
         reasons.push('tracked snapshot truncated at byte bound');
       }
@@ -706,7 +889,8 @@ export async function captureImplementationRecovery(
 
   const untrackedFiles: RecoveryUntrackedFile[] = [];
   let untrackedTruncated = false;
-  let bytesUsed = combinedPatch.length;
+  let diskExcluded = 0;
+  let bytesUsed = utf8ByteLength(combinedPatch);
   const remainingSlots = Math.max(0, RECOVERY_MAX_FILES - includedTracked);
   const budgetedUntracked = eligibleUntrackedCandidates.slice(0, remainingSlots);
   if (budgetedUntracked.length < eligibleUntrackedCandidates.length) {
@@ -722,25 +906,42 @@ export async function captureImplementationRecovery(
     const absolutePath = resolve(worktreeRoot, relativePath);
     const eligible = await isEligibleRecoveryFile(absolutePath, worktreeRoot).catch(() => false);
     if (!eligible) {
+      diskExcluded += 1;
+      reasons.push(`untracked file excluded after disk check: ${relativePath}`);
       continue;
     }
     try {
-      const content = await readFile(absolutePath);
+      // Bounded read with a finite deadline: an injected `readFile` is raced
+      // against the read timeout, while the default path never loads more
+      // than the remaining byte budget (+1 probe) into memory. Either way the
+      // stored content is capped at true UTF-8 bytes, never code units.
       const budget = Math.min(
         RECOVERY_MAX_BYTES_PER_FILE,
         Math.max(0, RECOVERY_MAX_TOTAL_BYTES - bytesUsed),
       );
-      if (content.length > budget) {
-        untrackedFiles.push({
-          path: relativePath,
-          content: slicePreservingSurrogates(content, budget),
-        });
-        bytesUsed += budget;
+      let content: string;
+      let fileTruncated = false;
+      if (injectedRead !== undefined) {
+        const raw = await withTimeout(injectedRead(absolutePath), readTimeoutMs);
+        if (utf8ByteLength(raw) > budget) {
+          content = sliceByUtf8Bytes(raw, budget);
+          fileTruncated = true;
+        } else {
+          content = raw;
+        }
+      } else {
+        const bounded = await withTimeout(readBoundedTextFile(absolutePath, budget), readTimeoutMs);
+        content = bounded.content;
+        fileTruncated = bounded.truncated;
+      }
+      if (fileTruncated) {
+        untrackedFiles.push({ path: relativePath, content });
+        bytesUsed += utf8ByteLength(content);
         untrackedTruncated = true;
         reasons.push(`untracked file truncated at bound: ${relativePath}`);
       } else {
         untrackedFiles.push({ path: relativePath, content });
-        bytesUsed += content.length;
+        bytesUsed += utf8ByteLength(content);
       }
     } catch {
       reasons.push(`untracked file unreadable: ${relativePath}`);
@@ -752,7 +953,7 @@ export async function captureImplementationRecovery(
     uncommitted: trackedStatus.length,
     untracked: untrackedStatus.length,
     included: includedTracked + untrackedFiles.length,
-    excluded: Math.max(0, excludedTracked + excludedUntracked),
+    excluded: Math.max(0, excludedTracked + excludedUntracked + diskExcluded),
   };
 
   const truncated = patchTruncated || untrackedTruncated;
