@@ -723,9 +723,11 @@ export interface RecoveryCaptureDeps {
 }
 
 // Portable bounded snapshot of the actual failed worktree state. Read-only
-// Git/filesystem operations only: the caller invokes this after bounded worker
-// termination has been established (see `runWorkerStream` termination
-// handshake). Every failure degrades to honest incomplete/unavailable metadata
+// Git/filesystem operations only: on the timeout path the caller invokes this
+// after bounded worker termination has been established (see `runWorkerStream`
+// termination handshake); a non-timeout implement failure invokes this after
+// the worker promise settles on the direct-child close without process-group
+// verification. Every failure degrades to honest incomplete/unavailable metadata
 // and never throws, so the original TIMEOUT/BLOCKED result is always
 // preserved.
 export async function captureImplementationRecovery(

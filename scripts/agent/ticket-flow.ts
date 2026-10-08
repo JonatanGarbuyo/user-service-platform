@@ -941,11 +941,14 @@ export async function runAgentTicket(
     } else {
       await settleImplementEvidence(partialStdoutLines(error), headBefore);
     }
-    // Bounded recovery capture (ticket #127): runs after bounded worker
-    // termination has been established by the worker-stream handshake
-    // (SIGTERM, SIGKILL escalation, finite termination deadline). When the
-    // timeout reports terminated=false the worktree may still be changing, so
-    // no snapshot is read: honest unavailable evidence is retained instead.
+    // Bounded recovery capture (ticket #127): on the timeout path runs after
+    // bounded worker termination has been established by the worker-stream
+    // handshake (SIGTERM, SIGKILL escalation, finite termination deadline).
+    // When the timeout reports terminated=false the worktree may still be
+    // changing, so no snapshot is read: honest unavailable evidence is retained
+    // instead. A non-timeout implement failure settles on the direct-child
+    // close without process-group verification; capture then runs after that
+    // settle with the same inspect-before-reuse caution.
     // Capture failures keep honest unavailable metadata and never replace the
     // original TIMEOUT/BLOCKED result.
     let recovery: ImplementationRecoveryRecord | undefined;

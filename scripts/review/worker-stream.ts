@@ -280,6 +280,11 @@ export function runWorkerStream(
         startGroupPoll();
         return;
       }
+      // Non-timeout path (ticket #127): the worker exited on its own, so the
+      // promise settles on the direct-child close without process-group
+      // verification. Group-exit polling and the terminated flag apply to the
+      // timeout path only; see the operator doc for the residual detached-
+      // descendant risk on plain failures.
       settled = true;
       clearInterval(heartbeat);
       if (watchdog !== undefined) {

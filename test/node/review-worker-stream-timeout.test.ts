@@ -330,4 +330,32 @@ describe('worker stream timeout', () => {
       vi.useRealTimers();
     }
   });
+
+  it('settles a non-timeout failure on direct-child close without group-exit verification', async () => {
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 5004;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: 60_000,
+          groupAlive: () => true,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      // A non-zero exit is a plain failure, not a timeout: the promise settles
+      // on the direct-child close even while the group probe still reports
+      // alive. Group-exit verification and the terminated flag apply to the
+      // timeout path only (ticket #127).
+      child.emit('close', 1);
+      await expect(pending).rejects.toThrow(/failed \(exit 1\)/);
+      await expect(pending).rejects.not.toSatisfy(isWorkerTimeout);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
