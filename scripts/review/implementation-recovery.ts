@@ -211,6 +211,11 @@ function isDeniedBasename(basename: string): boolean {
   if (lower === '.ds_store' || lower.endsWith('.log')) {
     return true;
   }
+  // `.npmrc` commonly carries `_authToken` lines once a worker modifies it, so
+  // it is denied by name (not merely by allowlist absence) at every segment.
+  if (lower === '.npmrc') {
+    return true;
+  }
   return false;
 }
 
@@ -224,9 +229,19 @@ export function isEligibleRecoveryPath(raw: unknown): boolean {
   if (path === null) {
     return false;
   }
+  // Deny rules apply to every segment, not just the basename: a directory
+  // itself named `.env`, `.dev.vars`, `debug.log` or `key.pem` must not admit
+  // its children, or `src/.env/foo.ts` would carry secret-named state into the
+  // uploaded outcome record.
   const segments = path.split('/');
   for (const segment of segments) {
     if (DENIED_DIR_SEGMENTS.has(segment.toLowerCase())) {
+      return false;
+    }
+    if (isDeniedBasename(segment)) {
+      return false;
+    }
+    if (DENIED_EXTENSIONS.has(extensionOf(segment))) {
       return false;
     }
   }
@@ -235,19 +250,12 @@ export function isEligibleRecoveryPath(raw: unknown): boolean {
   if (ALLOWED_TOP_LEVEL_FILES.has(path)) {
     return true;
   }
-  const basename = basenameOf(path);
-  if (isDeniedBasename(basename)) {
-    return false;
-  }
-  if (DENIED_EXTENSIONS.has(extensionOf(basename))) {
-    return false;
-  }
   if (path.includes('/')) {
     const hasAllowedPrefix = ALLOWED_DIR_PREFIXES.some((prefix) => path.startsWith(prefix));
     if (!hasAllowedPrefix) {
       return false;
     }
-    return ALLOWED_EXTENSIONS.has(extensionOf(basename));
+    return ALLOWED_EXTENSIONS.has(extensionOf(basenameOf(path)));
   }
   return false;
 }

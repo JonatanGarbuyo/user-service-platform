@@ -71,6 +71,18 @@ describe('implementation recovery path eligibility', () => {
     expect(isEligibleRecoveryPath('src/sub/.npmrc')).toBe(false);
   });
 
+  it('excludes children of secret-named directories, not only the basename', () => {
+    // The deny rules must apply to every path segment: a directory itself
+    // named after a secret/runtime/credential pattern must not admit children.
+    expect(isEligibleRecoveryPath('src/.env/foo.ts')).toBe(false);
+    expect(isEligibleRecoveryPath('src/nested/.env/settings.ts')).toBe(false);
+    expect(isEligibleRecoveryPath('src/nested/.dev.vars/copy.md')).toBe(false);
+    expect(isEligibleRecoveryPath('docs/debug.log/notes.md')).toBe(false);
+    expect(isEligibleRecoveryPath('src/.npmrc/x.ts')).toBe(false);
+    expect(isEligibleRecoveryPath('src/certs/key.pem/readme.md')).toBe(false);
+    expect(isEligibleRecoveryPath('src/state/local.sqlite/x.sql')).toBe(false);
+  });
+
   it('excludes workflow files, evidence dirs and outside-worktree paths', () => {
     expect(isEligibleRecoveryPath('.github/workflows/agent-ticket.yml')).toBe(false);
     expect(isEligibleRecoveryPath('.agent-ticket/outcome.json')).toBe(false);
