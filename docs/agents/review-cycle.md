@@ -55,8 +55,8 @@ Cycles: <n>
    deterministic safe-push path and wait for the PR head to catch up (or
    abort under `--no-push`). The loop never reviews a SHA the PR does not
    point at.
-2. Run both axes concurrently as `opencode run --auto` workers:
-   `/review-standards` (MiMo-V2.6-Flash) and `/review-spec` (Muse Spark 1.3 Contributor Free). Each
+2. Run both axes sequentially as `opencode run --auto` workers:
+   `/review-standards` (MiMo-V2.6-Flash) then `/review-spec` (Muse Spark 1.3 Contributor Free). Both axes stay independent with their own exact-HEAD markers, evidence, and bounds; only the launch order is sequential so two workers never hold the shared OpenCode profile store concurrently. A valid `FAIL` on the first axis never skips the second, and an infrastructure error is surfaced unchanged after the other axis is attempted. Each
    custom command's frontmatter is the single source of truth for its
    configured subagent/model, so no `--agent` flag is passed. Explicit `deny`
    rules remain effective under `--auto`. Workers stream stdout/stderr live

@@ -66,6 +66,7 @@ import {
   type WorkerLabel,
 } from './review/worker-timeout.js';
 import { runWorkerStream } from './review/worker-stream.js';
+import { runReviewAxesSequentially } from './review/review-scheduling.js';
 import {
   buildEvidenceInvocation,
   commandSessionExporter,
@@ -548,54 +549,57 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
     );
     try {
       if (pendingAxes === null) {
-        let standardsStart = 0;
-        let standardsEnd = 0;
-        let specStart = 0;
-        let specEnd = 0;
-        await Promise.all([
-          (async (): Promise<void> => {
-            standardsStart = Date.now();
-            standardsInvocations += 1;
-            await runReviewAxis(
-              'review-standards',
-              pr.number,
-              [],
-              evidenceStreamingWorkerExecutor(
-                'standards',
-                {
-                  command: 'review-standards',
-                  axis: 'standards',
-                  attempt: standardsInvocations,
-                  workerStartHead: head,
-                },
-                recorder,
-              ),
-            );
-            standardsEnd = Date.now();
-          })(),
-          (async (): Promise<void> => {
-            specStart = Date.now();
-            specInvocations += 1;
-            await runReviewAxis(
-              'review-spec',
-              pr.number,
-              [],
-              evidenceStreamingWorkerExecutor(
-                'spec',
-                {
-                  command: 'review-spec',
-                  axis: 'spec',
-                  attempt: specInvocations,
-                  workerStartHead: head,
-                },
-                recorder,
-              ),
-            );
-            specEnd = Date.now();
-          })(),
-        ]);
-        timings.set('standards', { start: standardsStart, end: standardsEnd });
-        timings.set('spec', { start: specStart, end: specEnd });
+        // Sequential initial reviewers (ticket #127 bounded execution-blocker
+        // amendment): Standards and Spec stay independent with their own
+        // commands, evidence, bounds and exact-HEAD markers, but launch one
+        // after the other under the shared OpenCode profile so two workers
+        // never hold its local store concurrently. A logical FAIL on the
+        // first axis never skips the second; an infrastructure error is
+        // surfaced unchanged after the other axis is attempted.
+        const firstError = await runReviewAxesSequentially(
+          ['standards', 'spec'],
+          async (axis) => {
+            if (axis === 'standards') {
+              standardsInvocations += 1;
+              await runReviewAxis(
+                'review-standards',
+                pr.number,
+                [],
+                evidenceStreamingWorkerExecutor(
+                  'standards',
+                  {
+                    command: 'review-standards',
+                    axis: 'standards',
+                    attempt: standardsInvocations,
+                    workerStartHead: head,
+                  },
+                  recorder,
+                ),
+              );
+            } else {
+              specInvocations += 1;
+              await runReviewAxis(
+                'review-spec',
+                pr.number,
+                [],
+                evidenceStreamingWorkerExecutor(
+                  'spec',
+                  {
+                    command: 'review-spec',
+                    axis: 'spec',
+                    attempt: specInvocations,
+                    workerStartHead: head,
+                  },
+                  recorder,
+                ),
+              );
+            }
+          },
+          timings,
+        );
+        if (firstError !== undefined) {
+          throw firstError as Error;
+        }
       } else {
         // Blocker 1 (PR #17): a reviewer published without its marker — retry
         // only the missing axis instead of demanding manual intervention.
@@ -663,11 +667,12 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
     }
     recorder.setMarkerRetries({ ...markerRetries });
     recorder.setReviewedHead(head);
-    // Dual-review completion (ticket #40). The initial reviewers run in
-    // parallel under a single stage transition, so the transition alone can
+    // Dual-review completion (ticket #40). The initial reviewers run
+    // sequentially under a single stage transition, so the transition alone can
     // only record one axis. Mark each axis completed only from its
     // exact-HEAD validated marker — a missing or stale marker never counts.
-    // Workers stay concurrent; only completion bookkeeping is explicit.
+    // Reviewers stay independent; only the launch order is sequential and only
+    // completion bookkeeping is explicit.
     if (reports.standards !== undefined) {
       recorder.markCompleted('Standards review');
     }

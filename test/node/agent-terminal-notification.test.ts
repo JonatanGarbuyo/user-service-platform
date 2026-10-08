@@ -8,7 +8,7 @@ import { createRunSummaryRecorder } from '../../scripts/review/run-summary.js';
 // Regression 1: PR #39 run 34691443905 executed both reviewers to PASS on one
 // exact HEAD, yet the durable status rendered only
 // `Completed: Standards review, gates, exact-HEAD CI` — Spec review was
-// omitted because the initial parallel reviewers ran under a single
+// omitted because the initial sequential reviewers ran under a single
 // `Standards review` stage.
 // Regression 2: terminal notification comments started with `AGENT-TICKET...`
 // or `@owner`, so mobile/email previews did not lead with the outcome.
@@ -27,8 +27,8 @@ describe('dual-review completed stages (ticket #40)', () => {
     recorder.setReviewedHead('a'.repeat(40));
 
     recorder.setStage('Standards review');
-    // Both reviewers ran in parallel; exact-HEAD markers for both axes are
-    // present, so both stages count as completed without serializing workers.
+    // Both reviewers ran sequentially; exact-HEAD markers for both axes are
+    // present, so both stages count as completed without concurrent workers.
     recorder.markCompleted('Standards review');
     recorder.markCompleted('Spec review');
 
@@ -55,11 +55,13 @@ describe('dual-review completed stages (ticket #40)', () => {
     expect(summary.completedStages).not.toContain('Spec review');
   });
 
-  it('keeps parallel reviewer execution independent in review-cycle', () => {
+  it('keeps sequential reviewer execution independent in review-cycle', () => {
     const source = readReviewCycleSource();
 
-    // Parallel execution must remain: both axes still run concurrently.
-    expect(source).toMatch(/Promise\.all/);
+    // Sequential execution under the shared profile: both axes still run
+    // independently via the sequential scheduler, never concurrently.
+    expect(source).toMatch(/runReviewAxesSequentially/);
+    expect(source).not.toMatch(/Promise\.all/);
     // Completion is derived from exact-HEAD markers, never inferred.
     expect(source).toMatch(/markCompleted\(['"]Standards review['"]\)/);
     expect(source).toMatch(/markCompleted\(['"]Spec review['"]\)/);

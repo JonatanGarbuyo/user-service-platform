@@ -140,9 +140,10 @@ export interface RunSummaryRecorder {
   setReviewedHead(head: string): void;
   setInitialHead(head: string): void;
   setStage(stage: string): void;
-  // Explicit completion for parallel stages (ticket #40). The initial dual
-  // reviewers run concurrently under one stage transition, so a stage that
-  // completed in parallel would otherwise never appear in `completedStages`.
+  // Explicit completion for sequential stages (ticket #40). The initial dual
+  // reviewers run sequentially under one stage transition, so a stage that
+  // completed without its own transition would otherwise never appear in
+  // `completedStages`.
   // Callers mark only axes with an exact-HEAD validated marker; a missing or
   // stale marker must never be marked completed.
   markCompleted(stage: string): void;
