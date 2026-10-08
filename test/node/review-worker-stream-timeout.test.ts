@@ -80,7 +80,7 @@ describe('worker stream timeout', () => {
       const pending = runWorkerStream(
         'opencode',
         ['run', '--auto'],
-        { label: 'standards', timeoutMs: 500 },
+        { label: 'standards', timeoutMs: 500, groupAlive: () => false },
         () => child,
       );
       const assertion = expect(pending).rejects.toSatisfy(isWorkerTimeout);
@@ -168,7 +168,7 @@ describe('worker stream timeout', () => {
       const pending = runWorkerStream(
         'opencode',
         ['run', '--auto'],
-        { label: 'implement', timeoutMs: 500, killGraceMs: 1_000 },
+        { label: 'implement', timeoutMs: 500, killGraceMs: 1_000, groupAlive: () => false },
         () => child,
       );
       const assertion = expect(pending).rejects.toSatisfy(isWorkerTimeout);
@@ -201,6 +201,130 @@ describe('worker stream timeout', () => {
       await vi.advanceTimersByTimeAsync(500 + 1_000 + 1_000 + 100);
       await assertion;
       expect(child.kill).toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not treat direct-child close as termination while the process group stays alive', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 5001;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      let groupAlive = true;
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: 500,
+          killGraceMs: 1_000,
+          groupAlive: () => groupAlive,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      let settled = false;
+      let terminated: boolean | undefined;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        (error: unknown) => {
+          settled = true;
+          terminated = (error as { terminated?: boolean }).terminated;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(600);
+      // Parent closes while a SIGTERM-ignoring descendant survives.
+      child.emit('close', 1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled).toBe(false);
+      // Descendant exits before the termination deadline: timeout preserved
+      // with termination confirmed.
+      groupAlive = false;
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(pending).rejects.toMatchObject({ terminated: true });
+      expect(settled).toBe(true);
+      expect(terminated).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains escalation after child close and reports terminated=false when the group never exits', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 5002;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: 500,
+          killGraceMs: 1_000,
+          groupAlive: () => true,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      const assertion = expect(pending).rejects.toMatchObject({ terminated: false });
+      await vi.advanceTimersByTimeAsync(600);
+      // Direct child closes but the descendant group survives.
+      child.emit('close', 1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      // Escalation is retained even after the direct-child close.
+      expect(killSpy).toHaveBeenCalledWith(-5002, 'SIGKILL');
+      // Termination deadline expires with the group still alive.
+      await vi.advanceTimersByTimeAsync(500 + 1_000 + 1_000 + 500);
+      await assertion;
+    } finally {
+      logSpy.mockRestore();
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not treat an error event alone as worker termination', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 5003;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: 500,
+          killGraceMs: 1_000,
+          groupAlive: () => true,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(600);
+      child.emit('error', new Error('spawn ESRCH'));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(500 + 1_000 + 1_000 + 500);
+      await expect(pending).rejects.toMatchObject({ terminated: false });
+      expect(settled).toBe(true);
     } finally {
       logSpy.mockRestore();
       vi.useRealTimers();

@@ -12,7 +12,9 @@ changing product scope, timeout bounds, or publication safeguards.
 When the `agent-ticket` implement worker times out or fails, repository-owned
 code captures a bounded secret-safe recovery record **after** bounded worker
 termination has been established (SIGTERM, SIGKILL escalation after the kill
-grace, finite termination deadline; the original `TIMEOUT` is preserved).
+grace, process-group exit verification, finite termination deadline; the
+original `TIMEOUT` is preserved). A direct-child close or error alone never
+establishes termination while the process group stays alive.
 When termination cannot be established within its bound, no worktree snapshot
 is read: honest `unavailable` evidence is retained instead so the record never
 races a still-writing implementer. The record is embedded

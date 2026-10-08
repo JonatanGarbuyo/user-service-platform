@@ -24,6 +24,33 @@ export interface WorkerStreamOptions {
   // the line is still captured in `stdout` and delivered to `onStdoutLine`.
   // Lifecycle messages (started/completed/failed/heartbeat) are unaffected.
   stdoutLogFilter?: (line: string) => boolean;
+  // Process-group liveness probe (ticket #127): the direct child can close
+  // while a SIGTERM-ignoring descendant survives, so termination is only
+  // established when the group is gone. Tests inject a faithful stub; the
+  // default probes with `process.kill(-pid, 0)`.
+  groupAlive?: (pid: number) => boolean;
+  // Poll interval for group-exit verification after the direct child closes.
+  groupPollMs?: number;
+}
+
+// Default group-liveness probe: signal 0 performs existence checking without
+// delivering a signal. ESRCH means the group is gone; any other outcome
+// (including EPERM) conservatively reports alive so termination is never
+// claimed from a torn snapshot.
+function defaultIsGroupAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'ESRCH') {
+      return false;
+    }
+    return true;
+  }
 }
 
 export type SpawnFn = (command: string, args: readonly string[]) => SpawnedWorker;
@@ -126,16 +153,21 @@ export function runWorkerStream(
     // terminate the hung subprocess tree and reject with a distinguishable
     // timeout so callers can report TIMEOUT rather than a generic exit
     // failure. SIGTERM first, SIGKILL after the kill grace so no orphan
-    // OpenCode process continues. The rejection waits for bounded worker exit
-    // so a recovery snapshot taken after the rejection does not race a
-    // still-writing implementer; when exit cannot be established within the
-    // termination deadline the error carries terminated=false and callers must
-    // retain unavailable evidence instead of reading a changing worktree.
+    // OpenCode process continues. The rejection waits for bounded process-group
+    // exit so a recovery snapshot taken after the rejection does not race a
+    // still-writing implementer; a direct-child close or error alone never
+    // establishes termination while the group stays alive. When group exit
+    // cannot be established within the termination deadline the error carries
+    // terminated=false and callers must retain unavailable evidence instead of
+    // reading a changing worktree.
     const timeoutMs = options.timeoutMs;
     const killGraceMs = options.killGraceMs ?? WORKER_KILL_GRACE_MS;
+    const isGroupAlive = options.groupAlive ?? defaultIsGroupAlive;
+    const groupPollMs = options.groupPollMs ?? 50;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     let killEscalation: ReturnType<typeof setTimeout> | undefined;
     let terminationDeadline: ReturnType<typeof setTimeout> | undefined;
+    let groupPoll: ReturnType<typeof setInterval> | undefined;
     let timedOut = false;
     const clearTerminationTimers = (): void => {
       if (killEscalation !== undefined) {
@@ -145,6 +177,52 @@ export function runWorkerStream(
       if (terminationDeadline !== undefined) {
         clearTimeout(terminationDeadline);
         terminationDeadline = undefined;
+      }
+      if (groupPoll !== undefined) {
+        clearInterval(groupPoll);
+        groupPoll = undefined;
+      }
+    };
+    const isGroupGone = (): boolean => {
+      const pid = child.pid;
+      if (pid === undefined || !Number.isInteger(pid) || pid <= 0) {
+        return true;
+      }
+      try {
+        return !isGroupAlive(pid);
+      } catch {
+        // A failing probe never establishes exit: stay conservative.
+        return false;
+      }
+    };
+    const settleTimeout = (terminated: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (watchdog !== undefined) {
+        clearTimeout(watchdog);
+      }
+      clearTerminationTimers();
+      if (!terminated) {
+        console.log(`[${options.label}] termination unconfirmed; reporting timeout`);
+      }
+      reject(new WorkerTimeoutError(options.label, timeoutMs ?? 0, invocation, terminated));
+    };
+    const startGroupPoll = (): void => {
+      if (groupPoll !== undefined || settled) {
+        return;
+      }
+      groupPoll = setInterval(() => {
+        if (settled) {
+          return;
+        }
+        if (isGroupGone()) {
+          settleTimeout(true);
+        }
+      }, groupPollMs);
+      if (typeof (groupPoll as unknown as { unref?: unknown }).unref === 'function') {
+        (groupPoll as unknown as { unref: () => void }).unref();
       }
     };
     if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
@@ -186,15 +264,20 @@ export function runWorkerStream(
         return;
       }
       if (timedOut) {
-        // The bound already fired: the worker exited within its termination
-        // deadline, so preserve the original TIMEOUT with termination
-        // confirmed instead of resolving or reporting a generic exit failure.
-        settled = true;
-        if (watchdog !== undefined) {
-          clearTimeout(watchdog);
+        // The bound already fired. An `error` event alone never establishes
+        // exit: wait for `close` or the termination deadline instead.
+        if (error !== null) {
+          return;
         }
-        clearTerminationTimers();
-        reject(new WorkerTimeoutError(options.label, timeoutMs ?? 0, invocation, true));
+        // The direct child can close while a SIGTERM-ignoring descendant
+        // survives with closed/ignored stdio. Only the process group going
+        // away establishes termination; otherwise retain SIGKILL escalation
+        // and poll until the finite deadline, which reports terminated=false.
+        if (isGroupGone()) {
+          settleTimeout(true);
+          return;
+        }
+        startGroupPoll();
         return;
       }
       settled = true;
