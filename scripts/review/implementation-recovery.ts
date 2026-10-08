@@ -603,9 +603,10 @@ export interface RecoveryStatusLists {
 
 // Minimal `git status --porcelain` parsing for recovery triage: tracked
 // edits/deletions/renames versus `??` untracked additions. Rename entries
-// keep only the new path; C-quoted paths are decoded (octal UTF-8 bytes plus
-// standard escapes) so eligible non-ASCII source stays eligible instead of
-// silently dropping through the allowlist.
+// keep both the old and the new path so the deletion is not silently dropped
+// from the portable snapshot; C-quoted paths are decoded (octal UTF-8 bytes
+// plus standard escapes) so eligible non-ASCII source stays eligible instead
+// of silently dropping through the allowlist.
 export function parseRecoveryStatus(stdout: string): RecoveryStatusLists {
   const tracked: string[] = [];
   const untracked: string[] = [];
@@ -625,7 +626,18 @@ export function parseRecoveryStatus(stdout: string): RecoveryStatusLists {
     }
     const rest = rawLine.slice(3);
     const arrow = rest.lastIndexOf(' -> ');
-    const path = unwrapStatusPath((arrow >= 0 ? rest.slice(arrow + 4) : rest).trim());
+    if (arrow >= 0) {
+      const oldPath = unwrapStatusPath(rest.slice(0, arrow).trim());
+      const newPath = unwrapStatusPath(rest.slice(arrow + 4).trim());
+      if (oldPath !== '') {
+        tracked.push(oldPath);
+      }
+      if (newPath !== '') {
+        tracked.push(newPath);
+      }
+      continue;
+    }
+    const path = unwrapStatusPath(rest.trim());
     if (path !== '') {
       tracked.push(path);
     }
@@ -815,11 +827,14 @@ async function doCaptureImplementationRecovery(
       const { stdout } = await execute('git', [
         'diff',
         '--name-only',
+        '--no-renames',
         `${base}..${actualHead}`,
         '--',
       ]);
       // `git diff --name-only` C-quotes non-ASCII paths like status does;
       // decode through the same helper so eligible source stays eligible.
+      // `--no-renames` lists both sides of a pure rename as a deletion plus
+      // an addition so the old path cannot disappear while reporting complete.
       committedNames = parseNameOnlyOutput(stdout).map((name) => unwrapStatusPath(name));
     } catch {
       reasons.push('committed change list unavailable');

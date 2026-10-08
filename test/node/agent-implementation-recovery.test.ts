@@ -209,7 +209,7 @@ describe('implementation recovery summary surface', () => {
       if (key === 'git rev-parse --abbrev-ref HEAD') {
         return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
       }
-      if (key === `git diff --name-only ${base}..${head} --`) {
+      if (key === `git diff --name-only --no-renames ${base}..${head} --`) {
         return Promise.resolve({ stdout: 'src/big.ts\n', stderr: '' });
       }
       if (key === 'git status --porcelain -uall') {
@@ -249,7 +249,7 @@ describe('implementation recovery summary surface', () => {
         if (key === 'git rev-parse --abbrev-ref HEAD') {
           return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
         }
-        if (key === `git diff --name-only ${base}..${head} --`) {
+        if (key === `git diff --name-only --no-renames ${base}..${head} --`) {
           return Promise.resolve({ stdout: '', stderr: '' });
         }
         if (key === 'git status --porcelain -uall') {
@@ -292,7 +292,7 @@ describe('implementation recovery summary surface', () => {
         if (key === 'git rev-parse --abbrev-ref HEAD') {
           return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
         }
-        if (key === `git diff --name-only ${base}..${head} --`) {
+        if (key === `git diff --name-only --no-renames ${base}..${head} --`) {
           return Promise.resolve({ stdout: '', stderr: '' });
         }
         if (key === 'git status --porcelain -uall') {
@@ -336,7 +336,7 @@ describe('implementation recovery summary surface', () => {
       if (key === 'git rev-parse --abbrev-ref HEAD') {
         return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
       }
-      if (key === `git diff --name-only ${base}..${head} --`) {
+      if (key === `git diff --name-only --no-renames ${base}..${head} --`) {
         return Promise.resolve({ stdout: 'src/big.ts\n', stderr: '' });
       }
       if (key === 'git status --porcelain -uall') {
@@ -377,7 +377,7 @@ describe('implementation recovery summary surface', () => {
         if (key === 'git rev-parse --abbrev-ref HEAD') {
           return Promise.resolve({ stdout: 'ticket/127-x\n', stderr: '' });
         }
-        if (key === `git diff --name-only ${base}..${head} --`) {
+        if (key === `git diff --name-only --no-renames ${base}..${head} --`) {
           return Promise.resolve({ stdout: '', stderr: '' });
         }
         if (key === 'git status --porcelain -uall') {
@@ -617,6 +617,66 @@ describe('implementation recovery portable snapshot (real temporary Git worktree
     // `é` (U+00E9) is quoted by git as octal UTF-8 bytes when core.quotepath is on.
     const parsed = parseRecoveryStatus('?? "src/\\303\\251clair.ts"\n');
     expect(parsed.untracked).toEqual(['src/éclair.ts']);
+  });
+
+  it('keeps both sides of a porcelain rename so the deletion is not lost', async () => {
+    const { parseRecoveryStatus } = await import('../../scripts/review/implementation-recovery.js');
+    const parsed = parseRecoveryStatus('R  src/old.ts -> src/new.ts\n');
+    expect(parsed.tracked).toContain('src/old.ts');
+    expect(parsed.tracked).toContain('src/new.ts');
+  });
+
+  it('reconstructs a committed rename without leaving the old path behind', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-rename-'));
+    try {
+      initRepo(dir);
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'old.ts'), 'export const v = 1;\n');
+      git(dir, ['add', '.']);
+      git(dir, ['commit', '-qm', 'base']);
+      const base = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      // Simulated failed worker: pure rename committed on the ticket branch.
+      git(dir, ['mv', 'src/old.ts', 'src/new.ts']);
+      git(dir, ['commit', '-qm', 'worker rename']);
+
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        { execute: realExecutor(dir) },
+      );
+
+      const clean = mkdtempSync(join(tmpdir(), 'recovery-rename-clean-'));
+      try {
+        initRepo(clean);
+        mkdirSync(join(clean, 'src'), { recursive: true });
+        writeFileSync(join(clean, 'src', 'old.ts'), 'export const v = 1;\n');
+        git(clean, ['add', '.']);
+        git(clean, ['commit', '-qm', 'base']);
+        if (record.combinedPatch !== '') {
+          const patchPath = join(tmpdir(), `recovery-rename-${String(Date.now())}.patch`);
+          writeFileSync(patchPath, record.combinedPatch);
+          try {
+            git(clean, ['apply', patchPath]);
+          } finally {
+            rmSync(patchPath, { force: true });
+          }
+        }
+        let oldExists = true;
+        try {
+          readFileSync(join(clean, 'src', 'old.ts'));
+        } catch {
+          oldExists = false;
+        }
+        expect(oldExists).toBe(false);
+        expect(readFileSync(join(clean, 'src', 'new.ts'), 'utf8')).toContain('v = 1');
+      } finally {
+        rmSync(clean, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('reports disk-level rejections with reasons and excluded counts, not complete', async () => {
