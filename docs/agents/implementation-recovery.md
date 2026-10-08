@@ -9,20 +9,16 @@ changing product scope, timeout bounds, or publication safeguards.
 
 ## What is captured
 
-When the `agent-ticket` implement worker times out, repository-owned
+When the `agent-ticket` implement worker times out or fails, repository-owned
 code captures a bounded secret-safe recovery record **after** bounded worker
 termination has been established (SIGTERM, SIGKILL escalation after the kill
 grace, process-group exit verification, finite termination deadline; the
-original `TIMEOUT` is preserved). On the timeout path a direct-child close
+original `TIMEOUT`/`BLOCKED` classification is preserved and a plain failure
+is never converted to `TIMEOUT`). On both paths a direct-child close
 or error alone never establishes termination while the process group stays
 alive. When termination cannot be established within its bound, no worktree
 snapshot is read: honest `unavailable` evidence is retained instead so the
-record never races a still-writing implementer. A non-timeout implement
-failure (non-zero exit) is captured after the worker promise settles on the
-direct-child close. Process-group exit verification applies to the timeout
-path only; a detached descendant that outlives a failed parent could still be
-writing, so `BLOCKED` recovery carries the same inspect-before-reuse caution
-and is never proof that no background writer remains. The record is embedded
+record never races a still-writing implementer. The record is embedded
 additively in the already-uploaded `.agent-ticket/outcome.json` artifact.
 No workflow-file edit or new credential is needed: the existing
 `agent-ticket` artifact selection already uploads that outcome record.

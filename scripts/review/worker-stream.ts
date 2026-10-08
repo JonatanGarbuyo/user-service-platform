@@ -159,7 +159,9 @@ export function runWorkerStream(
     // establishes termination while the group stays alive. When group exit
     // cannot be established within the termination deadline the error carries
     // terminated=false and callers must retain unavailable evidence instead of
-    // reading a changing worktree.
+    // reading a changing worktree. The same bounded group-exit verification
+    // applies to non-timeout implement failures: the original BLOCKED
+    // classification is preserved, never converted to TIMEOUT.
     const timeoutMs = options.timeoutMs;
     const killGraceMs = options.killGraceMs ?? WORKER_KILL_GRACE_MS;
     const isGroupAlive = options.groupAlive ?? defaultIsGroupAlive;
@@ -169,6 +171,8 @@ export function runWorkerStream(
     let terminationDeadline: ReturnType<typeof setTimeout> | undefined;
     let groupPoll: ReturnType<typeof setInterval> | undefined;
     let timedOut = false;
+    let failurePending: { spawnError: Error | null; exitCode: number | null } | undefined;
+    let failureTerminationStarted = false;
     const clearTerminationTimers = (): void => {
       if (killEscalation !== undefined) {
         clearTimeout(killEscalation);
@@ -225,9 +229,103 @@ export function runWorkerStream(
         (groupPoll as unknown as { unref: () => void }).unref();
       }
     };
+    const flushPendingLines = (): void => {
+      if (stdoutBuffer.text !== '') {
+        const line = stripCarriageReturn(stdoutBuffer.text);
+        stdout += `${line}\n`;
+        handlers.onStdoutLine?.(line);
+        if (options.stdoutLogFilter?.(line) ?? true) {
+          console.log(`[${options.label}] ${line}`);
+        }
+        stdoutBuffer.text = '';
+      }
+      if (stderrBuffer.text !== '') {
+        const line = stripCarriageReturn(stderrBuffer.text);
+        stderr += `${line}\n`;
+        handlers.onStderrLine?.(line);
+        console.error(`[${options.label}] ${line}`);
+        stderrBuffer.text = '';
+      }
+    };
+    const settleFailure = (terminated: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (watchdog !== undefined) {
+        clearTimeout(watchdog);
+      }
+      clearTerminationTimers();
+      clearInterval(heartbeat);
+      flushPendingLines();
+      if (failurePending?.spawnError !== null && failurePending?.spawnError !== undefined) {
+        const original = failurePending.spawnError;
+        (original as { terminated?: boolean }).terminated = terminated;
+        if (!terminated) {
+          console.log(`[${options.label}] termination unconfirmed; reporting failure`);
+        } else {
+          console.log(`[${options.label}] failed (spawn error)`);
+        }
+        reject(original);
+        return;
+      }
+      const code = failurePending?.exitCode ?? 0;
+      const failure = new Error(
+        `${invocation} failed (exit ${String(code)}): ${stderr.slice(-2000)}`,
+      );
+      (failure as { terminated?: boolean }).terminated = terminated;
+      if (!terminated) {
+        console.log(`[${options.label}] termination unconfirmed; reporting failure`);
+      } else {
+        console.log(`[${options.label}] failed (exit ${String(code)})`);
+      }
+      reject(failure);
+    };
+    const startFailureGroupPoll = (): void => {
+      if (groupPoll !== undefined || settled) {
+        return;
+      }
+      groupPoll = setInterval(() => {
+        if (settled) {
+          return;
+        }
+        if (isGroupGone()) {
+          settleFailure(true);
+        }
+      }, groupPollMs);
+      if (typeof (groupPoll as unknown as { unref?: unknown }).unref === 'function') {
+        (groupPoll as unknown as { unref: () => void }).unref();
+      }
+    };
+    const startFailureTermination = (): void => {
+      if (failureTerminationStarted || settled) {
+        return;
+      }
+      failureTerminationStarted = true;
+      if (watchdog !== undefined) {
+        clearTimeout(watchdog);
+      }
+      clearInterval(heartbeat);
+      console.log(`[${options.label}] worker failed; verifying process-group exit`);
+      killTree('SIGTERM');
+      killEscalation = setTimeout(() => {
+        console.log(`[${options.label}] still terminating; escalating to SIGKILL`);
+        killTree('SIGKILL');
+      }, killGraceMs);
+      if (typeof (killEscalation as unknown as { unref?: unknown }).unref === 'function') {
+        (killEscalation as unknown as { unref: () => void }).unref();
+      }
+      terminationDeadline = setTimeout(() => {
+        settleFailure(false);
+      }, killGraceMs * 2);
+      if (typeof (terminationDeadline as unknown as { unref?: unknown }).unref === 'function') {
+        (terminationDeadline as unknown as { unref: () => void }).unref();
+      }
+      startFailureGroupPoll();
+    };
     if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
       watchdog = setTimeout(() => {
-        if (settled || timedOut) {
+        if (settled || timedOut || failureTerminationStarted) {
           return;
         }
         timedOut = true;
@@ -280,44 +378,34 @@ export function runWorkerStream(
         startGroupPoll();
         return;
       }
-      // Non-timeout path (ticket #127): the worker exited on its own, so the
-      // promise settles on the direct-child close without process-group
-      // verification. Group-exit polling and the terminated flag apply to the
-      // timeout path only; see the operator doc for the residual detached-
-      // descendant risk on plain failures.
-      settled = true;
-      clearInterval(heartbeat);
-      if (watchdog !== undefined) {
-        clearTimeout(watchdog);
-      }
-      if (stdoutBuffer.text !== '') {
-        const line = stripCarriageReturn(stdoutBuffer.text);
-        stdout += `${line}\n`;
-        handlers.onStdoutLine?.(line);
-        if (options.stdoutLogFilter?.(line) ?? true) {
-          console.log(`[${options.label}] ${line}`);
+      // Non-timeout path (ticket #127): success settles on the direct-child
+      // close without verification. A failure (spawn error or non-zero exit)
+      // uses the same bounded group-exit handshake as the timeout path so a
+      // recovery snapshot cannot race a surviving descendant: only the process
+      // group going away establishes termination, with SIGTERM/SIGKILL
+      // escalation and a finite deadline. The original BLOCKED classification
+      // is preserved; only the terminated flag is added. An error event alone
+      // never establishes exit while the group stays alive.
+      if (error === null && exitCode === 0) {
+        settled = true;
+        clearInterval(heartbeat);
+        if (watchdog !== undefined) {
+          clearTimeout(watchdog);
         }
-      }
-      if (stderrBuffer.text !== '') {
-        const line = stripCarriageReturn(stderrBuffer.text);
-        stderr += `${line}\n`;
-        handlers.onStderrLine?.(line);
-        console.error(`[${options.label}] ${line}`);
-      }
-      if (error !== null) {
-        console.log(`[${options.label}] failed (spawn error)`);
-        reject(error);
+        flushPendingLines();
+        console.log(`[${options.label}] completed (exit 0)`);
+        resolve({ stdout, stderr });
         return;
       }
-      if (exitCode !== 0) {
-        console.log(`[${options.label}] failed (exit ${String(exitCode)})`);
-        reject(
-          new Error(`${invocation} failed (exit ${String(exitCode)}): ${stderr.slice(-2000)}`),
-        );
+      if (failureTerminationStarted) {
         return;
       }
-      console.log(`[${options.label}] completed (exit 0)`);
-      resolve({ stdout, stderr });
+      failurePending = { spawnError: error, exitCode };
+      if (isGroupGone()) {
+        settleFailure(true);
+        return;
+      }
+      startFailureTermination();
     };
 
     child.stdout?.on('data', (chunk: Buffer | string) => {

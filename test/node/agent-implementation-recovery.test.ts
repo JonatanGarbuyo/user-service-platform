@@ -906,6 +906,46 @@ describe('implementation recovery ticket-flow wiring', () => {
     }
   });
 
+  it('retains unavailable recovery without capturing when plain failure termination is unconfirmed', async () => {
+    const { runAgentTicket } = await import('../../scripts/agent/ticket-flow.js');
+    const outcomes: { outcome: string; stage: string; recovery?: unknown }[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      let captureCalls = 0;
+      const failure = Object.assign(new Error('opencode run --auto failed (exit 1)'), {
+        terminated: false,
+      });
+      const result = await runAgentTicket('10', {
+        execute: wiringExecute(wiringScript()),
+        runWorker: () => Promise.reject(failure),
+        captureRecovery: () => {
+          captureCalls += 1;
+          return Promise.reject(new Error('must not capture a still-writing worktree'));
+        },
+        recordOutcome: (record) => {
+          outcomes.push({
+            outcome: record.outcome,
+            stage: record.stage,
+            recovery: record.recovery,
+          });
+        },
+      });
+
+      // The original BLOCKED is preserved, but no worktree read was attempted:
+      // the record is honest unavailable evidence, not a torn snapshot.
+      expect(result.exitCode).toBe(1);
+      expect(result.failedStage).toBe('implement');
+      expect(result.timedOut).toBeUndefined();
+      expect(captureCalls).toBe(0);
+      expect(result.recovery?.status).toBe('unavailable');
+      expect(result.recovery?.reasons.join(' ') ?? '').toMatch(/termination/i);
+      expect(outcomes.at(-1)).toMatchObject({ outcome: 'BLOCKED', stage: 'implementation' });
+      expect(outcomes.at(-1)?.recovery).toBeDefined();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('preserves the original failure when the capture itself throws', async () => {
     const { runAgentTicket } = await import('../../scripts/agent/ticket-flow.js');
     const outcomes: { outcome: string; recovery?: unknown }[] = [];

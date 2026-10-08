@@ -941,21 +941,26 @@ export async function runAgentTicket(
     } else {
       await settleImplementEvidence(partialStdoutLines(error), headBefore);
     }
-    // Bounded recovery capture (ticket #127): on the timeout path runs after
-    // bounded worker termination has been established by the worker-stream
-    // handshake (SIGTERM, SIGKILL escalation, finite termination deadline).
-    // When the timeout reports terminated=false the worktree may still be
-    // changing, so no snapshot is read: honest unavailable evidence is retained
-    // instead. A non-timeout implement failure settles on the direct-child
-    // close without process-group verification; capture then runs after that
-    // settle with the same inspect-before-reuse caution.
+    // Bounded recovery capture (ticket #127): runs only after bounded worker
+    // termination has been established by the worker-stream handshake (SIGTERM,
+    // SIGKILL escalation, finite termination deadline, process-group exit
+    // verification) for both timeout and non-timeout implement failures.
+    // When termination is unconfirmed the worktree may still be changing, so no
+    // snapshot is read: honest unavailable evidence is retained instead.
     // Capture failures keep honest unavailable metadata and never replace the
     // original TIMEOUT/BLOCKED result.
     let recovery: ImplementationRecoveryRecord | undefined;
-    // Unconfirmed termination (including duck-typed timeouts without a flag)
-    // skips the worktree read conservatively: honest unavailable evidence
-    // instead of a potentially torn snapshot.
-    const terminationUnconfirmed = isWorkerTimeout(error) && !error.terminated;
+    // Unconfirmed termination skips the worktree read conservatively: honest
+    // unavailable evidence instead of a potentially torn snapshot. Timeout
+    // duck-types without an explicit terminated=true fail closed, as does any
+    // real-stream failure without explicit confirmation; the injected test seam
+    // (no evidence capture) has no process group, so only explicit false blocks.
+    const terminatedFlag = (error as { terminated?: unknown }).terminated;
+    const terminationUnconfirmed = isWorkerTimeout(error)
+      ? terminatedFlag !== true
+      : implementCapture !== null
+        ? terminatedFlag !== true
+        : terminatedFlag === false;
     if (terminationUnconfirmed) {
       recovery = createUnavailableRecovery({
         base: headBefore,

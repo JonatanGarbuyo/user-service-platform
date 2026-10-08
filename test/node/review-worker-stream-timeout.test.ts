@@ -331,7 +331,7 @@ describe('worker stream timeout', () => {
     }
   });
 
-  it('settles a non-timeout failure on direct-child close without group-exit verification', async () => {
+  it('settles a non-timeout failure immediately when the process group is already gone', async () => {
     const { child } = createKillableChild();
     (child as { pid?: number }).pid = 5004;
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -342,20 +342,106 @@ describe('worker stream timeout', () => {
         {
           label: 'implement',
           timeoutMs: 60_000,
+          groupAlive: () => false,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      // A non-zero exit is a plain failure, not a timeout: when the group is
+      // already gone the promise settles on the direct-child close with
+      // terminated=true, preserving BLOCKED classification (ticket #127).
+      child.emit('close', 1);
+      await expect(pending).rejects.toThrow(/failed \(exit 1\)/);
+      await expect(pending).rejects.not.toSatisfy(isWorkerTimeout);
+      await expect(pending).rejects.toMatchObject({ terminated: true });
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('does not settle a non-timeout failure before confirmed group exit', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 5005;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      let groupAlive = true;
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: 60_000,
+          killGraceMs: 1_000,
+          groupAlive: () => groupAlive,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      let settled = false;
+      let terminated: boolean | undefined;
+      let timeout = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        (error: unknown) => {
+          settled = true;
+          terminated = (error as { terminated?: boolean }).terminated;
+          timeout = isWorkerTimeout(error);
+        },
+      );
+      // Non-zero parent close while a descendant survives: capture must not
+      // start before confirmed group exit.
+      child.emit('close', 1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled).toBe(false);
+      groupAlive = false;
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(pending).rejects.toThrow(/failed \(exit 1\)/);
+      await expect(pending).rejects.not.toSatisfy(isWorkerTimeout);
+      expect(settled).toBe(true);
+      expect(timeout).toBe(false);
+      expect(terminated).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports terminated=false with BLOCKED classification when the group never exits on failure', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    (child as { pid?: number }).pid = 5006;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: 60_000,
+          killGraceMs: 1_000,
           groupAlive: () => true,
           groupPollMs: 50,
         },
         () => child,
       );
-      // A non-zero exit is a plain failure, not a timeout: the promise settles
-      // on the direct-child close even while the group probe still reports
-      // alive. Group-exit verification and the terminated flag apply to the
-      // timeout path only (ticket #127).
+      const assertion = expect(pending).rejects.toMatchObject({ terminated: false });
       child.emit('close', 1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(killSpy).toHaveBeenCalledWith(-5006, 'SIGTERM');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(killSpy).toHaveBeenCalledWith(-5006, 'SIGKILL');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await assertion;
       await expect(pending).rejects.toThrow(/failed \(exit 1\)/);
       await expect(pending).rejects.not.toSatisfy(isWorkerTimeout);
     } finally {
       logSpy.mockRestore();
+      killSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 });
