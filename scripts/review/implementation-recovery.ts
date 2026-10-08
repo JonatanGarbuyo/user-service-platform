@@ -1,0 +1,741 @@
+// Bounded implementation recovery evidence (ticket #127).
+//
+// When an `/implement` worker times out or fails, the failed ticket branch
+// may hold unpublished authored changes. This module captures a small,
+// secret-safe, portable recovery record from the actual failed worktree state
+// so an operator can inspect and reapply eligible source changes on a fresh
+// isolated worktree without rerunning implementation blindly.
+//
+// Safety invariants (all tested):
+// - explicit path allowlist for source/docs/non-secret build config;
+// - path-based exclusion of nested `.env`/`.dev.vars` variants, logs,
+//   runtime state, credentials/key files, build outputs, evidence dirs,
+//   workflow files (trusted-publication boundary) and outside-worktree paths;
+// - symlinks are never followed;
+// - diagnostics carry only allowlisted event/tool names, counts, timestamps
+//   and last-known status — never prompts, reasoning, text, inputs, outputs,
+//   shell commands, payloads, recipients, credentials or tokens;
+// - all snapshots are bounded (paths, per-file bytes, total bytes); bound
+//   exhaustion and command/filesystem failures report honest
+//   incomplete/unavailable status and never replace the original
+//   TIMEOUT/BLOCKED result;
+// - capture performs only read-only Git/filesystem operations: it never
+//   stages, commits, resets, cleans, pushes, opens a PR, merges or deploys.
+
+import * as fs from 'node:fs/promises';
+import { relative, resolve, sep } from 'node:path';
+import type { CommandExecutor } from './runner.js';
+import { listWorkflowFiles, parseNameOnlyOutput } from './workflow-handoff.js';
+
+export const RECOVERY_VERSION = 1 as const;
+
+// Bounded snapshot limits so the record stays embeddable in the existing
+// uploaded `.agent-ticket/outcome.json` artifact without workflow-file edits.
+export const RECOVERY_MAX_FILES = 50;
+export const RECOVERY_MAX_BYTES_PER_FILE = 32 * 1024;
+export const RECOVERY_MAX_TOTAL_BYTES = 256 * 1024;
+export const RECOVERY_MAX_PATH_LENGTH = 256;
+
+// Bounded read-only Git/filesystem capture so a hung command becomes an
+// honest unavailable/incomplete record instead of hanging terminal reporting.
+export const RECOVERY_COMMAND_TIMEOUT_MS = 30_000;
+
+export type RecoveryStatus = 'complete' | 'incomplete' | 'unavailable';
+
+export interface RecoveryCounts {
+  committed: number;
+  uncommitted: number;
+  untracked: number;
+  included: number;
+  excluded: number;
+}
+
+export interface RecoveryUntrackedFile {
+  path: string;
+  content: string;
+}
+
+export interface RecoveryDiagnostics {
+  totalLines: number;
+  eventCounts: Record<string, number>;
+  toolCounts: Record<string, number>;
+  firstTimestamp: string | null;
+  lastTimestamp: string | null;
+  durationMs: number | null;
+  lastStatus: string | null;
+  malformed: number;
+  unknownEvents: number;
+  status: RecoveryStatus;
+  reasons: string[];
+}
+
+export interface ImplementationRecoveryRecord {
+  version: typeof RECOVERY_VERSION;
+  base: string;
+  head: string;
+  branch: string;
+  status: RecoveryStatus;
+  reasons: string[];
+  counts: RecoveryCounts;
+  workflowFiles: string[];
+  truncated: boolean;
+  combinedPatch: string;
+  patchTruncated: boolean;
+  untrackedFiles: RecoveryUntrackedFile[];
+  untrackedTruncated: boolean;
+  diagnostics: RecoveryDiagnostics;
+  createdAt: string;
+}
+
+const ALLOWED_DIR_PREFIXES = ['src/', 'scripts/', 'test/', 'docs/', 'drizzle/', 'deploy/'];
+
+const ALLOWED_TOP_LEVEL_FILES = new Set([
+  'package.json',
+  'package-lock.json',
+  'tsconfig.json',
+  'wrangler.jsonc',
+  'drizzle.config.ts',
+  'vitest.config.ts',
+  'vitest.harness.config.ts',
+  'eslint.config.mjs',
+  '.prettierrc.json',
+  '.prettierignore',
+  '.editorconfig',
+  '.nvmrc',
+  // `.npmrc` is deliberately absent: a worker-modified copy commonly carries
+  // `_authToken` lines that must never enter the uploaded outcome record.
+  'README.md',
+  'AGENTS.md',
+  'GLOSSARY.md',
+  'skills-lock.json',
+  // `.env.example` is the only dotenv-shaped file admitted: it is the
+  // committed non-secret template (see `.gitignore` negation).
+  '.env.example',
+]);
+
+const ALLOWED_EXTENSIONS = new Set([
+  '.ts',
+  '.mts',
+  '.cts',
+  '.tsx',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.jsx',
+  '.json',
+  '.jsonc',
+  '.md',
+  '.sql',
+  '.css',
+]);
+
+const DENIED_DIR_SEGMENTS = new Set([
+  'node_modules',
+  'dist',
+  'coverage',
+  '.wrangler',
+  '.git',
+  '.review-cycle',
+  '.agent-ticket',
+  '.github',
+  '.opencode',
+  '.agents',
+]);
+
+const DENIED_EXTENSIONS = new Set([
+  '.log',
+  '.sqlite',
+  '.sqlite3',
+  '.db',
+  '.pem',
+  '.key',
+  '.p12',
+  '.pfx',
+  '.jks',
+]);
+
+function normalizeRecoveryPath(raw: unknown): string | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === '' || trimmed.length > RECOVERY_MAX_PATH_LENGTH) {
+    return null;
+  }
+  if (trimmed.includes('\0')) {
+    return null;
+  }
+  const forward = trimmed.replace(/\\/g, '/');
+  let relativePath = forward;
+  while (relativePath.startsWith('./')) {
+    relativePath = relativePath.slice(2);
+  }
+  if (relativePath === '' || relativePath.startsWith('/') || /^[A-Za-z]:\//.test(relativePath)) {
+    return null;
+  }
+  const segments = relativePath.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return null;
+  }
+  return relativePath;
+}
+
+function basenameOf(path: string): string {
+  const index = path.lastIndexOf('/');
+  return index >= 0 ? path.slice(index + 1) : path;
+}
+
+function extensionOf(basename: string): string {
+  const index = basename.lastIndexOf('.');
+  return index > 0 ? basename.slice(index).toLowerCase() : '';
+}
+
+function isDeniedBasename(basename: string): boolean {
+  const lower = basename.toLowerCase();
+  if (lower === '.env' || lower.startsWith('.env.')) {
+    return true;
+  }
+  if (lower === '.dev.vars' || lower.startsWith('.dev.vars.')) {
+    return true;
+  }
+  if (lower === '.ds_store' || lower.endsWith('.log')) {
+    return true;
+  }
+  return false;
+}
+
+// Explicit allowlist seam: only known source/docs/non-secret build-config
+// paths are eligible for recovery. Everything else — including nested
+// `.env`/`.dev.vars` variants, logs, runtime state, credentials/key files,
+// build outputs, evidence dirs, workflow files and outside-worktree paths —
+// is excluded by path, never by inspecting secret values.
+export function isEligibleRecoveryPath(raw: unknown): boolean {
+  const path = normalizeRecoveryPath(raw);
+  if (path === null) {
+    return false;
+  }
+  const segments = path.split('/');
+  for (const segment of segments) {
+    if (DENIED_DIR_SEGMENTS.has(segment.toLowerCase())) {
+      return false;
+    }
+  }
+  // The committed `.env.example` template is explicitly tracked (see
+  // `.gitignore` negation) and safe; every other `.env*` variant stays denied.
+  if (ALLOWED_TOP_LEVEL_FILES.has(path)) {
+    return true;
+  }
+  const basename = basenameOf(path);
+  if (isDeniedBasename(basename)) {
+    return false;
+  }
+  if (DENIED_EXTENSIONS.has(extensionOf(basename))) {
+    return false;
+  }
+  if (path.includes('/')) {
+    const hasAllowedPrefix = ALLOWED_DIR_PREFIXES.some((prefix) => path.startsWith(prefix));
+    if (!hasAllowedPrefix) {
+      return false;
+    }
+    return ALLOWED_EXTENSIONS.has(extensionOf(basename));
+  }
+  return false;
+}
+
+// Disk-level guard: even an allowlisted relative path is ineligible when it
+// resolves outside the worktree or is a symlink (never followed).
+export async function isEligibleRecoveryFile(
+  absolutePath: string,
+  worktreeRoot: string,
+): Promise<boolean> {
+  const root = resolve(worktreeRoot);
+  const target = resolve(absolutePath);
+  const relativePath = relative(root, target);
+  if (
+    relativePath === '' ||
+    relativePath.startsWith('..') ||
+    target !== joinRoot(root, relativePath)
+  ) {
+    return false;
+  }
+  if (!isEligibleRecoveryPath(relativePath.split(sep).join('/'))) {
+    return false;
+  }
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stat = await fs.lstat(target);
+  } catch {
+    return false;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    return false;
+  }
+  return true;
+}
+
+function joinRoot(root: string, relativePath: string): string {
+  return resolve(root, relativePath);
+}
+
+const RECOVERY_EVENT_ALLOWLIST = new Set([
+  'tool_use',
+  'text',
+  'reasoning',
+  'step_start',
+  'step_finish',
+  'error',
+]);
+
+const RECOVERY_TOOL_ALLOWLIST = new Set([
+  'read',
+  'edit',
+  'write',
+  'bash',
+  'grep',
+  'glob',
+  'task',
+  'skill',
+  'todo',
+  'list',
+  'diff',
+]);
+
+const RECOVERY_STATUS_ALLOWLIST = new Set(['completed', 'error', 'pending']);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+// Safe lifecycle metadata: allowlisted event/tool names, counts, bounded
+// timestamps and last-known status only. Raw prompts, reasoning, text,
+// inputs, outputs, shell commands, payloads, recipients, credentials and
+// tokens are never read into the record.
+export function summarizeWorkerLifecycle(lines: readonly string[]): RecoveryDiagnostics {
+  const eventCounts: Record<string, number> = {};
+  const toolCounts: Record<string, number> = {};
+  let malformed = 0;
+  let unknownEvents = 0;
+  const reasons: string[] = [];
+  let firstTimestamp: number | null = null;
+  let lastTimestamp: number | null = null;
+  let lastStatus: string | null = null;
+
+  for (const line of lines) {
+    if (line.trim() === '') {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      malformed += 1;
+      continue;
+    }
+    const record = asRecord(parsed);
+    const type = record === null ? null : asNonEmptyString(record.type);
+    if (type === null || !RECOVERY_EVENT_ALLOWLIST.has(type)) {
+      unknownEvents += 1;
+      continue;
+    }
+    eventCounts[type] = (eventCounts[type] ?? 0) + 1;
+    const timestamp = record?.timestamp;
+    if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+      if (firstTimestamp === null || timestamp < firstTimestamp) {
+        firstTimestamp = timestamp;
+      }
+      if (lastTimestamp === null || timestamp > lastTimestamp) {
+        lastTimestamp = timestamp;
+      }
+    }
+    if (type === 'tool_use') {
+      const part = asRecord(record?.part);
+      const tool = part === null ? null : asNonEmptyString(part.tool);
+      if (tool !== null && RECOVERY_TOOL_ALLOWLIST.has(tool)) {
+        toolCounts[tool] = (toolCounts[tool] ?? 0) + 1;
+      } else {
+        unknownEvents += 1;
+      }
+      const state = part === null ? null : asRecord(part.state);
+      const status = state === null ? null : asNonEmptyString(state.status);
+      if (status !== null && RECOVERY_STATUS_ALLOWLIST.has(status)) {
+        lastStatus = status;
+      }
+    }
+  }
+
+  if (malformed > 0) {
+    reasons.push(`ignored ${String(malformed)} malformed worker records`);
+  }
+  if (unknownEvents > 0) {
+    reasons.push(`ignored ${String(unknownEvents)} unknown worker events`);
+  }
+
+  const toIso = (value: number | null): string | null => {
+    if (value === null) {
+      return null;
+    }
+    try {
+      return new Date(value).toISOString();
+    } catch {
+      return null;
+    }
+  };
+
+  const status: RecoveryStatus =
+    lines.length === 0 ? 'unavailable' : reasons.length > 0 ? 'incomplete' : 'complete';
+  if (lines.length === 0) {
+    reasons.push('no worker events captured');
+  }
+
+  return {
+    totalLines: lines.length,
+    eventCounts,
+    toolCounts,
+    firstTimestamp: toIso(firstTimestamp),
+    lastTimestamp: toIso(lastTimestamp),
+    durationMs:
+      firstTimestamp !== null && lastTimestamp !== null ? lastTimestamp - firstTimestamp : null,
+    lastStatus,
+    malformed,
+    unknownEvents,
+    status,
+    reasons,
+  };
+}
+
+// Fixed safe console/status surface: presence, completeness and counts only.
+// Patch content and file contents never appear here; they stay in the
+// uploaded outcome record for operator inspection.
+export function formatRecoverySummary(record: ImplementationRecoveryRecord): string {
+  const present =
+    record.combinedPatch !== '' || record.untrackedFiles.length > 0 ? 'present' : 'absent';
+  return (
+    `implementation recovery ${present} (${record.status}): ` +
+    `${String(record.counts.included)} included ` +
+    `(${String(record.counts.committed)} committed, ` +
+    `${String(record.counts.uncommitted)} uncommitted, ` +
+    `${String(record.counts.untracked)} untracked), ` +
+    `${String(record.counts.excluded)} excluded` +
+    (record.workflowFiles.length > 0 ? ', workflow changes require trusted handoff' : '') +
+    (record.truncated ? ', truncated' : '')
+  );
+}
+
+export function emptyRecoveryCounts(): RecoveryCounts {
+  return { committed: 0, uncommitted: 0, untracked: 0, included: 0, excluded: 0 };
+}
+
+export function createUnavailableRecovery(input: {
+  base: string;
+  branch: string;
+  head?: string;
+  reasons: string[];
+  diagnostics: RecoveryDiagnostics;
+}): ImplementationRecoveryRecord {
+  return {
+    version: RECOVERY_VERSION,
+    base: input.base,
+    head: input.head ?? '(unknown)',
+    branch: input.branch,
+    status: 'unavailable',
+    reasons: [...input.reasons],
+    counts: emptyRecoveryCounts(),
+    workflowFiles: [],
+    truncated: false,
+    combinedPatch: '',
+    patchTruncated: false,
+    untrackedFiles: [],
+    untrackedTruncated: false,
+    diagnostics: input.diagnostics,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+const EXACT_SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
+
+function isExactSha(value: string): boolean {
+  return EXACT_SHA_PATTERN.test(value.trim());
+}
+
+export interface RecoveryStatusLists {
+  tracked: string[];
+  untracked: string[];
+}
+
+// Minimal `git status --porcelain` parsing for recovery triage: tracked
+// edits/deletions/renames versus `??` untracked additions. Rename entries
+// keep only the new path; quoted paths are unwrapped without evaluating
+// escapes as code.
+export function parseRecoveryStatus(stdout: string): RecoveryStatusLists {
+  const tracked: string[] = [];
+  const untracked: string[] = [];
+  for (const rawLine of stdout.split('\n')) {
+    if (rawLine.trim() === '') {
+      continue;
+    }
+    if (rawLine.startsWith('??')) {
+      const path = unwrapStatusPath(rawLine.slice(2).trim());
+      if (path !== '') {
+        untracked.push(path);
+      }
+      continue;
+    }
+    if (rawLine.length < 4) {
+      continue;
+    }
+    const rest = rawLine.slice(3);
+    const arrow = rest.lastIndexOf(' -> ');
+    const path = unwrapStatusPath((arrow >= 0 ? rest.slice(arrow + 4) : rest).trim());
+    if (path !== '') {
+      tracked.push(path);
+    }
+  }
+  return { tracked, untracked };
+}
+
+function unwrapStatusPath(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function listRecoveryWorkflowFiles(paths: readonly string[]): string[] {
+  return listWorkflowFiles(paths).slice(0, 20);
+}
+
+function uniquePaths(paths: readonly string[]): string[] {
+  return [...new Set(paths.map((path) => path.trim()).filter((path) => path !== ''))].sort();
+}
+
+export interface RecoveryCaptureInput {
+  base: string;
+  branch: string;
+  lines: readonly string[];
+  worktreeRoot?: string;
+}
+
+export interface RecoveryCaptureDeps {
+  execute?: CommandExecutor;
+  readFile?: (path: string) => Promise<string>;
+  now?: () => string;
+}
+
+// Portable bounded snapshot of the actual failed worktree state. Read-only
+// Git/filesystem operations only: the caller invokes this after the worker
+// promise has settled (the existing process-group timeout/termination owns
+// the worker), so the snapshot cannot race a still-writing implementer.
+// Every failure degrades to honest incomplete/unavailable metadata and never
+// throws, so the original TIMEOUT/BLOCKED result is always preserved.
+export async function captureImplementationRecovery(
+  input: RecoveryCaptureInput,
+  deps: RecoveryCaptureDeps = {},
+): Promise<ImplementationRecoveryRecord> {
+  const diagnostics = summarizeWorkerLifecycle(input.lines);
+  const reasons: string[] = [];
+  const now = deps.now ?? (() => new Date().toISOString());
+  const execute = deps.execute;
+  const readFile = deps.readFile ?? ((path: string) => fs.readFile(path, 'utf8'));
+  const worktreeRoot = input.worktreeRoot ?? process.cwd();
+
+  if (execute === undefined) {
+    return {
+      ...createUnavailableRecovery({
+        base: input.base,
+        branch: input.branch,
+        reasons: ['recovery executor unavailable'],
+        diagnostics,
+      }),
+      createdAt: now(),
+    };
+  }
+
+  let actualHead = '(unknown)';
+  try {
+    const { stdout } = await execute('git', ['rev-parse', 'HEAD']);
+    const head = stdout.trim();
+    if (isExactSha(head)) {
+      actualHead = head;
+    } else {
+      reasons.push('actual HEAD unavailable');
+    }
+  } catch {
+    reasons.push('actual HEAD unavailable');
+  }
+
+  let branch = input.branch;
+  try {
+    const { stdout } = await execute('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const current = stdout.trim();
+    if (current !== '') {
+      branch = current;
+    }
+  } catch {
+    reasons.push('branch name unavailable; using ticket branch');
+  }
+
+  const base = input.base.trim();
+  const baseValid = isExactSha(base);
+  const headValid = isExactSha(actualHead);
+  if (!baseValid) {
+    reasons.push('recorded base unavailable');
+  }
+
+  let committedNames: string[] = [];
+  if (baseValid && headValid) {
+    try {
+      const { stdout } = await execute('git', [
+        'diff',
+        '--name-only',
+        `${base}..${actualHead}`,
+        '--',
+      ]);
+      committedNames = parseNameOnlyOutput(stdout);
+    } catch {
+      reasons.push('committed change list unavailable');
+    }
+  } else if (baseValid && !headValid) {
+    reasons.push('committed change list unavailable without actual HEAD');
+  }
+
+  let trackedStatus: string[] = [];
+  let untrackedStatus: string[] = [];
+  try {
+    const { stdout } = await execute('git', ['status', '--porcelain']);
+    const parsed = parseRecoveryStatus(stdout);
+    trackedStatus = parsed.tracked;
+    untrackedStatus = parsed.untracked;
+  } catch {
+    reasons.push('worktree status unavailable');
+  }
+
+  const allChanged = uniquePaths([...committedNames, ...trackedStatus, ...untrackedStatus]);
+  const workflowFiles = listRecoveryWorkflowFiles(allChanged);
+  if (workflowFiles.length > 0) {
+    reasons.push(
+      'workflow files changed; recovery preserves metadata only — use the trusted-publication handoff policy, no automatic publication',
+    );
+  }
+
+  const untrackedSet = new Set(untrackedStatus.map((path) => path.trim()).filter((p) => p !== ''));
+  const trackedCandidates = uniquePaths([...committedNames, ...trackedStatus]).filter(
+    (path) => !untrackedSet.has(path),
+  );
+
+  const eligibleTracked = trackedCandidates.filter((path) => isEligibleRecoveryPath(path));
+  const excludedTracked = trackedCandidates.length - eligibleTracked.length;
+
+  const eligibleUntrackedCandidates = uniquePaths(untrackedStatus).filter((path) =>
+    isEligibleRecoveryPath(path),
+  );
+  const excludedUntracked =
+    uniquePaths(untrackedStatus).length - eligibleUntrackedCandidates.length;
+
+  let combinedPatch = '';
+  let patchTruncated = false;
+  let includedTracked = 0;
+  if (baseValid && eligibleTracked.length > 0) {
+    const budgeted = eligibleTracked.slice(0, RECOVERY_MAX_FILES);
+    if (budgeted.length < eligibleTracked.length) {
+      patchTruncated = true;
+      reasons.push(`tracked snapshot truncated to ${String(RECOVERY_MAX_FILES)} paths`);
+    }
+    try {
+      const { stdout } = await execute('git', ['diff', base, '--', ...budgeted, '--']);
+      combinedPatch = stdout;
+      includedTracked = budgeted.length;
+      if (combinedPatch.length > RECOVERY_MAX_TOTAL_BYTES) {
+        combinedPatch = combinedPatch.slice(0, RECOVERY_MAX_TOTAL_BYTES);
+        patchTruncated = true;
+        reasons.push('tracked snapshot truncated at byte bound');
+      }
+    } catch {
+      reasons.push('tracked snapshot unavailable');
+      combinedPatch = '';
+      includedTracked = 0;
+    }
+  }
+
+  const untrackedFiles: RecoveryUntrackedFile[] = [];
+  let untrackedTruncated = false;
+  let bytesUsed = combinedPatch.length;
+  const remainingSlots = Math.max(0, RECOVERY_MAX_FILES - includedTracked);
+  const budgetedUntracked = eligibleUntrackedCandidates.slice(0, remainingSlots);
+  if (budgetedUntracked.length < eligibleUntrackedCandidates.length) {
+    untrackedTruncated = true;
+    reasons.push(`untracked snapshot truncated to ${String(RECOVERY_MAX_FILES)} total paths`);
+  }
+  for (const relativePath of budgetedUntracked) {
+    if (bytesUsed >= RECOVERY_MAX_TOTAL_BYTES) {
+      untrackedTruncated = true;
+      reasons.push('recovery snapshot truncated at total byte bound');
+      break;
+    }
+    const absolutePath = resolve(worktreeRoot, relativePath);
+    const eligible = await isEligibleRecoveryFile(absolutePath, worktreeRoot).catch(() => false);
+    if (!eligible) {
+      continue;
+    }
+    try {
+      const content = await readFile(absolutePath);
+      const budget = Math.min(
+        RECOVERY_MAX_BYTES_PER_FILE,
+        Math.max(0, RECOVERY_MAX_TOTAL_BYTES - bytesUsed),
+      );
+      if (content.length > budget) {
+        untrackedFiles.push({ path: relativePath, content: content.slice(0, budget) });
+        bytesUsed += budget;
+        untrackedTruncated = true;
+        reasons.push(`untracked file truncated at bound: ${relativePath}`);
+      } else {
+        untrackedFiles.push({ path: relativePath, content });
+        bytesUsed += content.length;
+      }
+    } catch {
+      reasons.push(`untracked file unreadable: ${relativePath}`);
+    }
+  }
+
+  const counts: RecoveryCounts = {
+    committed: committedNames.length,
+    uncommitted: trackedStatus.length,
+    untracked: untrackedStatus.length,
+    included: includedTracked + untrackedFiles.length,
+    excluded: Math.max(0, excludedTracked + excludedUntracked),
+  };
+
+  const truncated = patchTruncated || untrackedTruncated;
+  const headKnown = headValid;
+  const status: RecoveryStatus =
+    !headKnown && !baseValid ? 'unavailable' : reasons.length > 0 ? 'incomplete' : 'complete';
+
+  return {
+    version: RECOVERY_VERSION,
+    base,
+    head: actualHead,
+    branch,
+    status,
+    reasons,
+    counts,
+    workflowFiles,
+    truncated,
+    combinedPatch,
+    patchTruncated,
+    untrackedFiles,
+    untrackedTruncated,
+    diagnostics,
+    createdAt: now(),
+  };
+}
