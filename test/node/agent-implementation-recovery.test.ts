@@ -207,7 +207,7 @@ describe('implementation recovery summary surface', () => {
       if (key === `git diff --name-only ${base}..${head} --`) {
         return Promise.resolve({ stdout: 'src/big.ts\n', stderr: '' });
       }
-      if (key === 'git status --porcelain') {
+      if (key === 'git status --porcelain -uall') {
         return Promise.resolve({ stdout: '', stderr: '' });
       }
       if (key.startsWith(`git diff ${base} --`)) {
@@ -247,7 +247,7 @@ describe('implementation recovery summary surface', () => {
         if (key === `git diff --name-only ${base}..${head} --`) {
           return Promise.resolve({ stdout: '', stderr: '' });
         }
-        if (key === 'git status --porcelain') {
+        if (key === 'git status --porcelain -uall') {
           return Promise.resolve({ stdout: '?? src/new.ts\n', stderr: '' });
         }
         throw new Error(`unexpected command in test script: ${key}`);
@@ -365,6 +365,39 @@ describe('implementation recovery portable snapshot (real temporary Git worktree
     }
   });
 
+  it('captures eligible untracked files inside a wholly-new directory', async () => {
+    const { captureImplementationRecovery } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-newdir-'));
+    try {
+      initRepo(dir);
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'tracked.ts'), 'export const v = 1;\n');
+      git(dir, ['add', '.']);
+      git(dir, ['commit', '-qm', 'base']);
+      const base = git(dir, ['rev-parse', 'HEAD']).trim();
+
+      // Simulated failed worker: a brand-new feature-slice directory with
+      // two eligible untracked source files (git `-u normal` reports this as
+      // a single `dir/` entry; recovery must list individual files via `-uall`).
+      mkdirSync(join(dir, 'src', 'new-slice'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'new-slice', 'a.ts'), 'export const a = 1;\n');
+      writeFileSync(join(dir, 'src', 'new-slice', 'b.ts'), 'export const b = 2;\n');
+
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        { execute: realExecutor(dir) },
+      );
+
+      const paths = record.untrackedFiles.map((file) => file.path).sort();
+      expect(paths).toEqual(['src/new-slice/a.ts', 'src/new-slice/b.ts']);
+      expect(record.counts.untracked).toBe(2);
+      expect(record.status).toBe('complete');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('excludes sentinel secrets, runtime state and symlinks without Git mutation', async () => {
     const { captureImplementationRecovery } =
       await import('../../scripts/review/implementation-recovery.js');
@@ -392,22 +425,17 @@ describe('implementation recovery portable snapshot (real temporary Git worktree
         seen.push(`${command} ${args.join(' ')}`);
         return realExecutor(dir)(command, args);
       };
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      try {
-        const record = await captureImplementationRecovery(
-          { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
-          { execute: watching },
-        );
-        const serialized = JSON.stringify(record);
-        expect(serialized).not.toContain(sentinel);
-        expect(record.untrackedFiles.some((file) => file.path.endsWith('.env'))).toBe(false);
-        expect(record.untrackedFiles.some((file) => file.path.endsWith('.log'))).toBe(false);
-        expect(record.untrackedFiles.some((file) => file.path.includes('linked'))).toBe(false);
-        for (const invocation of seen) {
-          expect(invocation).not.toMatch(/push|commit|stage|reset|clean|checkout|merge/i);
-        }
-      } finally {
-        logSpy.mockRestore();
+      const record = await captureImplementationRecovery(
+        { base, branch: 'ticket/127-x', lines: [], worktreeRoot: dir },
+        { execute: watching },
+      );
+      const serialized = JSON.stringify(record);
+      expect(serialized).not.toContain(sentinel);
+      expect(record.untrackedFiles.some((file) => file.path.endsWith('.env'))).toBe(false);
+      expect(record.untrackedFiles.some((file) => file.path.endsWith('.log'))).toBe(false);
+      expect(record.untrackedFiles.some((file) => file.path.includes('linked'))).toBe(false);
+      for (const invocation of seen) {
+        expect(invocation).not.toMatch(/push|commit|stage|reset|clean|checkout|merge/i);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -694,6 +722,28 @@ describe('implementation recovery symlink guard', () => {
       mkdirSync(linkDir, { recursive: true });
       symlinkSync(outside, join(linkDir, 'linked.ts'));
       await expect(isEligibleRecoveryFile(join(linkDir, 'linked.ts'), dir)).resolves.toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects files under an intermediate symlinked directory', async () => {
+    const { isEligibleRecoveryFile } =
+      await import('../../scripts/review/implementation-recovery.js');
+    const dir = mkdtempSync(join(tmpdir(), 'recovery-symlink-dir-'));
+    try {
+      const outsideDir = mkdtempSync(join(tmpdir(), 'recovery-outside-'));
+      try {
+        writeFileSync(join(outsideDir, 'evil.ts'), 'export const evil = 1;\n');
+        const srcDir = join(dir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        symlinkSync(outsideDir, join(srcDir, 'linkdir'));
+        await expect(isEligibleRecoveryFile(join(srcDir, 'linkdir', 'evil.ts'), dir)).resolves.toBe(
+          false,
+        );
+      } finally {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

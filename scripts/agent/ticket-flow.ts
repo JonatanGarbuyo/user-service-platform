@@ -18,6 +18,7 @@ import {
   getCurrentHead,
   getPrForBranch,
   isWorktreeClean,
+  runBoundedCommand,
   runCommand,
   withJsonFormat,
   type CommandExecutor,
@@ -39,17 +40,26 @@ import {
   RECOVERY_MAX_TOTAL_BYTES,
   summarizeWorkerLifecycle,
   type ImplementationRecoveryRecord,
+  type RecoveryCaptureInput,
 } from '../review/implementation-recovery.js';
-import { runBoundedCommand } from '../review/runner.js';
+import { runWorkerStream } from '../review/worker-stream.js';
+import { isWorkerTimeout, timeoutForWorker, type WorkerLabel } from '../review/worker-timeout.js';
+import { publishStageStatus, type RunStatusOutcome, type StatusEnv } from '../review/run-status.js';
+import { getRepoSlug } from '../review/pr-checks.js';
 
 // Headroom above the snapshot byte bound for a single bounded Git command:
 // the patch itself is capped at RECOVERY_MAX_TOTAL_BYTES inside the capture,
 // while command output may carry bounded framing around it.
 const RECOVERY_GIT_OUTPUT_CAP_BYTES = RECOVERY_MAX_TOTAL_BYTES + 65_536;
-import { getRepoSlug } from '../review/pr-checks.js';
-import { runWorkerStream } from '../review/worker-stream.js';
-import { isWorkerTimeout, timeoutForWorker, type WorkerLabel } from '../review/worker-timeout.js';
-import { publishStageStatus, type RunStatusOutcome, type StatusEnv } from '../review/run-status.js';
+
+// Shared operator next-action tail for implement recovery terminals (ticket #127):
+// a recovery record is preserved evidence, not a defect diagnosis, and reuse is
+// operator-driven on a fresh isolated worktree — never a blind rerun.
+const RECOVERY_ACTION_TAIL =
+  'this is a recovery record, not a diagnosis of an application defect. ' +
+  'Inspect .agent-ticket/outcome.json recovery evidence and ' +
+  'docs/agents/implementation-recovery.md, then reapply eligible changes on a fresh ' +
+  'isolated worktree — do not blindly rerun /agent-ticket.';
 
 // Explicit stage names for the durable run-status surface (ticket #31).
 // One status comment per agent run is updated as these stages advance so the
@@ -482,23 +492,20 @@ export type EvidenceFinalizer = (input: {
   truncatedStream?: boolean;
 }) => Promise<string | undefined>;
 
-export type RecoveryCapturer = (input: {
-  base: string;
-  branch: string;
-  lines: readonly string[];
-}) => Promise<ImplementationRecoveryRecord>;
+export type RecoveryCapturer = (
+  input: RecoveryCaptureInput,
+) => Promise<ImplementationRecoveryRecord>;
 
 // Bounded recovery capture (ticket #127). Runs only after the implement
-// worker promise has settled — the existing process-group timeout/termination
-// owns the worker — so the snapshot cannot race a still-writing implementer.
+// worker promise has settled and process-group termination has been signalled
+// (SIGTERM, SIGKILL after the kill grace) — a best-effort snapshot that may
+// still race a worker terminating during that grace window.
 // Read-only Git/filesystem operations through the bounded command seam;
 // every failure degrades to honest incomplete/unavailable metadata and never
 // replaces the original TIMEOUT/BLOCKED result.
-async function defaultCaptureRecovery(input: {
-  base: string;
-  branch: string;
-  lines: readonly string[];
-}): Promise<ImplementationRecoveryRecord> {
+async function defaultCaptureRecovery(
+  input: RecoveryCaptureInput,
+): Promise<ImplementationRecoveryRecord> {
   try {
     return await captureImplementationRecovery(
       { base: input.base, branch: input.branch, lines: input.lines },
@@ -936,8 +943,9 @@ export async function runAgentTicket(
       await settleImplementEvidence(partialStdoutLines(error), headBefore);
     }
     // Bounded recovery capture (ticket #127): runs after the worker promise
-    // settled — the process-group timeout/termination above owns the worker —
-    // so the snapshot cannot race a still-writing implementer. Best-effort:
+    // settled and process-group termination above has been signalled
+    // (SIGTERM, SIGKILL after the kill grace). Best-effort snapshot — it may
+    // still race a worker terminating during that grace window:
     // capture failures keep honest unavailable metadata and never replace the
     // original TIMEOUT/BLOCKED result.
     let recovery: ImplementationRecoveryRecord | undefined;
@@ -967,8 +975,8 @@ export async function runAgentTicket(
       branch,
       timedOut ? 'TIMEOUT' : 'BLOCKED',
       timedOut
-        ? 'The implement worker exceeded its bound; this is a recovery record, not a diagnosis of an application defect. Inspect .agent-ticket/outcome.json recovery evidence and docs/agents/implementation-recovery.md, then reapply eligible changes on a fresh isolated worktree — do not blindly rerun /agent-ticket.'
-        : 'The implement worker failed; this is a recovery record, not a diagnosis of an application defect. Inspect .agent-ticket/outcome.json recovery evidence and docs/agents/implementation-recovery.md, then reapply eligible changes on a fresh isolated worktree — do not blindly rerun /agent-ticket.',
+        ? `The implement worker exceeded its bound; ${RECOVERY_ACTION_TAIL}`
+        : `The implement worker failed; ${RECOVERY_ACTION_TAIL}`,
       recoveryHead,
     );
   }

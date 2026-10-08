@@ -10,9 +10,10 @@ changing product scope, timeout bounds, or publication safeguards.
 ## What is captured
 
 When the `agent-ticket` implement worker times out or fails, repository-owned
-code captures a bounded secret-safe recovery record **after** the worker
-promise has settled (the existing process-group timeout/termination owns the
-worker, so the snapshot cannot race a still-writing implementer) and embeds
+code captures a best-effort bounded secret-safe recovery record **after** the
+worker promise has settled and process-group termination has been signalled
+(SIGTERM, SIGKILL after the kill grace; a worker still terminating during that
+grace window may still race the snapshot) and embeds
 it additively in the already-uploaded `.agent-ticket/outcome.json` artifact.
 No workflow-file edit or new credential is needed: the existing
 `agent-ticket` artifact selection already uploads that outcome record.

@@ -23,7 +23,7 @@
 //   stages, commits, resets, cleans, pushes, opens a PR, merges or deploys.
 
 import * as fs from 'node:fs/promises';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import type { CommandExecutor } from './runner.js';
 import { listWorkflowFiles, parseNameOnlyOutput } from './workflow-handoff.js';
 
@@ -31,6 +31,10 @@ export const RECOVERY_VERSION = 1 as const;
 
 // Bounded snapshot limits so the record stays embeddable in the existing
 // uploaded `.agent-ticket/outcome.json` artifact without workflow-file edits.
+// `*_BYTES` bounds are applied to string length (UTF-16 code units) as a
+// bounded proxy for UTF-8 bytes: ASCII content (the overwhelmingly common
+// case for source diffs) is exact, while non-ASCII content may overshoot the
+// nominal byte budget slightly. Truncation never splits a surrogate pair.
 export const RECOVERY_MAX_FILES = 50;
 export const RECOVERY_MAX_BYTES_PER_FILE = 32 * 1024;
 export const RECOVERY_MAX_TOTAL_BYTES = 256 * 1024;
@@ -243,7 +247,8 @@ export function isEligibleRecoveryPath(raw: unknown): boolean {
 }
 
 // Disk-level guard: even an allowlisted relative path is ineligible when it
-// resolves outside the worktree or is a symlink (never followed).
+// resolves outside the worktree, traverses a symlinked directory, or is
+// itself a symlink (never followed).
 export async function isEligibleRecoveryFile(
   absolutePath: string,
   worktreeRoot: string,
@@ -261,6 +266,20 @@ export async function isEligibleRecoveryFile(
   if (!isEligibleRecoveryPath(relativePath.split(sep).join('/'))) {
     return false;
   }
+  // An intermediate symlinked directory would otherwise be followed by
+  // `readFile`: resolve the real parent and require it to stay inside the
+  // worktree (inputs from `git status` never descend symlinked dirs, but the
+  // exported seam must not overstate its guarantee).
+  try {
+    const realRoot = await fs.realpath(root);
+    const realParent = await fs.realpath(dirname(target));
+    const parentRel = relative(realRoot, realParent);
+    if (parentRel.startsWith('..') || resolve(realRoot, parentRel) !== realParent) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
   let stat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     stat = await fs.lstat(target);
@@ -275,6 +294,19 @@ export async function isEligibleRecoveryFile(
 
 function joinRoot(root: string, relativePath: string): string {
   return resolve(root, relativePath);
+}
+
+// Byte-budget slicing without splitting a surrogate pair: `String.slice` counts
+// UTF-16 code units, so a trailing high surrogate would corrupt the next decode.
+function slicePreservingSurrogates(value: string, end: number): string {
+  const sliced = value.slice(0, end);
+  if (sliced.length > 0) {
+    const last = sliced.charCodeAt(sliced.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) {
+      return sliced.slice(0, -1);
+    }
+  }
+  return sliced;
 }
 
 const RECOVERY_EVENT_ALLOWLIST = new Set([
@@ -535,8 +567,9 @@ export interface RecoveryCaptureDeps {
 
 // Portable bounded snapshot of the actual failed worktree state. Read-only
 // Git/filesystem operations only: the caller invokes this after the worker
-// promise has settled (the existing process-group timeout/termination owns
-// the worker), so the snapshot cannot race a still-writing implementer.
+// promise has settled and process-group termination has been signalled
+// (SIGTERM, SIGKILL after the kill grace). The snapshot is best-effort and
+// may still race a worker that is still terminating during that grace window.
 // Every failure degrades to honest incomplete/unavailable metadata and never
 // throws, so the original TIMEOUT/BLOCKED result is always preserved.
 export async function captureImplementationRecovery(
@@ -613,7 +646,10 @@ export async function captureImplementationRecovery(
   let trackedStatus: string[] = [];
   let untrackedStatus: string[] = [];
   try {
-    const { stdout } = await execute('git', ['status', '--porcelain']);
+    // `-uall` lists individual files inside wholly-new untracked directories
+    // (bare `-u normal` collapses them to a single `dir/` entry that the
+    // allowlist rejects while reporting `complete`).
+    const { stdout } = await execute('git', ['status', '--porcelain', '-uall']);
     const parsed = parseRecoveryStatus(stdout);
     trackedStatus = parsed.tracked;
     untrackedStatus = parsed.untracked;
@@ -657,7 +693,7 @@ export async function captureImplementationRecovery(
       combinedPatch = stdout;
       includedTracked = budgeted.length;
       if (combinedPatch.length > RECOVERY_MAX_TOTAL_BYTES) {
-        combinedPatch = combinedPatch.slice(0, RECOVERY_MAX_TOTAL_BYTES);
+        combinedPatch = slicePreservingSurrogates(combinedPatch, RECOVERY_MAX_TOTAL_BYTES);
         patchTruncated = true;
         reasons.push('tracked snapshot truncated at byte bound');
       }
@@ -695,7 +731,10 @@ export async function captureImplementationRecovery(
         Math.max(0, RECOVERY_MAX_TOTAL_BYTES - bytesUsed),
       );
       if (content.length > budget) {
-        untrackedFiles.push({ path: relativePath, content: content.slice(0, budget) });
+        untrackedFiles.push({
+          path: relativePath,
+          content: slicePreservingSurrogates(content, budget),
+        });
         bytesUsed += budget;
         untrackedTruncated = true;
         reasons.push(`untracked file truncated at bound: ${relativePath}`);
