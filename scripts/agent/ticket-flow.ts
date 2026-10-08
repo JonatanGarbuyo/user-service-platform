@@ -18,6 +18,7 @@ import {
   getCurrentHead,
   getPrForBranch,
   isWorktreeClean,
+  runBoundedCommand,
   runCommand,
   withJsonFormat,
   type CommandExecutor,
@@ -31,10 +32,34 @@ import {
   finalizeSkillEvidence,
   suppressJsonWorkerLines,
 } from '../review/evidence-worker.js';
-import { getRepoSlug } from '../review/pr-checks.js';
+import {
+  captureImplementationRecovery,
+  createUnavailableRecovery,
+  formatRecoverySummary,
+  RECOVERY_COMMAND_TIMEOUT_MS,
+  RECOVERY_MAX_TOTAL_BYTES,
+  summarizeWorkerLifecycle,
+  type ImplementationRecoveryRecord,
+  type RecoveryCaptureInput,
+} from '../review/implementation-recovery.js';
 import { runWorkerStream } from '../review/worker-stream.js';
 import { isWorkerTimeout, timeoutForWorker, type WorkerLabel } from '../review/worker-timeout.js';
 import { publishStageStatus, type RunStatusOutcome, type StatusEnv } from '../review/run-status.js';
+import { getRepoSlug } from '../review/pr-checks.js';
+
+// Headroom above the snapshot byte bound for a single bounded Git command:
+// the patch itself is capped at RECOVERY_MAX_TOTAL_BYTES inside the capture,
+// while command output may carry bounded framing around it.
+const RECOVERY_GIT_OUTPUT_CAP_BYTES = RECOVERY_MAX_TOTAL_BYTES + 65_536;
+
+// Shared operator next-action tail for implement recovery terminals (ticket #127):
+// a recovery record is preserved evidence, not a defect diagnosis, and reuse is
+// operator-driven on a fresh isolated worktree — never a blind rerun.
+const RECOVERY_ACTION_TAIL =
+  'this is a recovery record, not a diagnosis of an application defect. ' +
+  'Inspect .agent-ticket/outcome.json recovery evidence and ' +
+  'docs/agents/implementation-recovery.md, then reapply eligible changes on a fresh ' +
+  'isolated worktree — do not blindly rerun /agent-ticket.';
 
 // Explicit stage names for the durable run-status surface (ticket #31).
 // One status comment per agent run is updated as these stages advance so the
@@ -73,6 +98,12 @@ export interface AgentTicketOutcome {
   // path for the initial implementation worker when collection succeeded.
   // Absent when collection was unavailable; never affects outcome semantics.
   skillEvidencePath?: string;
+  // Additive bounded recovery record (ticket #127): the portable
+  // secret-safe snapshot of the actual failed-worktree state after an
+  // `/implement` timeout/failure, embedded in this already-uploaded outcome
+  // artifact so no workflow-file edit is needed. Absent on paths that never
+  // ran the implement worker to failure; never affects outcome semantics.
+  recovery?: ImplementationRecoveryRecord;
 }
 
 export interface AgentTicketTerminal {
@@ -155,6 +186,9 @@ export async function writeAgentTicketOutcome(
   }
   if (input.skillEvidencePath !== undefined) {
     record.skillEvidencePath = input.skillEvidencePath;
+  }
+  if (input.recovery !== undefined) {
+    record.recovery = input.recovery;
   }
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(record, null, 2)}\n`);
@@ -424,6 +458,11 @@ export interface AgentTicketDeps {
   // tests inject a captor so unit runs never touch the filesystem. Failures
   // are best-effort and never change the orchestration outcome.
   finalizeEvidence?: EvidenceFinalizer;
+  // Bounded recovery capturer (ticket #127). Defaults to the read-only
+  // bounded capture over the actual failed worktree; tests inject a captor
+  // so unit runs never touch the filesystem. Failures are best-effort and
+  // never change the orchestration outcome.
+  captureRecovery?: RecoveryCapturer;
   // Stage reporter for the durable run-status surface (ticket #31). Called
   // once per reached stage, in order; defaults to silence so local runs stay
   // quiet and existing callers are unaffected.
@@ -452,6 +491,41 @@ export type EvidenceFinalizer = (input: {
   lines: readonly string[];
   truncatedStream?: boolean;
 }) => Promise<string | undefined>;
+
+export type RecoveryCapturer = (
+  input: RecoveryCaptureInput,
+) => Promise<ImplementationRecoveryRecord>;
+
+// Bounded recovery capture (ticket #127). Runs only after bounded worker
+// termination has been established by the worker-stream handshake.
+// Read-only Git/filesystem operations through the bounded command seam with a
+// finite capture deadline; every failure degrades to honest
+// incomplete/unavailable metadata and never replaces the original
+// TIMEOUT/BLOCKED result.
+async function defaultCaptureRecovery(
+  input: RecoveryCaptureInput,
+): Promise<ImplementationRecoveryRecord> {
+  try {
+    return await captureImplementationRecovery(
+      { base: input.base, branch: input.branch, lines: input.lines },
+      {
+        execute: (command, args) =>
+          runBoundedCommand(command, args, {
+            timeoutMs: RECOVERY_COMMAND_TIMEOUT_MS,
+            maxBufferBytes: RECOVERY_GIT_OUTPUT_CAP_BYTES,
+          }),
+      },
+    );
+  } catch {
+    return createUnavailableRecovery({
+      base: input.base,
+      branch: input.branch,
+      head: '(unknown)',
+      reasons: ['recovery capture failed'],
+      diagnostics: summarizeWorkerLifecycle(input.lines),
+    });
+  }
+}
 
 async function defaultFinalizeEvidence(input: {
   worker: 'agent-ticket';
@@ -492,6 +566,10 @@ export interface AgentTicketResult {
   // True when the failure was a bounded worker timeout, distinct from model,
   // gate, CI, human-decision, stale-HEAD, or cancellation failures.
   timedOut?: boolean;
+  // Bounded recovery record (ticket #127) for implement worker timeouts and
+  // failures. Carried through to the outcome record; never changes the
+  // terminal TIMEOUT/BLOCKED semantics.
+  recovery?: ImplementationRecoveryRecord;
 }
 
 function errorMessage(error: unknown): string {
@@ -661,6 +739,7 @@ export async function runAgentTicket(
         completedStages: [...completedStages],
         ...(actionRequired === undefined ? {} : { actionRequired }),
         ...(skillEvidencePath === undefined ? {} : { skillEvidencePath }),
+        ...(result.recovery === undefined ? {} : { recovery: result.recovery }),
       });
     } catch {
       // Best-effort: recording never changes the terminal outcome.
@@ -851,6 +930,8 @@ export async function runAgentTicket(
   } catch (error) {
     // Error/timeout finalization still persists useful minimal evidence
     // without masking the original exit or timeout (ticket #116).
+    const recoveryLines =
+      implementCapture !== null ? [...implementCapture.lines] : partialStdoutLines(error);
     if (implementCapture !== null) {
       await settleImplementEvidence(
         [...implementCapture.lines],
@@ -860,21 +941,64 @@ export async function runAgentTicket(
     } else {
       await settleImplementEvidence(partialStdoutLines(error), headBefore);
     }
+    // Bounded recovery capture (ticket #127): runs only after bounded worker
+    // termination has been established by the worker-stream handshake (SIGTERM,
+    // SIGKILL escalation, finite termination deadline, process-group exit
+    // verification) for both timeout and non-timeout implement failures.
+    // When termination is unconfirmed the worktree may still be changing, so no
+    // snapshot is read: honest unavailable evidence is retained instead.
+    // Capture failures keep honest unavailable metadata and never replace the
+    // original TIMEOUT/BLOCKED result.
+    let recovery: ImplementationRecoveryRecord | undefined;
+    // Unconfirmed termination skips the worktree read conservatively: honest
+    // unavailable evidence instead of a potentially torn snapshot. Timeout
+    // duck-types without an explicit terminated=true fail closed, as does any
+    // real-stream failure without explicit confirmation; the injected test seam
+    // (no evidence capture) has no process group, so only explicit false blocks.
+    const terminatedFlag = (error as { terminated?: unknown }).terminated;
+    const terminationUnconfirmed = isWorkerTimeout(error)
+      ? terminatedFlag !== true
+      : implementCapture !== null
+        ? terminatedFlag !== true
+        : terminatedFlag === false;
+    if (terminationUnconfirmed) {
+      recovery = createUnavailableRecovery({
+        base: headBefore,
+        branch,
+        reasons: ['worker termination unconfirmed within bound; snapshot skipped'],
+        diagnostics: summarizeWorkerLifecycle(recoveryLines),
+      });
+    } else {
+      try {
+        const captureRecovery = deps.captureRecovery ?? defaultCaptureRecovery;
+        recovery = await captureRecovery({ base: headBefore, branch, lines: recoveryLines });
+      } catch {
+        recovery = undefined;
+      }
+    }
     const timedOut = isWorkerTimeout(error);
     const reason = timedOut
       ? `/implement timed out for ticket #${String(ticket)}: ${errorMessage(error)}`
       : `/implement failed for ticket #${String(ticket)}: ${errorMessage(error)}`;
     console.error(`AGENT-TICKET ${timedOut ? 'TIMEOUT' : 'FAILED'} (implement): ${reason}`);
+    // Safe console surface: fixed summary with presence/completeness/counts
+    // only; source patch content stays in the uploaded outcome record.
+    if (recovery !== undefined) {
+      console.error(formatRecoverySummary(recovery));
+    }
     reportDurableState({ branch });
+    const recoveryHead =
+      recovery !== undefined && recovery.head !== '(unknown)' ? recovery.head : headBefore;
+    const result = failResult('implement', reason, branch, timedOut ? true : undefined);
     return terminal(
-      failResult('implement', reason, branch, timedOut ? true : undefined),
+      recovery === undefined ? result : { ...result, recovery },
       'implementation',
       branch,
       timedOut ? 'TIMEOUT' : 'BLOCKED',
       timedOut
-        ? 'The implement worker exceeded its bound; rerun /agent-ticket once the runner is free.'
-        : 'Inspect the implement worker output, then rerun /agent-ticket.',
-      headBefore,
+        ? `The implement worker exceeded its bound; ${RECOVERY_ACTION_TAIL}`
+        : `The implement worker failed; ${RECOVERY_ACTION_TAIL}`,
+      recoveryHead,
     );
   }
   const headAfter = await getCurrentHead(execute);

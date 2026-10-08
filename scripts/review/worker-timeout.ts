@@ -23,13 +23,19 @@ export class WorkerTimeoutError extends Error {
   readonly workerLabel: string;
   readonly timeoutMs: number;
   readonly invocation: string;
+  // Bounded termination handshake (ticket #127): true when the worker process
+  // group was observed to exit within the kill-grace deadline, false when the
+  // snapshot would race a still-writing implementer. Callers must not capture
+  // worktree state when false; they retain honest unavailable evidence.
+  readonly terminated: boolean;
 
-  constructor(workerLabel: string, timeoutMs: number, invocation: string) {
+  constructor(workerLabel: string, timeoutMs: number, invocation: string, terminated = true) {
     super(`Worker timeout: ${workerLabel} exceeded ${String(timeoutMs)}ms: ${invocation}`);
     this.name = 'WorkerTimeoutError';
     this.workerLabel = workerLabel;
     this.timeoutMs = timeoutMs;
     this.invocation = invocation;
+    this.terminated = terminated;
   }
 }
 

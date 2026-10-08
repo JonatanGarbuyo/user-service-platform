@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-07
+Last verified: 2026-10-08
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -95,18 +95,25 @@ Verified on 2026-10-06 against live GitHub state; main is `e885e1c84460b2af6c7ae
 
 GitHub-only skill-usage audit (25 worker runs: 16 fix-cycle + 9 ticket executions; 19 runs belong to #82; not productivity comparisons) is recorded separately from unavailable ChatGPT conversation data — no ChatGPT session dataset exists and none is inferred. Observed skill-tool minima: implement 17, code-review 13, tdd 10, custom better-typescript 5.
 
-Current execution frontier (verified 2026-10-07 against live GitHub state;
-worktree main matches `origin/main` at `3d19d91`):
+Current execution frontier (verified 2026-10-08 against live GitHub state;
+worktree main matches `origin/main` at `fbb7cad`):
 
 ```text
-#121 reconcile sandbox recipient checks + record completed Identity QA
-  -> configured dual review + exact-HEAD CI
-  -> final acceptance
+#123 usable read-only User administration (parent spec, open)
+  -> #127 bounded implementation recovery evidence (open, ready-for-agent;
+     in review as PR #128) must be accepted first
+  -> #124 admin sign-in/authorize/sign-out tracer bullet (open, blocked on #127;
+     two implementation attempts ended TIMEOUT without a published branch/PR:
+     runs 37712149895 and 37778896100)
+  -> #125 user search/pagination slice (open, dependent)
+  -> #126 user detail slice (open, dependent)
 ```
 
-Closed since the previous checkpoint: parent spec #116, implementation #117
-(PR #118 merged), and #119 (PR #120 merged). Open: #121 only
-(`ready-for-agent`). Spec #8 is closed.
+Closed since the previous checkpoint: #121 reconcile sandbox recipient checks
+(PR #122 merged) and its 2026-10-07 manual Identity QA. Open: #123 (parent
+spec), #124 (blocked active slice), #125/#126 (dependent slices), #127
+(recovery blocker, in review). Spec #8 is closed. No administration UI is
+implemented yet; #124 remains unstarted until #127 is accepted.
 
 The currently approved RCH sandbox mail allowlist holds exactly three
 recipients (`jonatangarbuyo@gmail.com` stable automated smoke,
@@ -162,12 +169,12 @@ The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-p
 
 The former Standards startup and trusted-approval blockers are resolved and merged on main through PR #109. The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; the agent workflows reinstall dependencies deterministically (`npm ci`) before quality gates, so no dependency-restoration blocker remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. Current work is #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) on its ticket branch: run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
+#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Current work is #127 (bounded implementation recovery evidence, in review as PR #128), blocking the #123-parented #124 administrator-UI tracer bullet; #125/#126 remain dependent product slices: run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
 
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The current open ticket inventory is #121 only (single release-reconciliation slice of spec #8); #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed and PRs #118 and #120 are merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
+- The current open ticket inventory is #123 (admin parent spec), #124 (blocked active slice), #125/#126 (dependent slices), and #127 (recovery blocker, in review as PR #128); #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
