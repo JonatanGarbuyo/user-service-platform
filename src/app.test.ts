@@ -34,14 +34,16 @@ describe('unhandled routes', () => {
 describe('administration SPA assets', () => {
   const workerEnv = env;
 
-  function assetsEnv(handler: (path: string) => Response | null): Env {
+  function assetsEnv(handler: (path: string, request: Request) => Response | null): Env {
     return {
       DB: workerEnv.DB,
       ENVIRONMENT: 'test',
       ASSETS: {
         fetch: (request: Request): Promise<Response> => {
           const path = new URL(request.url).pathname;
-          return Promise.resolve(handler(path) ?? new Response('missing', { status: 404 }));
+          return Promise.resolve(
+            handler(path, request) ?? new Response('missing', { status: 404 }),
+          );
         },
       },
     };
@@ -101,6 +103,30 @@ describe('administration SPA assets', () => {
 
     expect(res.status).toBe(200);
     expect(seen).toEqual(['/index.html']);
+  });
+
+  it('preserves a cached client-route entry on conditional revalidation', async () => {
+    const etag = '"admin-entry-validator"';
+    const assets = assetsEnv((path, request) => {
+      if (path !== '/index.html') return null;
+      return request.headers.get('if-none-match') === etag
+        ? new Response(null, { status: 304, headers: { etag } })
+        : entryHtml();
+    });
+    const app = createApp();
+    const revalidated = await app.request(
+      '/admin/unknown-route',
+      { headers: { 'if-none-match': etag } },
+      assets,
+    );
+
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.headers.get('etag')).toBe(etag);
+    expect(await revalidated.text()).toBe('');
+
+    const fresh = await app.request('/admin/unknown-route', {}, assets);
+    expect(fresh.status).toBe(200);
+    expect(fresh.headers.get('content-type')).toContain('text/html');
   });
 
   it('returns a real 404 for missing hashed assets rather than SPA HTML', async () => {

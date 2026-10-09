@@ -67,7 +67,9 @@ async function serveAdminAsset(c: Context<AppBindings>, path: string): Promise<R
   // invalid deployment as a JavaScript parse failure.
   if (assetPath.startsWith('/assets/')) return hit;
   const entry = await assets.fetch(new Request(`${origin}/index.html`, c.req.raw));
-  if (entry.ok) {
+  // A conditional navigation can revalidate the cached SPA entry. Preserve
+  // its 304 so the browser reuses HTML rather than replacing it with JSON 404.
+  if (entry.ok || entry.status === 304) {
     return entry;
   }
   return c.json(

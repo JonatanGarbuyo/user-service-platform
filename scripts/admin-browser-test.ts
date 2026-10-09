@@ -236,18 +236,6 @@ export async function runAdminBrowserTest(): Promise<void> {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
     diagnosticPage = page;
-    const browserFailures: string[] = [];
-    const identityStatuses: number[] = [];
-    page.on('pageerror', (error) => {
-      // React production codes are fixed framework diagnostics, never payloads.
-      const reactCode = /Minified React error #(\d+)/.exec(error.message)?.[1];
-      if (browserFailures.length < 10)
-        browserFailures.push(reactCode === undefined ? 'javascript-error' : `react-${reactCode}`);
-    });
-    page.on('response', (response) => {
-      if (new URL(response.url()).pathname === '/v1/admin/me' && identityStatuses.length < 30)
-        identityStatuses.push(response.status());
-    });
     page.setDefaultTimeout(15_000);
     phase = 'administrator login';
     await page.goto(`${base}/admin/unknown-route`);
@@ -269,20 +257,7 @@ export async function runAdminBrowserTest(): Promise<void> {
     await page.reload();
     await visible(page, 'Sesión de administración');
     await page.goto(`${base}/admin/unknown-route`);
-    try {
-      await visible(page, 'Página no encontrada');
-    } catch (cause) {
-      console.info('Administration unknown-route diagnostics:', {
-        browserFailures,
-        identityStatuses,
-        state: await page.evaluate(`({
-          rootChildren: document.getElementById('root')?.childElementCount,
-          loading: [...document.querySelectorAll('[role="status"]')].some(node => node.textContent?.includes('Comprobando la sesión')),
-          scripts: document.querySelectorAll('script[src]').length
-        })`),
-      });
-      throw cause;
-    }
+    await visible(page, 'Página no encontrada');
     assert(
       (await page.getByRole('button', { name: 'Menú de usuario', exact: true }).count()) === 1,
       'unknown route has a single kit layout',
