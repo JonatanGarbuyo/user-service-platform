@@ -37,6 +37,9 @@ a second API schema. Same-origin `fetch` uses HttpOnly session cookies with
 `credentials: include`. No authentication data is stored in localStorage or
 sessionStorage. The kit receives an in-memory store and telemetry is disabled.
 `GET /v1/admin/me` is the permission authority; public `/v1/me` stays unchanged.
+The outer BrowserRouter owns the `/admin` basename (the kit default is a hash
+router). Shared React Query/form dependencies are pinned to one compatible
+version and Vite deduplicates their contexts.
 
 ra-core's default `requireAuth` failure path invokes logout on every rejection.
 Our small protected route uses its `useAuthState` without automatic logout and

@@ -88,6 +88,7 @@ export async function runAdminBrowserTest(): Promise<void> {
   const state = await mkdtemp(join(tmpdir(), 'user-service-admin-'));
   let worker: ChildProcess | undefined;
   let browser: Browser | undefined;
+  let diagnosticPage: Page | undefined;
   let phase = 'setup';
   try {
     const config = join(state, 'wrangler.jsonc');
@@ -232,6 +233,7 @@ export async function runAdminBrowserTest(): Promise<void> {
     });
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
+    diagnosticPage = page;
     page.setDefaultTimeout(15_000);
     phase = 'administrator login';
     await page.goto(`${base}/admin/unknown-route`);
@@ -369,6 +371,26 @@ export async function runAdminBrowserTest(): Promise<void> {
       'Administration browser acceptance passed: admin, regular denial, retry, expiry, logout, routing and keyboard/mobile.',
     );
   } catch (cause) {
+    if (diagnosticPage !== undefined && !diagnosticPage.isClosed()) {
+      const summary = await Promise.race([
+        diagnosticPage
+          .evaluate<string>(
+            `JSON.stringify({
+        path: location.pathname,
+        headings: [...document.querySelectorAll('h1')].map(node => node.textContent),
+        alerts: [...document.querySelectorAll('[role="alert"]')].map(node => node.textContent)
+      })`,
+          )
+          .catch(() => 'Page diagnostics unavailable'),
+        pause(2000).then(() => 'Page diagnostics timed out'),
+      ]);
+      // Only fixed UI labels; fixture emails are redacted and no form values,
+      // cookies, storage, response bodies or action URLs are inspected here.
+      console.info(
+        'Administration browser state:',
+        summary.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[fixture]').slice(0, 1000),
+      );
+    }
     throw new Error(`Administration browser acceptance failed during ${phase}`, { cause });
   } finally {
     try {

@@ -163,7 +163,6 @@ function ProtectedView({ children }: PropsWithChildren) {
 export function App() {
   return (
     <Admin
-      basename="/admin"
       title="Administración"
       authProvider={authProvider}
       i18nProvider={i18nProvider}
