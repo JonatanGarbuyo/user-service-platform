@@ -30,7 +30,9 @@ export default async function setup(): Promise<void> {
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Administration SPA build failed before the Worker harness: ${detail}`);
+    throw new Error(`Administration SPA build failed before the Worker harness: ${detail}`, {
+      cause: error,
+    });
   }
   if (!existsSync(resolve(repoRoot, 'admin', 'dist', 'index.html'))) {
     throw new Error(

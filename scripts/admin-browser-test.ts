@@ -81,7 +81,7 @@ async function runBounded(label: string, command: string, args: string[], timeou
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message.split('\n').slice(0, 3).join(' ') : String(error);
-    throw new Error(`${label} failed: ${detail}`);
+    throw new Error(`${label} failed: ${detail}`, { cause: error });
   }
 }
 
