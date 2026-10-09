@@ -75,8 +75,10 @@ async function visible(page: Page, name: string): Promise<void> {
 
 async function signIn(page: Page, email: string, password: string): Promise<void> {
   await visible(page, 'Administración');
-  await page.getByLabel('Correo electrónico', { exact: true }).fill(email);
-  await page.getByLabel('Contraseña', { exact: true }).fill(password);
+  await page.getByRole('textbox', { name: 'Correo electrónico', exact: true }).fill(email);
+  // getByLabel includes the kit's visually required marker in label text,
+  // even though that marker is aria-hidden in the accessible name.
+  await page.getByLabel(/^Contraseña(?:\s*\*)?$/).fill(password);
   await page.getByRole('button', { name: 'Iniciar sesión', exact: true }).click();
 }
 
