@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-08
+Last verified: 2026-10-09
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -150,21 +150,34 @@ The former Standards startup and trusted-approval blockers are resolved and merg
 
 ### Administration UI checkpoint (2026-10-09)
 
-PR #129 HEAD `1b5728efcafd3b198c4c8e9d7f3eebd2cef926ec` preserved recovered
-backend/contracts/deployment work but lacked the `admin/` workspace. GitHub
-fix-cycle run 37934380444 ended with an address-review timeout; it published
-no correction. The separately authorized ChatGPT operator is completing the
-same PR directly, preserving the approved contracts and routing decisions.
-The UI includes the genuine pinned Marmelab kit and a real browser acceptance
-gate. Until configured exact-HEAD Standards/Spec and CI pass, the PR remains
-work in progress; implementation or a finished run alone does not mean usable
-or deployed. GitHub/OpenCode execution evidence is not a ChatGPT conversation
-or evidence of private conversation content.
+The earlier recovery HEAD `1b5728efcafd3b198c4c8e9d7f3eebd2cef926ec`
+lacked the `admin/` workspace, and fix-cycle run 37934380444 timed out without
+publishing a correction. Those implementation failures are historical: the
+separately authorized ChatGPT operator completed the genuine pinned Marmelab
+kit workspace directly on the same PR, preserving approved contracts.
+
+Real browser CI exposed a conditional-asset regression: a `304` from the SPA
+entry fallback became JSON `404` because `Response.ok` excludes revalidation.
+The HTTP regression reproduced that failure and the correction preserves the
+`304` and ETag. Temporary routing diagnostics were removed.
+[CI 38005945830](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/38005945830)
+passed on executable HEAD `00b516c8d90b3545d756041e9cc913b972ddc238`:
+156 Workers tests and 752 harness tests, including the complete real browser
+acceptance against isolated temporary D1. This covers administrative login,
+reload/logout, regular-User denial with its session preserved, service retry,
+expiry, routing and keyboard/mobile behavior.
+
+The PR remains draft pending configured independent Standards/Spec and CI on
+the final published HEAD, followed by final operator acceptance. The panel has
+not been merged or deployed; #125/#126 remain dependent. Local listeners are
+restricted in the ChatGPT execution environment, so remote CI is the authority
+for full browser/Worker execution. GitHub/OpenCode evidence is not a ChatGPT
+conversation or evidence of private conversation content.
 
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The current open ticket inventory is #123 (admin parent spec), #124 (active UI slice, draft PR #129), #125/#126 (dependent slices), ; #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
+- The current open ticket inventory is #123 (admin parent spec), #124 (active UI slice, draft PR #129), and #125/#126 (dependent slices); #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
