@@ -38,10 +38,7 @@ function readEnvironment(c: Context<AppBindings>): string {
 // (notably unit-test boots and checkouts without a prior `build:admin`)
 // the request ends as JSON Problem Details instead of crashing; the deploy
 // preflight fails closed when distributable assets are missing.
-async function serveAdminAsset(
-  c: Context<AppBindings>,
-  path: string,
-): Promise<Response> {
+async function serveAdminAsset(c: Context<AppBindings>, path: string): Promise<Response> {
   const assets = (c.env as Partial<Env> | undefined)?.ASSETS;
   if (assets === undefined) {
     return c.json(
@@ -56,13 +53,20 @@ async function serveAdminAsset(
     );
   }
   const origin = new URL(c.req.url).origin;
-  const hit = await assets.fetch(new Request(`${origin}${path}`));
+  // Vite's dist contains index.html and assets/ at its root. Public URLs
+  // retain /admin; only the binding request removes that mount prefix.
+  const assetPath =
+    path === '/admin' || path === '/admin/' ? '/index.html' : path.slice('/admin'.length);
+  const hit = await assets.fetch(new Request(`${origin}${assetPath}`, c.req.raw));
   if (hit.status !== 404) {
     return hit;
   }
   // Single-page-application fallback, scoped to `/admin` only: client routes
   // (including the sign-in deep link) boot from the same entry document.
-  const entry = await assets.fetch(new Request(`${origin}/admin/index.html`));
+  // Missing hashed assets must stay 404; returning HTML would disguise an
+  // invalid deployment as a JavaScript parse failure.
+  if (assetPath.startsWith('/assets/')) return hit;
+  const entry = await assets.fetch(new Request(`${origin}/index.html`, c.req.raw));
   if (entry.ok) {
     return entry;
   }

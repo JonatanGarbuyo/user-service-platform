@@ -90,6 +90,8 @@ describe('wrangler config materialization', () => {
     expect(config.assets).toEqual({
       directory: resolveRepoAdminDistDir(),
       binding: 'ASSETS',
+      run_worker_first: true,
+      html_handling: 'none',
     });
     expect(isAbsolute(config.assets.directory)).toBe(true);
     expect(config.assets.directory).toBe(resolveRepoAdminDistDir(resolveRepoRoot()));

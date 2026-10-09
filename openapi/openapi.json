@@ -332,6 +332,35 @@
           "status"
         ]
       },
+      "AdminMe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "abc123"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "example": true
+          },
+          "role": {
+            "type": "string",
+            "example": "admin"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "emailVerified",
+          "role"
+        ]
+      },
       "AdminBootstrapResult": {
         "type": "object",
         "properties": {
@@ -727,6 +756,38 @@
           },
           "default": {
             "description": "Sign-out failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/me": {
+      "get": {
+        "operationId": "getAdminMe",
+        "summary": "Resolve the current administrator",
+        "description": "Returns the exact administrative representation for the session carried by the request cookies when that session holds User listing/read access. Anonymous or invalid sessions receive the standard unauthenticated Problem Details response; valid non-administrative sessions receive the forbidden Problem Details response. The public `/v1/me` representation is unchanged by this operation.",
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "The authenticated administrator.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMe"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Authorization failure as RFC 9457 Problem Details.",
             "content": {
               "application/problem+json": {
                 "schema": {

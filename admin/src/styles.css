@@ -1,0 +1,83 @@
+@import './kit/index.css';
+@source './kit';
+
+.auth-screen {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: var(--muted);
+}
+.auth-card,
+.identity-card {
+  width: min(100%, 32rem);
+  padding: clamp(1.5rem, 5vw, 2.5rem);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--card);
+  color: var(--card-foreground);
+}
+.identity-card {
+  margin-block: 2rem;
+}
+.auth-card h1,
+.identity-card h1 {
+  font-size: clamp(1.5rem, 4vw, 1.9rem);
+  font-weight: 650;
+  line-height: 1.25;
+  margin-block: 0.5rem 1rem;
+}
+.eyebrow {
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  font-weight: 650;
+  color: var(--muted-foreground);
+}
+.auth-description,
+.auth-footer {
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.login-form {
+  display: grid;
+  gap: 1.4rem;
+  margin-top: 1.8rem;
+}
+.auth-footer {
+  font-size: 0.8rem;
+  margin-top: 1.5rem;
+}
+.failure-message {
+  color: var(--destructive);
+  font-size: 0.9rem;
+}
+.identity-card dl {
+  display: grid;
+  gap: 0.25rem;
+  margin-block: 1.8rem;
+}
+.identity-card dt {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  margin-top: 0.75rem;
+}
+.identity-card dd {
+  overflow-wrap: anywhere;
+}
+.sign-out-control {
+  display: grid;
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+.loading-state {
+  padding: 2rem;
+}
+button,
+input,
+a {
+  scroll-margin: 1rem;
+}
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}

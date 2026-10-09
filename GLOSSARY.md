@@ -14,6 +14,22 @@ A registered end user of the consuming site. Editorial CMS operators are not Use
 
 Authentication identity, credentials, linked providers, account recovery, email verification, and session lifecycle.
 
+### Administrator
+
+An Identity User authorized by the supported Better Auth administrative
+permission API to read/list Users. The first administrator is bootstrapped
+explicitly, verifies email and uses the same login and HttpOnly session as any
+User. This service-owned permission is separate from editorial CMS roles.
+`GET /v1/admin/me` exposes only id, email, emailVerified and role; public
+`GET /v1/me` retains its three-field representation.
+
+### Administration UI
+
+The same-origin React SPA under `/admin` (spec #123, ADR-0012). Its first slice
+supports administrator sign-in, real identity, reload and sign-out; list/detail
+are subsequent slices. Server responses, rather than browser role claims,
+authorize access.
+
 ### Auth Policy
 
 Deployment-level configuration that controls supported authentication behaviour without exposing Better Auth configuration directly to feature code. It includes capabilities such as registration enablement, email/password enablement, required email verification, OAuth providers, and auth/session lifetimes. The initial deployment requires verified email before login succeeds.
@@ -77,7 +93,6 @@ Traffic/product analytics is a separate service or third-party platform. This se
 - OTP/passwordless authentication
 - MFA/passkeys
 - new-device authentication alerts
-- internal operator/admin authentication and admin UI
 
 ### Out of scope
 
@@ -85,7 +100,8 @@ Traffic/product analytics is a separate service or third-party platform. This se
 - newsletter delivery
 - web/product analytics platform
 - hard protection of premium content; consuming products may use a client-side soft paywall
-- internal operator/admin authentication and admin UI in the initial version
+- historical Identity foundation (#8) excluded administration UI; the accepted
+  follow-on spec #123 now includes service-owned administration
 
 ## Architectural vocabulary
 

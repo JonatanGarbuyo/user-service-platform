@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "npm@11.19.0",
-  "workspaces": ["admin"],
+  "workspaces": [
+    "admin"
+  ],
   "engines": {
     "node": ">=24.21.0 <25"
   },
@@ -21,6 +23,7 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "typecheck": "tsc --noEmit && tsc --noEmit --project admin",
+    "pretest": "npm run build:admin",
     "test": "vitest run",
     "test:harness": "vitest run --config vitest.harness.config.ts",
     "openapi:generate": "tsx scripts/generate-openapi.ts",

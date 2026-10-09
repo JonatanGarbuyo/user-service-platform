@@ -10,7 +10,7 @@ Ticket #124 delivers the first usable administration increment (spec #123):
 an operator signs in with an existing verified administrative User, sees
 their real administrative identity, reloads without losing the session, and
 signs out. The UI is a client-only React + TypeScript + Vite application
-built on Marmelab Shadcn Admin Kit (`shadcn-admin-kit`, ra-core) with
+built on pinned Marmelab Shadcn Admin Kit registry sources and ra-core with
 Tailwind styling, reusing the existing `POST /v1/auth/login`,
 `POST /v1/auth/sign-out` and HttpOnly cookie session plus a new
 `GET /v1/admin/me` application-owned contract.
@@ -37,7 +37,7 @@ origin through Workers Static Assets:
 - `/admin` and `/admin/*` resolve through the `ASSETS` binding; asset
   misses under `/admin` fall back to `/admin/index.html` so the sign-in
   deep link and authenticated views survive refresh. The fallback applies
-  only under `/admin`.
+  only under `/admin`; missing hashed assets remain 404.
 - Local development proxies same-origin API requests to the local Worker
   (`admin/vite.config.ts` dev proxy); the production topology has no
   proxy and no Node server.
@@ -49,8 +49,8 @@ origin through Workers Static Assets:
   recorded provenance (`admin/README.md`); copied kit components, if any,
   stay under repository maintenance. Frontend lint, typecheck and the
   production build run in the deterministic repository gates; the deploy
-  orchestration rebuilds the assets before materializing the target
-  config. No live provisioning, secret or production promotion is part of
+  orchestration rebuilds assets after read-only preflight and before any remote
+  mutation. Materialization and dry-run preflight ordering remain unchanged. No live provisioning, secret or production promotion is part of
   this decision.
 
 ## Consequences

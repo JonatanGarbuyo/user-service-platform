@@ -60,7 +60,7 @@ describe('administration SPA assets', () => {
       '/admin/assets/app.js',
       { method: 'GET' },
       assetsEnv((path) =>
-        path === '/admin/assets/app.js'
+        path === '/assets/app.js'
           ? new Response('console.log(1)', {
               status: 200,
               headers: { 'content-type': 'text/javascript' },
@@ -79,7 +79,7 @@ describe('administration SPA assets', () => {
     const res = await app.request(
       '/admin/inicio-sesion',
       { method: 'GET' },
-      assetsEnv((path) => (path === '/admin/index.html' ? entryHtml() : null)),
+      assetsEnv((path) => (path === '/index.html' ? entryHtml() : null)),
     );
 
     expect(res.status).toBe(200);
@@ -95,12 +95,22 @@ describe('administration SPA assets', () => {
       { method: 'GET' },
       assetsEnv((path) => {
         seen.push(path);
-        return path === '/admin/index.html' ? entryHtml() : null;
+        return path === '/index.html' ? entryHtml() : null;
       }),
     );
 
     expect(res.status).toBe(200);
-    expect(seen).toEqual(['/admin/index.html']);
+    expect(seen).toEqual(['/index.html']);
+  });
+
+  it('returns a real 404 for missing hashed assets rather than SPA HTML', async () => {
+    const res = await createApp().request(
+      '/admin/assets/missing.js',
+      { method: 'GET' },
+      assetsEnv((path) => (path === '/index.html' ? entryHtml() : null)),
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).not.toContain('text/html');
   });
 
   it('keeps unknown /v1 routes as JSON Problem Details when assets are bound', async () => {

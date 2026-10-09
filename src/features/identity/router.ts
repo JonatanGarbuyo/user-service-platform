@@ -6,7 +6,7 @@ import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/prob
 import { createIdentityAuth } from './auth.js';
 import { resolveAdminIdentity } from './authorization.js';
 import { bootstrapAdminUser } from './admin.js';
-import { resolveAuthMailer, type AuthMailer } from './mailer.js';
+import { deferredAuthMailer, resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
 import {
   adminBootstrapRoute,
@@ -102,6 +102,7 @@ function backgroundScheduler(c: IdentityContext): (task: Promise<unknown>) => vo
 function scopedAuth(
   c: IdentityContext,
   override?: AuthMailer,
+  mailTransport: 'eager' | 'deferred' = 'eager',
 ): { auth: ReturnType<typeof createIdentityAuth>; policy: AuthPolicy } {
   // Application boundary (ticket #57, PR #61 review): compose one effective
   // non-secret configuration from the selected versioned profile + same-name
@@ -116,7 +117,7 @@ function scopedAuth(
   const auth = createIdentityAuth({
     db: c.env.DB,
     policy,
-    mailer: resolveAuthMailer(
+    mailer: (mailTransport === 'deferred' ? deferredAuthMailer : resolveAuthMailer)(
       {
         ...effective.config,
         RESEND_API_KEY: c.env.RESEND_API_KEY,
@@ -428,7 +429,7 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
     if (session === null) {
       return problem(c, 401, 'unauthenticated', 'Unauthenticated');
     }
-    const { auth } = scopedAuth(c, override);
+    const { auth } = scopedAuth(c, override, 'deferred');
     const admin = await resolveAdminIdentity({
       auth,
       db: c.env.DB,

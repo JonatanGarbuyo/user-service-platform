@@ -1,0 +1,79 @@
+import {
+  AdminMeSchema,
+  LoginRequestSchema,
+  type AdminMe,
+  type LoginRequest,
+} from '../../src/features/identity/contract.js';
+import { ProblemDetailsSchema } from '../../src/shared/problem.js';
+
+// Only application-owned status/code combinations become UI messages. Raw
+// server details, credentials and transport errors never reach notifications.
+export class ApiError extends Error {
+  readonly logoutUser = false;
+  readonly redirectTo: string;
+
+  constructor(
+    readonly status: number,
+    readonly code?: string,
+    options?: ErrorOptions,
+  ) {
+    const message =
+      code === 'email-verification-required'
+        ? 'Verifica tu correo electrónico antes de iniciar sesión.'
+        : status === 401 && code === 'invalid-credentials'
+          ? 'Credenciales inválidas'
+          : status === 401
+            ? 'La sesión terminó. Inicia sesión de nuevo.'
+            : status === 403
+              ? 'Tu cuenta no tiene acceso a la administración.'
+              : status === 400
+                ? 'Revisa el correo electrónico y la contraseña.'
+                : 'No pudimos conectar con el servicio. Inténtalo de nuevo.';
+    super(message, options);
+    this.name = 'ApiError';
+    this.redirectTo = status === 401 ? '/login' : status === 403 ? '/denegado' : '/problema';
+  }
+}
+
+async function request(
+  path: string,
+  body?: LoginRequest | Record<string, never>,
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      credentials: 'include',
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        accept: 'application/json, application/problem+json',
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (error) {
+    throw new ApiError(0, undefined, { cause: error });
+  }
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const problem = ProblemDetailsSchema.safeParse(payload);
+    throw new ApiError(response.status, problem.success ? problem.data.code : undefined);
+  }
+  return payload;
+}
+
+export async function login(params: unknown): Promise<void> {
+  const input = LoginRequestSchema.safeParse(params);
+  if (!input.success) throw new ApiError(400);
+  await request('/v1/auth/login', input.data);
+}
+
+export async function adminIdentity(): Promise<AdminMe> {
+  const parsed = AdminMeSchema.safeParse(await request('/v1/admin/me'));
+  if (!parsed.success) throw new ApiError(502);
+  return parsed.data;
+}
+
+export async function signOut(): Promise<void> {
+  await request('/v1/auth/sign-out', {});
+}

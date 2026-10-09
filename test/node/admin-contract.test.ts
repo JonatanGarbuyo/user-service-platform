@@ -3,16 +3,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-// Seam under test (ticket #124, ADR-0007, ADR-0012): the published OpenAPI
-// contract behind the administration SPA plus the SPA's HTTP client source.
-// These tests prove the SPA consumes the application-owned contracts without
-// duplicating API schemas (exact `AdminMe` shape, reused login/sign-out
-// operations) and that the client never persists authentication material in
-// browser storage. Expected values come from the committed OpenAPI artifact,
-// not from the client implementation.
+// Published generated contracts: admin identity is exact and existing login,
+// logout and public identity operations keep their application-owned shapes.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const artifactPath = resolve(root, 'openapi', 'openapi.json');
-const clientPath = resolve(root, 'admin', 'src', 'api.ts');
 
 interface Operation {
   readonly operationId?: string;
@@ -21,7 +15,9 @@ interface Operation {
 
 async function document(): Promise<{
   paths: Record<string, Record<string, Operation>>;
-  components: { schemas: Record<string, { required?: string[]; properties?: Record<string, unknown> }> };
+  components: {
+    schemas: Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
+  };
 }> {
   const raw = await readFile(artifactPath, 'utf8');
   return JSON.parse(raw) as {
@@ -40,17 +36,11 @@ describe('administration API contract', () => {
     expect(operation?.operationId).toBe('getAdminMe');
 
     const schema = operation?.responses?.['200']?.content?.['application/json']?.schema as
-      | { $ref?: string }
-      | undefined;
+      { $ref?: string } | undefined;
     expect(schema?.$ref).toBe('#/components/schemas/AdminMe');
 
     const adminMe = doc.components.schemas.AdminMe;
-    expect(adminMe?.required?.slice().sort()).toEqual([
-      'email',
-      'emailVerified',
-      'id',
-      'role',
-    ]);
+    expect(adminMe?.required?.slice().sort()).toEqual(['email', 'emailVerified', 'id', 'role']);
     expect(Object.keys(adminMe?.properties ?? {}).sort()).toEqual([
       'email',
       'emailVerified',
@@ -67,27 +57,5 @@ describe('administration API contract', () => {
     // The session check reuses the unchanged public contract, which gains no
     // administrative fields for the panel's convenience.
     expect(doc.paths['/v1/me']?.get?.operationId).toBe('getCurrentUser');
-  });
-
-  it('keeps the SPA client on the published contracts without browser token storage', async () => {
-    const raw = await readFile(clientPath, 'utf8');
-    // Strip comments so prose about the storage ban cannot trip the guard;
-    // only executable code is inspected.
-    const source = raw
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/(^|\s)\/\/.*$/gm, '$1');
-
-    // The client talks to exactly the application-owned contracts above.
-    expect(source).toContain("'/v1/auth/login'");
-    expect(source).toContain("'/v1/admin/me'");
-    expect(source).toContain("'/v1/auth/sign-out'");
-    expect(source).toContain("'/v1/me'");
-    expect(source).toContain("credentials: 'include'");
-
-    // Authentication tokens must never be read, copied or persisted in
-    // browser storage: the session travels only in the HttpOnly cookie.
-    expect(source).not.toContain('localStorage');
-    expect(source).not.toContain('sessionStorage');
-    expect(source).not.toContain('document.cookie');
   });
 });

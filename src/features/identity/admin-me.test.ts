@@ -211,6 +211,32 @@ describe('GET /v1/admin/me', () => {
     expect(await res.json()).toMatchObject({ code: 'unauthenticated', status: 401 });
   });
 
+  it('rejects an expired session even when its signed cookie remains present', async () => {
+    const cookie = await verifiedAdminCookie();
+    await workerEnv.DB.prepare('UPDATE "session" SET expires_at = 0').run();
+    const res = await get('/v1/admin/me', { cookie });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: 'unauthenticated' });
+  });
+
+  it('reads administrative identity independently of mail-provider credentials', async () => {
+    const cookie = await verifiedAdminCookie();
+    const readApp = createApp();
+    const res = await readApp.request(
+      '/v1/admin/me',
+      { headers: { cookie } },
+      testEnv({
+        AUTH_MAIL_TRANSPORT: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_SECURE: 'false',
+        AUTH_MAIL_FROM: 'service@example.com',
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ role: 'admin', emailVerified: true });
+  });
+
   it('leaves the public current-User representation unchanged for administrators', async () => {
     const cookie = await verifiedAdminCookie();
 

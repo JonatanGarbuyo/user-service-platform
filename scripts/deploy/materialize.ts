@@ -69,6 +69,8 @@ export interface MaterializeOptions {
 export interface TargetAssets {
   readonly directory: string;
   readonly binding: typeof BASE_ASSETS_BINDING;
+  readonly run_worker_first: true;
+  readonly html_handling: 'none';
 }
 
 export interface TargetD1Binding {
@@ -113,6 +115,8 @@ export function buildTargetWranglerConfig(
     assets: {
       directory: adminDistDir,
       binding: BASE_ASSETS_BINDING,
+      run_worker_first: true,
+      html_handling: 'none',
     },
     secrets: {
       required: requiredWorkerSecrets({
