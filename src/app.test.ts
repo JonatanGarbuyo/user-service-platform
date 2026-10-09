@@ -1,5 +1,7 @@
+import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
+import type { Env } from './env.js';
 
 // Seam under test: unhandled public API paths through the built Worker. Ticket #9
 // requires the RFC 9457-compatible Problem Details shape for invalid/unhandled
@@ -20,5 +22,110 @@ describe('unhandled routes', () => {
       code: 'not-found',
       instance: '/v1/does-not-exist',
     });
+  });
+});
+
+// Seam under test (ticket #124, ADR-0012): administration SPA routing through
+// the built Worker with a substituted Static Assets binding. These tests prove
+// the routing precedence — exact asset hits stream through, misses under
+// `/admin` fall back to the SPA entry, unknown `/v1` routes stay JSON — and
+// the graceful JSON degradation when no asset pipeline is bound. Real asset
+// bytes are covered by the browser integration test, not here.
+describe('administration SPA assets', () => {
+  const workerEnv = env;
+
+  function assetsEnv(handler: (path: string) => Response | null): Env {
+    return {
+      DB: workerEnv.DB,
+      ENVIRONMENT: 'test',
+      ASSETS: {
+        fetch: (request: Request): Promise<Response> => {
+          const path = new URL(request.url).pathname;
+          return Promise.resolve(handler(path) ?? new Response('missing', { status: 404 }));
+        },
+      },
+    };
+  }
+
+  function entryHtml(): Response {
+    return new Response('<html>admin</html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  it('streams exact asset hits through untouched', async () => {
+    const app = createApp();
+    const res = await app.request(
+      '/admin/assets/app.js',
+      { method: 'GET' },
+      assetsEnv((path) =>
+        path === '/admin/assets/app.js'
+          ? new Response('console.log(1)', {
+              status: 200,
+              headers: { 'content-type': 'text/javascript' },
+            })
+          : null,
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/javascript');
+    expect(await res.text()).toBe('console.log(1)');
+  });
+
+  it('falls back to the SPA entry for client routes such as the sign-in deep link', async () => {
+    const app = createApp();
+    const res = await app.request(
+      '/admin/inicio-sesion',
+      { method: 'GET' },
+      assetsEnv((path) => (path === '/admin/index.html' ? entryHtml() : null)),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe('<html>admin</html>');
+  });
+
+  it('serves the SPA entry at /admin', async () => {
+    const app = createApp();
+    const seen: string[] = [];
+    const res = await app.request(
+      '/admin',
+      { method: 'GET' },
+      assetsEnv((path) => {
+        seen.push(path);
+        return path === '/admin/index.html' ? entryHtml() : null;
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(seen).toEqual(['/admin/index.html']);
+  });
+
+  it('keeps unknown /v1 routes as JSON Problem Details when assets are bound', async () => {
+    const app = createApp();
+    const res = await app.request(
+      '/v1/does-not-exist',
+      { method: 'GET' },
+      assetsEnv(() => entryHtml()),
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    expect(await res.json()).toMatchObject({ code: 'not-found', status: 404 });
+  });
+
+  it('degrades /admin to JSON Problem Details without an asset pipeline', async () => {
+    const app = createApp();
+    const res = await app.request(
+      '/admin/inicio-sesion',
+      { method: 'GET' },
+      { DB: workerEnv.DB, ENVIRONMENT: 'test' },
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    expect(await res.json()).toMatchObject({ code: 'not-found', status: 404 });
   });
 });

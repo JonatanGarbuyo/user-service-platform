@@ -3,6 +3,7 @@ import { ProblemDetailsSchema } from '../../shared/problem.js';
 import {
   AdminBootstrapRequestSchema,
   AdminBootstrapResultSchema,
+  AdminMeSchema,
   CurrentUserSchema,
   LoginRequestSchema,
   LoginResultSchema,
@@ -208,6 +209,28 @@ export const resetPasswordRoute = createRoute({
       description: 'The password was reset.',
     },
     ...problemResponses('Reset failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const adminMeRoute = createRoute({
+  method: 'get',
+  path: '/admin/me',
+  operationId: 'getAdminMe',
+  summary: 'Resolve the current administrator',
+  description:
+    'Returns the exact administrative representation for the session carried ' +
+    'by the request cookies when that session holds User listing/read access. ' +
+    'Anonymous or invalid sessions receive the standard unauthenticated ' +
+    'Problem Details response; valid non-administrative sessions receive the ' +
+    'forbidden Problem Details response. The public `/v1/me` representation ' +
+    'is unchanged by this operation.',
+  tags: ['admin'],
+  responses: {
+    200: {
+      content: { 'application/json': { schema: AdminMeSchema } },
+      description: 'The authenticated administrator.',
+    },
+    ...problemResponses('Authorization failure as RFC 9457 Problem Details.'),
   },
 });
 

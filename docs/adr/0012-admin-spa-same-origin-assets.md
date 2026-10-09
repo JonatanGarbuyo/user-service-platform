@@ -1,0 +1,74 @@
+# ADR-0012: Serve the administration SPA from the Worker origin under /admin
+
+## Status
+
+Accepted.
+
+## Context
+
+Ticket #124 delivers the first usable administration increment (spec #123):
+an operator signs in with an existing verified administrative User, sees
+their real administrative identity, reloads without losing the session, and
+signs out. The UI is a client-only React + TypeScript + Vite application
+built on Marmelab Shadcn Admin Kit (`shadcn-admin-kit`, ra-core) with
+Tailwind styling, reusing the existing `POST /v1/auth/login`,
+`POST /v1/auth/sign-out` and HttpOnly cookie session plus a new
+`GET /v1/admin/me` application-owned contract.
+
+Authentication travels in HttpOnly cookies, so the SPA must share the
+Worker origin: any cross-origin split would require a second cookie domain
+and CORS credential plumbing for no product benefit. No production Node
+server, SSR requirement, new external service or database is included.
+
+## Decision
+
+Serve the built client-only SPA under `/admin` on the existing Worker
+origin through Workers Static Assets:
+
+- The frontend builds to `admin/dist` (`npm run build:admin`). The base
+  `wrangler.jsonc` and every materialized target-specific Wrangler config
+  (ticket #78) reference the same built-assets directory, so local,
+  sandbox and production serve identical assets.
+- The Worker owns routing precedence: `/v1/*` JSON operations (including
+  the generated OpenAPI document and RFC 9457 Problem Details not-found
+  behavior) and the service-owned `/auth-actions/*` browser pages keep
+  their existing behavior. Unknown `/v1` routes remain JSON Problem
+  Details, never SPA HTML.
+- `/admin` and `/admin/*` resolve through the `ASSETS` binding; asset
+  misses under `/admin` fall back to `/admin/index.html` so the sign-in
+  deep link and authenticated views survive refresh. The fallback applies
+  only under `/admin`.
+- Local development proxies same-origin API requests to the local Worker
+  (`admin/vite.config.ts` dev proxy); the production topology has no
+  proxy and no Node server.
+- The UI never stores an authentication token in browser storage, never
+  parses session cookies, and never infers authorization from frontend
+  state: `GET /v1/admin/me` (401 anonymous, 403 verified non-administrator)
+  is the single authorization signal behind the `authProvider`.
+- Frontend dependencies are pinned in the `admin` npm workspace with
+  recorded provenance (`admin/README.md`); copied kit components, if any,
+  stay under repository maintenance. Frontend lint, typecheck and the
+  production build run in the deterministic repository gates; the deploy
+  orchestration rebuilds the assets before materializing the target
+  config. No live provisioning, secret or production promotion is part of
+  this decision.
+
+## Consequences
+
+- Same-origin HttpOnly cookies keep working for browser navigation,
+  reload and sign-out without credential-mode configuration.
+- API observability and error contracts are unchanged: SPA fallback cannot
+  conceal API failures because it never applies outside `/admin`.
+- `admin/dist` is build output and stays uncommitted; environments without
+  a prior build serve JSON Problem Details for `/admin` instead of
+  crashing, and the deploy preflight fails closed when assets are missing.
+- Future list/detail slices reuse this topology and add parameterized
+  administrative routes; request telemetry must then log matched route
+  patterns rather than raw identifiers (ADR-0009).
+
+## Deferred
+
+- Per-PR deployed Cloudflare preview infrastructure.
+- A generated TypeScript API client consumed by the SPA (frontend types
+  reuse the published OpenAPI shapes where practical; full SDK packaging
+  remains deferred per ADR-0007).

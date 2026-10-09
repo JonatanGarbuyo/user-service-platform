@@ -32,6 +32,52 @@ function readEnvironment(c: Context<AppBindings>): string {
 // Application composition root. Feature slices register their OpenAPI-aware
 // routers here under the `/v1` namespace; cross-feature imports must stay on
 // public slice interfaces (AGENTS.md change rules).
+// Serves one administration SPA path through the Static Assets binding
+// (ticket #124). Exact asset hits stream through untouched; misses under
+// `/admin` fall back to the SPA entry. Without a bound asset pipeline
+// (notably unit-test boots and checkouts without a prior `build:admin`)
+// the request ends as JSON Problem Details instead of crashing; the deploy
+// preflight fails closed when distributable assets are missing.
+async function serveAdminAsset(
+  c: Context<AppBindings>,
+  path: string,
+): Promise<Response> {
+  const assets = (c.env as Partial<Env> | undefined)?.ASSETS;
+  if (assets === undefined) {
+    return c.json(
+      createProblem({
+        status: 404,
+        code: 'not-found',
+        title: 'Not Found',
+        instance: new URL(c.req.url).pathname,
+      }),
+      404,
+      { 'Content-Type': PROBLEM_JSON },
+    );
+  }
+  const origin = new URL(c.req.url).origin;
+  const hit = await assets.fetch(new Request(`${origin}${path}`));
+  if (hit.status !== 404) {
+    return hit;
+  }
+  // Single-page-application fallback, scoped to `/admin` only: client routes
+  // (including the sign-in deep link) boot from the same entry document.
+  const entry = await assets.fetch(new Request(`${origin}/admin/index.html`));
+  if (entry.ok) {
+    return entry;
+  }
+  return c.json(
+    createProblem({
+      status: 404,
+      code: 'not-found',
+      title: 'Not Found',
+      instance: new URL(c.req.url).pathname,
+    }),
+    404,
+    { 'Content-Type': PROBLEM_JSON },
+  );
+}
+
 export function createApp(identityOptions: IdentityRouterOptions = {}) {
   const app = new OpenAPIHono<AppBindings>({
     // Contract-wide validation failure shape: invalid public API input uses the
@@ -82,6 +128,15 @@ export function createApp(identityOptions: IdentityRouterOptions = {}) {
   // handlers outside the versioned JSON API: they complete through the
   // existing POST `/v1` contracts and never enter the OpenAPI document.
   app.route('/auth-actions', createAuthActionsRouter());
+  // Administration SPA (ticket #124, ADR-0012). The built client-only assets
+  // are served on this same origin under `/admin` through the Static Assets
+  // binding, so browser navigation keeps the HttpOnly session cookie.
+  // Precedence is explicit: `/v1/*` and `/auth-actions/*` above keep their
+  // behavior, asset misses under `/admin` fall back to the SPA entry so the
+  // sign-in deep link survives refresh, and the fallback never applies
+  // outside `/admin` (unknown `/v1` routes stay JSON Problem Details).
+  app.get('/admin', (c) => serveAdminAsset(c, '/admin/index.html'));
+  app.get('/admin/*', (c) => serveAdminAsset(c, new URL(c.req.url).pathname));
 
   app.doc('/v1/openapi.json', openApiConfig);
 

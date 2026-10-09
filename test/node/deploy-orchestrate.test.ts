@@ -90,6 +90,7 @@ describe('deployment orchestration', () => {
   it('plans the sandbox release in migration-first order with smoke last', () => {
     expect(planDeploymentSteps({ resolved: SANDBOX })).toEqual([
       'preflight',
+      'build-admin-assets',
       'validate-migrations-local',
       'migrate-remote',
       'deploy-worker',
@@ -105,6 +106,7 @@ describe('deployment orchestration', () => {
     });
     expect(steps).toEqual([
       'preflight',
+      'build-admin-assets',
       'validate-migrations-local',
       'migrate-remote',
       'deploy-worker',
@@ -146,6 +148,25 @@ describe('deployment orchestration', () => {
     expect(text.some((entry) => entry.includes('--config /tmp/wrangler.deploy-test.json'))).toBe(
       true,
     );
+    expect(harness.removed).toEqual(['/tmp/wrangler.deploy-test.json']);
+  });
+
+  it('builds the administration assets before any remote mutation (ticket #124)', async () => {
+    const harness = createHarness();
+    await runDeployment({ resolved: SANDBOX }, harness.io, harness.runner);
+    const text = harness.commands.map(({ command, args }) => `${command} ${args.join(' ')}`);
+    const buildIndex = text.findIndex((entry) => entry === 'npm run build:admin');
+    const remoteIndex = text.findIndex((entry) => entry.includes('migrations apply DB --remote'));
+    expect(buildIndex).toBe(0);
+    expect(remoteIndex).toBeGreaterThan(buildIndex);
+  });
+
+  it('aborts before remote mutation when the administration build fails', async () => {
+    const harness = createHarness(/npm run build:admin/);
+    await expect(runDeployment({ resolved: SANDBOX }, harness.io, harness.runner)).rejects.toThrow(
+      /build-admin-assets/,
+    );
+    expect(harness.commands).toEqual([{ command: 'npm', args: ['run', 'build:admin'] }]);
     expect(harness.removed).toEqual(['/tmp/wrangler.deploy-test.json']);
   });
 

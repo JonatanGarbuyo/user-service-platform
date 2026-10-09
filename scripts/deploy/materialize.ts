@@ -27,6 +27,13 @@ export const BASE_WORKER_MAIN = 'src/index.ts';
 export const BASE_COMPATIBILITY_DATE = '2026-08-22';
 export const BASE_COMPATIBILITY_FLAGS: readonly string[] = ['nodejs_compat'];
 export const BASE_OBSERVABILITY: { readonly enabled: true } = { enabled: true };
+// Administration SPA assets (ticket #124, ADR-0012). The base
+// `wrangler.jsonc` serves the built `admin/dist` directory through the
+// `ASSETS` binding; materialized target configs carry the same binding with
+// an absolute repository path (ticket #85 anchoring) so every environment
+// serves identical built assets.
+export const BASE_ASSETS_DIRECTORY = 'admin/dist';
+export const BASE_ASSETS_BINDING = 'ASSETS';
 
 // Repository-anchored file resolution (ticket #85, ADR-0008).
 //
@@ -51,8 +58,17 @@ export function resolveRepoWorkerMain(repoRoot: string = resolveRepoRoot()): str
   return join(resolve(repoRoot), BASE_WORKER_MAIN);
 }
 
+export function resolveRepoAdminDistDir(repoRoot: string = resolveRepoRoot()): string {
+  return join(resolve(repoRoot), BASE_ASSETS_DIRECTORY);
+}
+
 export interface MaterializeOptions {
   readonly repoRoot?: string;
+}
+
+export interface TargetAssets {
+  readonly directory: string;
+  readonly binding: typeof BASE_ASSETS_BINDING;
 }
 
 export interface TargetD1Binding {
@@ -69,6 +85,7 @@ export interface TargetWranglerConfig {
   readonly compatibility_flags: readonly string[];
   readonly vars: Record<string, string>;
   readonly observability: { readonly enabled: true };
+  readonly assets: TargetAssets;
   readonly d1_databases: readonly [TargetD1Binding];
   // Required Worker secret names (ticket #104). Names only: values stay in
   // Cloudflare and `wrangler deploy` validates presence before promotion.
@@ -82,7 +99,8 @@ export function buildTargetWranglerConfig(
   const repoRoot = options.repoRoot === undefined ? resolveRepoRoot() : resolve(options.repoRoot);
   const main = resolveRepoWorkerMain(repoRoot);
   const migrationsDir = resolveRepoMigrationsDir(repoRoot);
-  if (!isAbsolute(main) || !isAbsolute(migrationsDir)) {
+  const adminDistDir = resolveRepoAdminDistDir(repoRoot);
+  if (!isAbsolute(main) || !isAbsolute(migrationsDir) || !isAbsolute(adminDistDir)) {
     throw new Error('Materialized Wrangler paths must be absolute.');
   }
   return {
@@ -92,6 +110,10 @@ export function buildTargetWranglerConfig(
     compatibility_flags: [...BASE_COMPATIBILITY_FLAGS],
     vars: { ENVIRONMENT: resolved.environment, ...resolved.vars },
     observability: { ...BASE_OBSERVABILITY },
+    assets: {
+      directory: adminDistDir,
+      binding: BASE_ASSETS_BINDING,
+    },
     secrets: {
       required: requiredWorkerSecrets({
         environment: resolved.environment,
