@@ -5,7 +5,14 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: ['coverage/**', 'dist/**', '.wrangler/**', 'node_modules/**'],
+    // The pinned upstream kit is source-faithful third-party code (admin/README.md).
+    ignores: [
+      'coverage/**',
+      '**/dist/**',
+      '.wrangler/**',
+      '**/node_modules/**',
+      'admin/src/kit/**',
+    ],
   },
   {
     files: ['**/*.{js,mjs,cjs}'],
@@ -14,7 +21,7 @@ export default defineConfig(
   {
     // Typed linting (ADR-0006): mandatory now that the application TypeScript
     // project exists. Runs in CI with zero warnings via `npm run lint`.
-    files: ['**/*.{ts,mts,cts}'],
+    files: ['**/*.{ts,tsx,mts,cts}'],
     extends: [
       js.configs.recommended,
       tseslint.configs.strictTypeChecked,

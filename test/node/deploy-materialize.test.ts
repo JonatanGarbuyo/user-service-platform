@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  BASE_ASSETS_BINDING,
+  BASE_ASSETS_DIRECTORY,
   BASE_COMPATIBILITY_DATE,
   BASE_COMPATIBILITY_FLAGS,
   BASE_OBSERVABILITY,
   BASE_WORKER_MAIN,
   buildTargetWranglerConfig,
   removeTempWranglerConfig,
+  resolveRepoAdminDistDir,
   resolveRepoMigrationsDir,
   resolveRepoRoot,
   resolveRepoWorkerMain,
@@ -50,6 +53,11 @@ describe('wrangler config materialization', () => {
     expect(base).toContain(`"main": "${BASE_WORKER_MAIN}"`);
     expect(BASE_OBSERVABILITY).toEqual({ enabled: true });
     expect(base).toContain('"enabled": true');
+    // Ticket #124: the base config serves the built administration SPA
+    // through the stable ASSETS binding; materialized target configs must
+    // carry the same binding (asserted below).
+    expect(base).toContain(`"directory": "./${BASE_ASSETS_DIRECTORY}"`);
+    expect(base).toContain(`"binding": "${BASE_ASSETS_BINDING}"`);
   });
 
   it('materializes a target-specific config with the stable DB binding', () => {
@@ -72,6 +80,22 @@ describe('wrangler config materialization', () => {
       AUTH_MAIL_FROM: 'User Service <jg@ingalatech.com>',
       AUTH_MAIL_ALLOWLIST: 'jonatangarbuyo@gmail.com,jg@ingalatech.com',
     });
+  });
+
+  it('serves the same built administration assets on every target (ticket #124)', () => {
+    // Local and generated target-specific deploy configurations include the
+    // same built assets: the stable ASSETS binding with an absolute
+    // repository path to the single `admin/dist` build output.
+    const config = buildTargetWranglerConfig(SANDBOX_RESOLVED);
+    expect(config.assets).toEqual({
+      directory: resolveRepoAdminDistDir(),
+      binding: 'ASSETS',
+      run_worker_first: true,
+      html_handling: 'none',
+    });
+    expect(isAbsolute(config.assets.directory)).toBe(true);
+    expect(config.assets.directory).toBe(resolveRepoAdminDistDir(resolveRepoRoot()));
+    expect(config.assets.directory.endsWith(BASE_ASSETS_DIRECTORY)).toBe(true);
   });
 
   it('anchors repository files to absolute repo paths, not the temp config directory', () => {

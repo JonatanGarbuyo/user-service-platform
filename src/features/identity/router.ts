@@ -4,11 +4,13 @@ import { resolveEffectiveConfig } from '../../config/index.js';
 import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
 import { createIdentityAuth } from './auth.js';
+import { resolveAdminIdentity } from './authorization.js';
 import { bootstrapAdminUser } from './admin.js';
-import { resolveAuthMailer, type AuthMailer } from './mailer.js';
+import { deferredAuthMailer, resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
 import {
   adminBootstrapRoute,
+  adminMeRoute,
   currentUserRoute,
   loginRoute,
   registerRoute,
@@ -100,6 +102,7 @@ function backgroundScheduler(c: IdentityContext): (task: Promise<unknown>) => vo
 function scopedAuth(
   c: IdentityContext,
   override?: AuthMailer,
+  mailTransport: 'eager' | 'deferred' = 'eager',
 ): { auth: ReturnType<typeof createIdentityAuth>; policy: AuthPolicy } {
   // Application boundary (ticket #57, PR #61 review): compose one effective
   // non-secret configuration from the selected versioned profile + same-name
@@ -114,7 +117,7 @@ function scopedAuth(
   const auth = createIdentityAuth({
     db: c.env.DB,
     policy,
-    mailer: resolveAuthMailer(
+    mailer: (mailTransport === 'deferred' ? deferredAuthMailer : resolveAuthMailer)(
       {
         ...effective.config,
         RESEND_API_KEY: c.env.RESEND_API_KEY,
@@ -412,6 +415,31 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       return problem(c, 500, 'internal-error', 'Internal Server Error');
     }
     return c.json({ status: 'ok' as const }, 200);
+  });
+
+  router.openapi(adminMeRoute, async (c) => {
+    const session = await resolveSessionContext({
+      env: c.env,
+      headers: c.req.raw.headers,
+      baseURL: new URL(c.req.url).origin,
+      authMailer: override,
+      background: backgroundScheduler(c),
+      requestId: c.get('requestId'),
+    });
+    if (session === null) {
+      return problem(c, 401, 'unauthenticated', 'Unauthenticated');
+    }
+    const { auth } = scopedAuth(c, override, 'deferred');
+    const admin = await resolveAdminIdentity({
+      auth,
+      db: c.env.DB,
+      userId: session.user.id,
+      headers: c.req.raw.headers,
+    });
+    if (admin === null) {
+      return problem(c, 403, 'forbidden', 'Forbidden', 'Administrator access is required.');
+    }
+    return c.json(admin, 200);
   });
 
   router.openapi(adminBootstrapRoute, async (c) => {

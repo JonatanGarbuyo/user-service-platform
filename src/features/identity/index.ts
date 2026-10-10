@@ -12,6 +12,7 @@ export type { IdentityRouterOptions };
 export type {
   AdminBootstrapRequest,
   AdminBootstrapResult,
+  AdminMe,
   CurrentUser,
   LoginRequest,
   LoginResult,

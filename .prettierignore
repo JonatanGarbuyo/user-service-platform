@@ -10,3 +10,5 @@ openapi/openapi.json
 # skills-lock.json. They must remain source-faithful; feature work must not
 # rewrite them (PR #15 final acceptance review).
 .agents/skills/**
+# Pinned upstream Marmelab sources retain their original formatting/license.
+admin/src/kit/**

@@ -121,6 +121,19 @@ export const SignOutResultSchema = z
   })
   .openapi('SignOutResult');
 
+export const AdminMeSchema = z
+  .object({
+    id: z.string().openapi({ example: 'abc123' }),
+    email: emailField,
+    emailVerified: z.boolean().openapi({ example: true }),
+    // The engine role as observed by the application-owned authorization
+    // boundary (ticket #124). A plain string so future administrative roles
+    // remain representable; only roles holding User listing/read access ever
+    // reach this representation.
+    role: z.string().openapi({ example: 'admin' }),
+  })
+  .openapi('AdminMe');
+
 export const AdminBootstrapRequestSchema = z
   .object({
     name: z.string().min(1).max(200).openapi({ example: 'Ada Lovelace' }),
@@ -153,5 +166,6 @@ export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequestSchema>;
 export type ResetPasswordResult = z.infer<typeof ResetPasswordResultSchema>;
 export type CurrentUser = z.infer<typeof CurrentUserSchema>;
 export type SignOutResult = z.infer<typeof SignOutResultSchema>;
+export type AdminMe = z.infer<typeof AdminMeSchema>;
 export type AdminBootstrapRequest = z.infer<typeof AdminBootstrapRequestSchema>;
 export type AdminBootstrapResult = z.infer<typeof AdminBootstrapResultSchema>;

@@ -32,6 +32,7 @@ export type { SessionFailureTailHandle } from './diagnostic-tail.js';
 
 export type DeploymentStep =
   | 'preflight'
+  | 'build-admin-assets'
   | 'validate-migrations-local'
   | 'migrate-remote'
   | 'deploy-worker'
@@ -76,6 +77,7 @@ export function productionConfirmFor(resolved: ResolvedDeployment): string {
 export function planDeploymentSteps(request: DeployRequest): DeploymentStep[] {
   const steps: DeploymentStep[] = [
     'preflight',
+    'build-admin-assets',
     'validate-migrations-local',
     'migrate-remote',
     'deploy-worker',
@@ -241,6 +243,10 @@ export async function runDeployment(
     io.log(
       `deploy target=${request.resolved.targetKey} environment=${request.resolved.environment} worker=${request.resolved.workerName}`,
     );
+    // Administration SPA assets (ticket #124, ADR-0012): rebuild `admin/dist`
+    // from versioned sources before any remote mutation so every deployment
+    // serves the current built assets through the materialized ASSETS binding.
+    await runStep('build-admin-assets', 'npm', ['run', 'build:admin'], runner);
     // Local migration validation uses the base config (no --config): it
     // proves the versioned migrations apply before any remote mutation.
     await runStep(

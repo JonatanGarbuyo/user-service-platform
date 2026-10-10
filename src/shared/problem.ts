@@ -28,6 +28,7 @@ export type ProblemCode =
   | 'verification-invalid'
   | 'reset-invalid'
   | 'unauthenticated'
+  | 'forbidden'
   | 'admin-already-bootstrapped'
   | 'admin-email-conflict';
 

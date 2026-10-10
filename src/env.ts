@@ -1,5 +1,14 @@
 import type { D1Database } from '@cloudflare/workers-types';
 
+// Narrow Static Assets boundary (ticket #124, ADR-0012). The Worker serves
+// the built administration SPA (`admin/dist`, same origin, `/admin`) through
+// this binding. Only `fetch` is used, so tests substitute fixed asset
+// responses without a real asset pipeline; the real Workers `ASSETS`
+// binding satisfies this shape.
+export interface StaticAssetsFetcher {
+  fetch(request: Request): Promise<Response>;
+}
+
 // Worker environment bindings (ticket #9 seam). D1 is declared so isolated local
 // tests resolve the binding through Wrangler/Miniflare configuration; no business
 // persistence abstractions live here. The identity slice owns its Drizzle schema
@@ -7,6 +16,12 @@ import type { D1Database } from '@cloudflare/workers-types';
 export interface Env {
   DB: D1Database;
   ENVIRONMENT?: string;
+  // Built administration SPA assets (ticket #124). Present wherever the
+  // Worker boots with Static Assets configured and a prior
+  // `npm run build:admin`; absent in runtimes without an asset pipeline
+  // (notably unit-test boots), where `/admin` degrades to JSON Problem
+  // Details instead of crashing.
+  ASSETS?: StaticAssetsFetcher;
   // Application-owned authentication policy inputs (ADR-0005). Plain vars
   // (not secrets) using "true"/"false" strings; absent values fall back to
   // the deployment defaults resolved by the identity slice.

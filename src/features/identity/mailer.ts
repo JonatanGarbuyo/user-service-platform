@@ -141,6 +141,20 @@ export function resolveAuthMailer(
   return new DevelopmentAuthMailer();
 }
 
+// Identity/session permission reads do not send mail. Keep transport validation
+// fail-closed at the first actual send without coupling those reads to SMTP.
+export function deferredAuthMailer(
+  env: Parameters<typeof resolveAuthMailer>[0],
+  override?: AuthMailer,
+): AuthMailer {
+  let resolved: AuthMailer | undefined = override;
+  const current = (): AuthMailer => (resolved ??= resolveAuthMailer(env));
+  return {
+    sendVerificationEmail: (message) => current().sendVerificationEmail(message),
+    sendPasswordResetEmail: (message) => current().sendPasswordResetEmail(message),
+  };
+}
+
 export { ResendAuthMailer } from './resend-transport.js';
 export type {
   AuthMailLogger,

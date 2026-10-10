@@ -1,12 +1,7 @@
 import type { Env } from '../../env.js';
 import { resolveEffectiveConfig } from '../../config/index.js';
 import { createIdentityAuth } from './auth.js';
-import {
-  resolveAuthMailer,
-  type AuthMailer,
-  type PasswordResetMessage,
-  type VerificationMessage,
-} from './mailer.js';
+import { deferredAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy } from './policy.js';
 import { resolveAuthSecret } from './secret.js';
 
@@ -50,32 +45,6 @@ export interface ResolveSessionInput {
 // reaches the 500 boundary so operators can distinguish configuration,
 // auth-construction and session-store failures without raw exception text.
 export type SessionResolvePhase = 'config' | 'auth' | 'session';
-
-type MailerEnv = Parameters<typeof resolveAuthMailer>[0];
-
-// Defers provider-transport construction until an actual mail send (ticket
-// #93). Session reads never send transactional mail, so resolving the
-// configured SMTP/Resend transport eagerly would make `GET /v1/me` depend on
-// mail-provider configuration for no functional reason. An explicitly
-// injected mailer (in-memory in tests) still takes precedence; otherwise the
-// configured transport resolves lazily and keeps its fail-closed validation
-// if a send is ever attempted on this path.
-function deferredSessionMailer(mailEnv: MailerEnv, override?: AuthMailer): AuthMailer {
-  let resolved: AuthMailer | null = null;
-  const current = (): AuthMailer => {
-    if (override !== undefined) {
-      return override;
-    }
-    resolved ??= resolveAuthMailer(mailEnv);
-    return resolved;
-  };
-  return {
-    sendVerificationEmail: (message: VerificationMessage): Promise<void> =>
-      current().sendVerificationEmail(message),
-    sendPasswordResetEmail: (message: PasswordResetMessage): Promise<void> =>
-      current().sendPasswordResetEmail(message),
-  };
-}
 
 // Redacted failure telemetry (ADR-0009): stable level/event/phase plus safe
 // correlation metadata only. Exception messages, credentials, cookies,
@@ -138,7 +107,7 @@ export function toSessionContext(payload: unknown): SessionContext | null {
 // Session resolution depends only on the dependencies required to resolve a
 // session: effective non-secret config, auth policy, signing secret, D1
 // binding, request headers and base URL. The transactional-mail transport is
-// resolved lazily (see `deferredSessionMailer`) so a mail-boundary
+// resolved lazily (see `deferredAuthMailer`) so a mail-boundary
 // configuration defect cannot surface as a session-read failure.
 export async function resolveSessionContext(
   input: ResolveSessionInput,
@@ -180,7 +149,7 @@ export async function resolveSessionContext(
     auth = createIdentityAuth({
       db: input.env.DB,
       policy,
-      mailer: deferredSessionMailer(
+      mailer: deferredAuthMailer(
         {
           ...effective.config,
           RESEND_API_KEY: input.env.RESEND_API_KEY,
