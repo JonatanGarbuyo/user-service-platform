@@ -182,7 +182,7 @@ export async function runAdminBrowserTest(): Promise<void> {
     // Actual verify-email transitions are covered by Workers-runtime tests.
     await sql(`UPDATE "user" SET email_verified = 1 WHERE email IN ('${admin}', '${regular}')`);
     phase = 'assets';
-    for (const path of ['/admin', '/admin/', '/admin/login']) {
+    for (const path of ['/admin', '/admin/', '/admin/login', '/admin/denegado']) {
       const response = await http(path);
       assert(
         response.status === 200 && response.headers.get('content-type')?.includes('text/html'),
@@ -403,6 +403,12 @@ export async function runAdminBrowserTest(): Promise<void> {
     assert(deniedResponse.status() === 403, 'server remains permission authority');
     await page.goto(`${base}/admin/users`);
     await visible(page, 'Acceso denegado');
+    await page.goto(`${base}/admin/denegado`);
+    await visible(page, 'Acceso denegado');
+    assert(
+      (await page.getByRole('button', { name: 'Menú de usuario', exact: true }).count()) === 0,
+      'denied route does not expose administrative layout',
+    );
     const deniedList = await context.request.get(`${base}/v1/admin/users`);
     assert(deniedList.status() === 403, 'user list stays protected for regular Users');
     await deniedList.body();
