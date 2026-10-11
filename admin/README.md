@@ -3,7 +3,9 @@
 React + TypeScript + Vite SPA under `/admin`, served by the existing Hono
 Worker's Static Assets binding on the same origin. This first slice signs in
 an existing verified administrator, shows the real identity, restores access
-on reload and signs out. User list/detail belong to #125/#126; Profile is deferred.
+on reload and signs out. The Users resource (#125) reads real accounts with
+server-side literal email search and bounded pagination. User detail belongs
+to #126; Profile is deferred.
 
 ## Kit provenance and maintenance
 
@@ -46,8 +48,16 @@ Our small protected route uses its `useAuthState` without automatic logout and
 wraps the real kit Layout: 401 shows login, 403 shows access denial preserving
 the regular User's session, and 500/transport failure offers retry preserving
 the cookie. The authProvider implements real login/identity/logout operations.
-Spanish strings used by this slice are defined in `src/i18n.ts`; future slices
-must translate their additional resource labels.
+Spanish strings used by these slices are defined in `src/i18n.ts` and the owned
+resource views. The Users resource has no mutation or detail controls.
+
+`src/data-provider.ts` adapts the exact Identity-owned `GET /v1/admin/users`
+representation to ra-core list metadata. It supports only User listing;
+unsupported operations reject without making an HTTP request. Runtime parsing
+and TypeScript types reuse the source contracts (`schemaInference`). Requests
+carry bounded limit/offset and an optional literal email substring. Changing
+search resets the page, cancels obsolete requests and hides previous results
+while the new query is pending. Search terms and result contents are never logged.
 
 ## Run locally
 
@@ -80,13 +90,20 @@ fresh `npm run build:admin`. It covers administrator login/reload/logout, wrong
 password, unverified login, regular-User denial without session loss, an actual
 storage failure/retry, expired/revoked sessions, exact HTTP identity shapes,
 asset/API routing, keyboard focus and a narrow viewport. No API response mocks.
+It also exercises real User listing, case-insensitive email search, no matches,
+clear, pagination, search reset from the second page, actual service failure
+and retry, and regular-User rejection.
 
 ## Short operator smoke after sandbox deployment
 
 1. Open `<sandbox-origin>/admin/login`; sign in with the existing verified admin.
 2. Confirm the email, `admin` role and verified state; reload and confirm access.
-3. Sign out; reload `/admin/` and confirm the login page.
-4. Sign in with a verified regular User; confirm access denial and that `/v1/me`
+3. Open Usuarios, inspect real email/verification/role, search by part of an
+   existing email, then a nonexistent one; clear the search. Page forward/back
+   if the environment contains more than ten Users. Search from a later page
+   and confirm it resets to page one. Reload `/admin/users` and confirm access.
+4. Sign out; reload `/admin/users` and confirm the login page.
+5. Sign in with a verified regular User; confirm `/admin/users` denies access and `/v1/me`
    still returns 200 in that same browser session, then sign out.
 
 Do not share passwords, cookies or action tokens in issues or screenshots.

@@ -13,6 +13,9 @@ export type {
   AdminBootstrapRequest,
   AdminBootstrapResult,
   AdminMe,
+  AdminUser,
+  AdminUserList,
+  AdminUserListQuery,
   CurrentUser,
   LoginRequest,
   LoginResult,
@@ -44,6 +47,8 @@ export type { AuthPolicy } from './policy.js';
 export { DEFAULT_AUTH_POLICY, resolveAuthPolicy } from './policy.js';
 export type { BootstrapAdminInput, BootstrapAdminOutcome } from './admin.js';
 export { bootstrapAdminUser } from './admin.js';
+export type { ListAdminUsersInput } from './admin-users.js';
+export { listAdminUsers } from './admin-users.js';
 export type {
   AuthenticatedUser,
   ResolveSessionInput,

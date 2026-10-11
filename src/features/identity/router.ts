@@ -5,12 +5,14 @@ import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
 import { createIdentityAuth } from './auth.js';
 import { resolveAdminIdentity } from './authorization.js';
+import { listAdminUsers } from './admin-users.js';
 import { bootstrapAdminUser } from './admin.js';
 import { deferredAuthMailer, resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
 import {
   adminBootstrapRoute,
   adminMeRoute,
+  adminUsersRoute,
   currentUserRoute,
   loginRoute,
   registerRoute,
@@ -440,6 +442,40 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       return problem(c, 403, 'forbidden', 'Forbidden', 'Administrator access is required.');
     }
     return c.json(admin, 200);
+  });
+
+  router.openapi(adminUsersRoute, async (c) => {
+    const session = await resolveSessionContext({
+      env: c.env,
+      headers: c.req.raw.headers,
+      baseURL: new URL(c.req.url).origin,
+      authMailer: override,
+      background: backgroundScheduler(c),
+      requestId: c.get('requestId'),
+    });
+    if (session === null) {
+      return problem(c, 401, 'unauthenticated', 'Unauthenticated');
+    }
+    const { auth } = scopedAuth(c, override, 'deferred');
+    const admin = await resolveAdminIdentity({
+      auth,
+      db: c.env.DB,
+      userId: session.user.id,
+      headers: c.req.raw.headers,
+    });
+    if (admin === null) {
+      return problem(c, 403, 'forbidden', 'Forbidden', 'Administrator access is required.');
+    }
+    // The permission boundary resolved before this read: anonymous,
+    // expired, revoked and non-administrative callers never reach the list.
+    const query = c.req.valid('query');
+    const listing = await listAdminUsers({
+      db: c.env.DB,
+      limit: query.limit,
+      offset: query.offset,
+      email: query.email,
+    });
+    return c.json(listing, 200);
   });
 
   router.openapi(adminBootstrapRoute, async (c) => {

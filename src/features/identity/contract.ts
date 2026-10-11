@@ -154,6 +154,47 @@ export const AdminBootstrapResultSchema = z
   })
   .openapi('AdminBootstrapResult');
 
+export const AdminUserSchema = z
+  .object({
+    id: z.string().openapi({ example: 'abc123' }),
+    email: emailField,
+    emailVerified: z.boolean().openapi({ example: true }),
+    // The engine role as observed by the application-owned authorization
+    // boundary (tickets #124/#125). A plain string so future administrative
+    // roles remain representable; storage nulls never reach this contract.
+    role: z.string().openapi({ example: 'admin' }),
+  })
+  .openapi('AdminUser');
+
+export const AdminUserListSchema = z
+  .object({
+    items: z.array(AdminUserSchema).openapi({ description: 'Ascending email order.' }),
+    total: z.number().int().min(0).openapi({
+      description: 'Matches before pagination.',
+      example: 42,
+    }),
+  })
+  .openapi('AdminUserList');
+
+// Query for the protected administrative User listing (ticket #125).
+// Bounds are validated at the contract: limit 1..100 (default 25), offset
+// nonnegative (default 0), email an optional trimmed nonempty literal
+// substring of at most 254 characters. Violations end in the service-wide
+// 400 Problem Details through the composition-root validation hook.
+export const AdminUserListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).default(25).openapi({ example: 25 }),
+    offset: z.coerce.number().int().min(0).default(0).openapi({ example: 0 }),
+    email: z
+      .string()
+      .trim()
+      .min(1)
+      .max(254)
+      .optional()
+      .openapi({ description: 'Case-insensitive literal email substring.', example: 'ada' }),
+  })
+  .openapi('AdminUserListQuery');
+
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
 export type RegisteredUser = z.infer<typeof RegisteredUserSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
@@ -169,3 +210,6 @@ export type SignOutResult = z.infer<typeof SignOutResultSchema>;
 export type AdminMe = z.infer<typeof AdminMeSchema>;
 export type AdminBootstrapRequest = z.infer<typeof AdminBootstrapRequestSchema>;
 export type AdminBootstrapResult = z.infer<typeof AdminBootstrapResultSchema>;
+export type AdminUser = z.infer<typeof AdminUserSchema>;
+export type AdminUserList = z.infer<typeof AdminUserListSchema>;
+export type AdminUserListQuery = z.infer<typeof AdminUserListQuerySchema>;

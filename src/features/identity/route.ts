@@ -4,6 +4,8 @@ import {
   AdminBootstrapRequestSchema,
   AdminBootstrapResultSchema,
   AdminMeSchema,
+  AdminUserListQuerySchema,
+  AdminUserListSchema,
   CurrentUserSchema,
   LoginRequestSchema,
   LoginResultSchema,
@@ -229,6 +231,31 @@ export const adminMeRoute = createRoute({
     200: {
       content: { 'application/json': { schema: AdminMeSchema } },
       description: 'The authenticated administrator.',
+    },
+    ...problemResponses('Authorization failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const adminUsersRoute = createRoute({
+  method: 'get',
+  path: '/admin/users',
+  operationId: 'listAdminUsers',
+  summary: 'List Users for administrators',
+  description:
+    'Returns the stable application-owned administrative User representation ' +
+    'in ascending email order with bounded server pagination and optional ' +
+    'case-insensitive literal email substring search. Anonymous or invalid ' +
+    'sessions receive the standard unauthenticated Problem Details response; ' +
+    'valid non-administrative sessions receive the forbidden Problem Details ' +
+    'response. The `total` counts all matches before pagination.',
+  tags: ['admin'],
+  request: {
+    query: AdminUserListQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: AdminUserListSchema } },
+      description: 'The matching administrative Users and their total.',
     },
     ...problemResponses('Authorization failure as RFC 9457 Problem Details.'),
   },

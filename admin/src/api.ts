@@ -1,7 +1,11 @@
 import {
   AdminMeSchema,
+  AdminUserListQuerySchema,
+  AdminUserListSchema,
   LoginRequestSchema,
   type AdminMe,
+  type AdminUserList,
+  type AdminUserListQuery,
   type LoginRequest,
 } from '../../src/features/identity/contract.js';
 import { ProblemDetailsSchema } from '../../src/shared/problem.js';
@@ -38,13 +42,17 @@ export class ApiError extends Error {
 async function request(
   path: string,
   body?: LoginRequest | Record<string, never>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(path, {
       method: body === undefined ? 'GET' : 'POST',
       credentials: 'include',
-      signal: AbortSignal.timeout(15_000),
+      signal:
+        signal === undefined
+          ? AbortSignal.timeout(15_000)
+          : AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       headers: {
         accept: 'application/json, application/problem+json',
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
@@ -76,4 +84,22 @@ export async function adminIdentity(): Promise<AdminMe> {
 
 export async function signOut(): Promise<void> {
   await request('/v1/auth/sign-out', {});
+}
+
+export async function adminUsers(
+  query: AdminUserListQuery,
+  signal?: AbortSignal,
+): Promise<AdminUserList> {
+  const input = AdminUserListQuerySchema.safeParse(query);
+  if (!input.success) throw new ApiError(400);
+  const search = new URLSearchParams({
+    limit: String(input.data.limit),
+    offset: String(input.data.offset),
+  });
+  if (input.data.email !== undefined) search.set('email', input.data.email);
+  const parsed = AdminUserListSchema.safeParse(
+    await request(`/v1/admin/users?${search.toString()}`, undefined, signal),
+  );
+  if (!parsed.success) throw new ApiError(502);
+  return parsed.data;
 }
