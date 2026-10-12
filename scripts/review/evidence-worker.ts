@@ -20,9 +20,9 @@ import {
   SKILL_EVIDENCE_DIR,
   type SessionExportInput,
   type SkillEvidenceInvocation,
+  type SkillEvidenceLifecycle,
   type SkillEvidenceRecord,
   type SkillEvidenceWorker,
-  type SkillEvidenceLifecycle,
 } from './skill-evidence.js';
 import { summarizeWorkerLifecycle } from './implementation-recovery.js';
 import { runBoundedCommand, withJsonFormat, type CommandExecutor } from './runner.js';
@@ -264,9 +264,7 @@ export interface FinalizeEvidenceResult {
   diagnostic: string;
 }
 
-// Persists useful minimal evidence on success, error and timeout
-// finalization without masking the original exit or timeout. All failures
-// are best-effort: the caller always keeps its own outcome.
+// Projects the captured stream into bounded, allowlisted lifecycle metadata.
 function buildSkillEvidenceLifecycle(
   lines: readonly string[],
   truncatedStream: boolean,
@@ -311,6 +309,9 @@ function buildSkillEvidenceLifecycle(
   };
 }
 
+// Persists useful minimal evidence on success, error and timeout
+// finalization without masking the original exit or timeout. All failures
+// are best-effort: the caller always keeps its own outcome.
 export async function finalizeSkillEvidence(
   input: FinalizeEvidenceInput,
   deps: PersistEvidenceDeps = {},
