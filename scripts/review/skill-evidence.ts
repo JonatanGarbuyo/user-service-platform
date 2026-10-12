@@ -74,7 +74,6 @@ export interface SkillEvidenceCoverage {
   reasons: string[];
 }
 
-
 export interface SkillEvidenceLifecycle {
   capturedLineCount: number;
   eventCounts: Record<string, number>;
