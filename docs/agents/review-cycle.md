@@ -89,6 +89,14 @@ correction. Findings that need a product, architecture, public-contract,
 infrastructure-provider, or security-policy decision escalate to planning
 instead of changing code.
 
+## Lifecycle diagnostics in skill evidence
+
+Finalized review/correction workers add an optional `lifecycle` summary to the existing skill-evidence JSON. It reuses the implementation-recovery summarizer and records bounded captured-line counts, allowlisted event/tool counts, validated timestamps/duration, last status, malformed/unknown counts, coverage reasons, and capture truncation.
+
+This describes only the captured stdout stream, not worker success. Zero captured lines means `unavailable`; a recognized `step_start` without tool calls counts as protocol progress but creates no skill invocation or session attribution. Truncated or malformed capture is marked incomplete. Raw fields, prompts, reasoning, text, tool inputs/outputs, commands, payloads, personal data and credentials are not persisted.
+
+Collection is best-effort on success, failure and timeout. It cannot change the original outcome, process-group termination, review approval, READY status, or CI gates. The external provider/CLI failure remains unproven.
+
 ## Review markers
 
 Each review report ends with exactly one marker line:
