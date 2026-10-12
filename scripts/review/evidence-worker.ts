@@ -287,10 +287,11 @@ function buildSkillEvidenceLifecycle(
   let status: SkillEvidenceLifecycle['status'];
   if (summary.status === 'unavailable') {
     status = 'unavailable';
-  } else if (reasons.length > 0) {
-    status = 'incomplete';
   } else {
-    status = 'complete';
+    if (capturedLines.length > 0 && Object.keys(summary.eventCounts).length === 0) {
+      reasons.push('no recognized worker events captured');
+    }
+    status = reasons.length > 0 ? 'incomplete' : 'complete';
   }
 
   return {
