@@ -706,7 +706,6 @@ describe('implement error finalization keeps observed evidence', () => {
   });
 });
 
-
 describe('persisted lifecycle diagnostics', () => {
   it('distinguishes no captured stdout from protocol progress without tool calls', async () => {
     const persist = async (lines: readonly string[]) => {
