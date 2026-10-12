@@ -279,17 +279,21 @@ function buildSkillEvidenceLifecycle(
     reasons.push('captured stream truncated at configured bound');
   }
   const durationMs =
+    summary.firstTimestamp !== null &&
+    summary.lastTimestamp !== null &&
     summary.durationMs !== null &&
     Number.isFinite(summary.durationMs) &&
     summary.durationMs >= 0
       ? summary.durationMs
       : null;
-  const status =
-    summary.status === 'unavailable'
-      ? 'unavailable'
-      : reasons.length > 0
-        ? 'incomplete'
-        : 'complete';
+  let status: SkillEvidenceLifecycle['status'];
+  if (summary.status === 'unavailable') {
+    status = 'unavailable';
+  } else if (reasons.length > 0) {
+    status = 'incomplete';
+  } else {
+    status = 'complete';
+  }
 
   return {
     capturedLineCount: capturedLines.length,
