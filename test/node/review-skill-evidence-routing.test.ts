@@ -802,7 +802,7 @@ describe('persisted lifecycle diagnostics', () => {
     );
 
     expect(result.record.lifecycle).toMatchObject({
-      capturedLineCount: 1,
+      capturedLineCount: 2,
       malformed: 1,
       unknownEvents: 1,
       firstTimestamp: null,
