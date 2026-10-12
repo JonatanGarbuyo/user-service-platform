@@ -25,6 +25,7 @@ import { buildSkillEvidence } from '../../scripts/review/skill-evidence.js';
 import { buildAddressReviewArgs, buildReviewAxisArgs } from '../../scripts/review/runner.js';
 import { buildImplementArgs } from '../../scripts/agent/ticket-flow.js';
 import { runWorkerStream, type SpawnedWorker } from '../../scripts/review/worker-stream.js';
+import { isWorkerTimeout, WorkerTimeoutError } from '../../scripts/review/worker-timeout.js';
 
 // Seam under test: evidence-capable worker routing (ticket #116).
 // The initial fix-cycle correction must run through the deterministic
@@ -821,5 +822,355 @@ describe('persisted lifecycle diagnostics', () => {
     expect(JSON.stringify(result.record.lifecycle)).not.toContain('not-json');
     expect(JSON.stringify(result.record.lifecycle)).not.toContain('unsupported_event');
     expect(JSON.stringify(result.record.lifecycle)).not.toContain('raw-field-must-not-persist');
+  });
+
+  it('rejects out-of-range timestamps before accumulation at the persistence seam', async () => {
+    const written = new Map<string, string>();
+    const result = await finalizeSkillEvidence(
+      {
+        invocation: buildEvidenceInvocation({
+          worker: 'review-cycle',
+          command: 'review-standards',
+          axis: 'standards',
+          attempt: 1,
+          workerStartHead: 'a'.repeat(40),
+          env: {},
+        }),
+        lines: [
+          JSON.stringify({ type: 'step_start', timestamp: 1_700_000_000_000 }),
+          JSON.stringify({ type: 'step_finish', timestamp: 1e100 }),
+          JSON.stringify({ type: 'step_finish', timestamp: 1_700_000_001_000 }),
+        ],
+      },
+      {
+        dir: '.test-evidence',
+        mkdir: () => Promise.resolve(),
+        writeFile: (path: string, contents: string) => {
+          written.set(path, contents);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result.record.lifecycle).toMatchObject({
+      capturedLineCount: 3,
+      eventCounts: { step_start: 1, step_finish: 2 },
+      firstTimestamp: new Date(1_700_000_000_000).toISOString(),
+      lastTimestamp: new Date(1_700_000_001_000).toISOString(),
+      durationMs: 1000,
+      status: 'incomplete',
+    });
+    expect(result.record.lifecycle?.reasons.join(' ')).toMatch(/invalid worker timestamps/);
+    const persisted = JSON.parse(
+      written.get(result.evidencePath ?? '.test-evidence/missing') ?? '{}',
+    ) as { lifecycle?: { lastTimestamp?: string | null; durationMs?: number | null } };
+    expect(persisted.lifecycle?.lastTimestamp).toBe(new Date(1_700_000_001_000).toISOString());
+    expect(persisted.lifecycle?.durationMs).toBe(1000);
+  });
+
+  it('keeps attributable tool evidence when its timestamp is out of range', async () => {
+    const invalidToolLine = JSON.stringify({
+      type: 'tool_use',
+      timestamp: 1e100,
+      sessionID: 'ses-1',
+      part: {
+        id: 'c1',
+        sessionID: 'ses-1',
+        messageID: 'msg-1',
+        type: 'tool',
+        tool: 'skill',
+        state: {
+          status: 'completed',
+          input: { name: 'implement' },
+          metadata: { name: 'implement', dir: '.agents/skills/implement' },
+        },
+      },
+    });
+    const written = new Map<string, string>();
+    const result = await finalizeSkillEvidence(
+      {
+        invocation: buildEvidenceInvocation({
+          worker: 'agent-ticket',
+          command: 'implement',
+          axis: 'implement',
+          attempt: 1,
+          workerStartHead: 'a'.repeat(40),
+          env: {},
+        }),
+        lines: [invalidToolLine],
+      },
+      {
+        dir: '.test-evidence',
+        mkdir: () => Promise.resolve(),
+        writeFile: (path: string, contents: string) => {
+          written.set(path, contents);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    expect(result.record.events).toHaveLength(1);
+    expect(result.record.events[0]?.timestamp).toBeNull();
+    expect(result.record.lifecycle?.eventCounts).toMatchObject({ tool_use: 1 });
+    expect(result.record.lifecycle?.reasons.join(' ')).toMatch(/invalid worker timestamps/);
+    expect(written.size).toBeGreaterThan(0);
+  });
+});
+
+describe('real subprocess lifecycle regression (ticket #135)', () => {
+  const SILENT_CHILD = 'setInterval(() => undefined, 50);';
+  const PROGRESS_CHILD = `console.log(JSON.stringify({type:'step_start',sessionID:'synthetic-fixture',timestamp:1700000000000})); setInterval(() => undefined, 50);`;
+
+  async function runControlledChild(script: string): Promise<{
+    lines: string[];
+    timeout: unknown;
+  }> {
+    const capture = createEvidenceCapture();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        process.execPath,
+        ['-e', script],
+        {
+          label: 'lifecycle-fixture',
+          timeoutMs: 500,
+          killGraceMs: 500,
+          groupPollMs: 20,
+          stdoutLogFilter: suppressJsonWorkerLines,
+        },
+        undefined,
+        {
+          onStdoutLine: (line) => {
+            capture.pushLine(line);
+          },
+        },
+      );
+      const timeout = await pending.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      return { lines: [...capture.lines], timeout };
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  }
+
+  async function finalizeToMemory(lines: readonly string[]) {
+    const written = new Map<string, string>();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const result = await finalizeSkillEvidence(
+        {
+          invocation: buildEvidenceInvocation({
+            worker: 'review-cycle',
+            command: 'review-standards',
+            axis: 'standards',
+            attempt: 1,
+            workerStartHead: 'a'.repeat(40),
+            env: {},
+          }),
+          lines,
+        },
+        {
+          dir: '.test-evidence',
+          mkdir: () => Promise.resolve(),
+          writeFile: (path: string, contents: string) => {
+            written.set(path, contents);
+            return Promise.resolve();
+          },
+        },
+      );
+      const persisted = JSON.parse(
+        written.get(result.evidencePath ?? '.test-evidence/missing') ?? '{}',
+      ) as Record<string, unknown>;
+      return { result, persisted };
+    } finally {
+      logSpy.mockRestore();
+    }
+  }
+
+  it('distinguishes silent and progress-only streams with bounded TIMEOUT', async () => {
+    const silent = await runControlledChild(SILENT_CHILD);
+    const progress = await runControlledChild(PROGRESS_CHILD);
+
+    expect(isWorkerTimeout(silent.timeout)).toBe(true);
+    expect(isWorkerTimeout(progress.timeout)).toBe(true);
+    expect(silent.timeout).toMatchObject({ terminated: true });
+    expect(progress.timeout).toMatchObject({ terminated: true });
+
+    const silentFinal = await finalizeToMemory(silent.lines);
+    const progressFinal = await finalizeToMemory(progress.lines);
+
+    expect(silentFinal.result.record.lifecycle).toMatchObject({
+      capturedLineCount: 0,
+      eventCounts: {},
+      status: 'unavailable',
+    });
+    expect(progressFinal.result.record.lifecycle).toMatchObject({
+      capturedLineCount: 1,
+      eventCounts: { step_start: 1 },
+      firstTimestamp: new Date(1_700_000_000_000).toISOString(),
+      status: 'complete',
+    });
+    expect(progressFinal.result.record.events).toEqual([]);
+    expect(JSON.stringify(silentFinal.persisted)).toContain('"lifecycle"');
+    expect(JSON.stringify(progressFinal.persisted)).toContain('"step_start"');
+    expect(JSON.stringify(silentFinal.persisted.lifecycle)).not.toBe(
+      JSON.stringify(progressFinal.persisted.lifecycle),
+    );
+  }, 15000);
+});
+
+describe('lifecycle persistence at real call sites', () => {
+  const PROGRESS_LINE = JSON.stringify({
+    type: 'step_start',
+    sessionID: 'synthetic-fixture',
+    timestamp: 1_700_000_000_000,
+  });
+
+  function realFinalizer(written: Map<string, string>) {
+    return async (input: {
+      worker: 'agent-fix-cycle';
+      command: string;
+      axis: string;
+      attempt: number;
+      workerStartHead: string;
+      lines: readonly string[];
+      truncatedStream?: boolean;
+    }): Promise<string | undefined> => {
+      const { finalizeSkillEvidence: finalize, buildEvidenceInvocation: buildInvocation } =
+        await import('../../scripts/review/evidence-worker.js');
+      const result = await finalize(
+        {
+          invocation: buildInvocation({
+            worker: input.worker,
+            command: input.command,
+            axis: input.axis,
+            attempt: input.attempt,
+            workerStartHead: input.workerStartHead,
+            env: {},
+          }),
+          lines: input.lines,
+          ...(input.truncatedStream === undefined
+            ? {}
+            : { truncatedStream: input.truncatedStream }),
+        },
+        {
+          dir: '.test-evidence',
+          mkdir: () => Promise.resolve(),
+          writeFile: (path: string, contents: string) => {
+            written.set(path, contents);
+            return Promise.resolve();
+          },
+        },
+      );
+      return result.evidencePath;
+    };
+  }
+
+  it('persists lifecycle on fix-cycle success through the real finalizer', async () => {
+    const written = new Map<string, string>();
+    const result = await runFixCycleCorrection('42', {
+      runWorker: (_command, _args, onLine) => {
+        onLine(PROGRESS_LINE);
+        return Promise.resolve();
+      },
+      finalizeEvidence: realFinalizer(written),
+      getHead: () => Promise.resolve('a'.repeat(40)),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.evidencePath).toContain('agent-fix-cycle-address-review');
+    const persisted = JSON.parse([...written.values()].at(0) ?? '{}') as {
+      lifecycle?: Record<string, unknown>;
+    };
+    expect(persisted.lifecycle).toMatchObject({ eventCounts: { step_start: 1 } });
+  });
+
+  it('persists lifecycle on fix-cycle failure without masking the outcome', async () => {
+    const written = new Map<string, string>();
+    const result = await runFixCycleCorrection('42', {
+      runWorker: (_command, _args, onLine) => {
+        onLine(PROGRESS_LINE);
+        return Promise.reject(new Error('boom'));
+      },
+      finalizeEvidence: realFinalizer(written),
+      getHead: () => Promise.resolve('a'.repeat(40)),
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.reason).toMatch(/boom/);
+    expect(result.evidencePath).toContain('agent-fix-cycle-address-review');
+    const persisted = JSON.parse([...written.values()].at(0) ?? '{}') as {
+      lifecycle?: Record<string, unknown>;
+    };
+    expect(persisted.lifecycle).toMatchObject({ eventCounts: { step_start: 1 } });
+  });
+
+  it('persists lifecycle on fix-cycle timeout with bounded termination', async () => {
+    const written = new Map<string, string>();
+    const sentinels = new Map<string, string>();
+    const result = await runFixCycleCorrection('42', {
+      runWorker: (_command, _args, onLine) => {
+        onLine(PROGRESS_LINE);
+        return Promise.reject(new WorkerTimeoutError('address-review', 500, 'opencode', true));
+      },
+      finalizeEvidence: realFinalizer(written),
+      writeSentinel: (path, contents) => {
+        sentinels.set(path, contents);
+        return Promise.resolve();
+      },
+      getHead: () => Promise.resolve('a'.repeat(40)),
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.timedOut).toBe(true);
+    expect(sentinels.get(FIX_CYCLE_TIMEOUT_SENTINEL)).toBe(FIX_CYCLE_TIMEOUT_MESSAGE);
+    const persisted = JSON.parse([...written.values()].at(0) ?? '{}') as {
+      lifecycle?: Record<string, unknown>;
+    };
+    expect(persisted.lifecycle).toMatchObject({ eventCounts: { step_start: 1 } });
+  });
+
+  it('persists lifecycle for review invocations through the shared finalizer', async () => {
+    const cases = [
+      { worker: 'review-cycle', command: 'review-standards', axis: 'standards' },
+      { worker: 'review-cycle', command: 'review-spec', axis: 'spec' },
+      { worker: 'review-cycle', command: 'address-review', axis: 'address-review' },
+    ] as const;
+    for (const invocation of cases) {
+      const written = new Map<string, string>();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        const result = await finalizeSkillEvidence(
+          {
+            invocation: buildEvidenceInvocation({
+              ...invocation,
+              attempt: 1,
+              workerStartHead: 'a'.repeat(40),
+              env: {},
+            }),
+            lines: [PROGRESS_LINE],
+          },
+          {
+            dir: '.test-evidence',
+            mkdir: () => Promise.resolve(),
+            writeFile: (path: string, contents: string) => {
+              written.set(path, contents);
+              return Promise.resolve();
+            },
+          },
+        );
+        expect(result.evidencePath).toContain('.test-evidence');
+        const persisted = JSON.parse(written.get(result.evidencePath ?? '') ?? '{}') as {
+          lifecycle?: Record<string, unknown>;
+        };
+        expect(persisted.lifecycle).toMatchObject({ eventCounts: { step_start: 1 } });
+      } finally {
+        logSpy.mockRestore();
+      }
+    }
   });
 });
