@@ -74,12 +74,30 @@ export interface SkillEvidenceCoverage {
   reasons: string[];
 }
 
+
+export interface SkillEvidenceLifecycle {
+  capturedLineCount: number;
+  eventCounts: Record<string, number>;
+  toolCounts: Record<string, number>;
+  firstTimestamp: string | null;
+  lastTimestamp: string | null;
+  durationMs: number | null;
+  lastStatus: string | null;
+  malformed: number;
+  unknownEvents: number;
+  status: SkillCoverageStatus;
+  reasons: string[];
+  captureTruncated: boolean;
+}
+
 export interface SkillEvidenceRecord {
   version: typeof SKILL_EVIDENCE_VERSION;
   invocation: SkillEvidenceInvocation;
   sessionLineage: { primarySessionId: string | null; parentIds: string[] };
   events: SkillEvidenceEvent[];
   coverage: SkillEvidenceCoverage;
+  /** Additive operator diagnostics; older evidence consumers may ignore it. */
+  lifecycle?: SkillEvidenceLifecycle;
   collectedAt: string;
 }
 
