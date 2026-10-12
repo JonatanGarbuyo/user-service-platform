@@ -339,15 +339,18 @@ export async function finalizeSkillEvidence(
       exportFailures.push(`export unavailable for session ${childId}`);
     }
   }
-  const record = buildSkillEvidence({
-    invocation: input.invocation,
-    primaryLines: input.lines,
-    primarySessionId,
-    childExports,
-    exportFailures,
-    truncatedStream: input.truncatedStream,
-    ...(input.worktreeRoot === undefined ? {} : { worktreeRoot: input.worktreeRoot }),
-  });
+  const record: SkillEvidenceRecord = {
+    ...buildSkillEvidence({
+      invocation: input.invocation,
+      primaryLines: input.lines,
+      primarySessionId,
+      childExports,
+      exportFailures,
+      truncatedStream: input.truncatedStream,
+      ...(input.worktreeRoot === undefined ? {} : { worktreeRoot: input.worktreeRoot }),
+    }),
+    lifecycle: buildSkillEvidenceLifecycle(input.lines, input.truncatedStream === true),
+  };
   try {
     const { evidencePath } = await persistSkillEvidence(record, deps);
     const diagnostic =
