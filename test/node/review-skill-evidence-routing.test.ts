@@ -705,3 +705,102 @@ describe('implement error finalization keeps observed evidence', () => {
     expect(finalized[0]?.lines.join('\n')).toContain('c1');
   });
 });
+
+
+describe('persisted lifecycle diagnostics', () => {
+  it('distinguishes no captured stdout from protocol progress without tool calls', async () => {
+    const persist = async (lines: readonly string[]) => {
+      const written = new Map<string, string>();
+      const result = await finalizeSkillEvidence(
+        {
+          invocation: buildEvidenceInvocation({
+            worker: 'review-cycle',
+            command: 'review-standards',
+            axis: 'standards',
+            attempt: 1,
+            workerStartHead: 'a'.repeat(40),
+            env: {},
+          }),
+          lines,
+        },
+        {
+          dir: '.test-evidence',
+          mkdir: () => Promise.resolve(),
+          writeFile: (path: string, contents: string) => {
+            written.set(path, contents);
+            return Promise.resolve();
+          },
+          now: () => '2026-10-12T00:00:00.000Z',
+        },
+      );
+      const persisted = JSON.parse(
+        written.get(result.evidencePath ?? '.test-evidence/missing') ?? '{}',
+      ) as Record<string, unknown>;
+      return { result, persisted };
+    };
+
+    const silent = await persist([]);
+    const progress = await persist([
+      JSON.stringify({
+        type: 'step_start',
+        sessionID: 'synthetic-session',
+        timestamp: 1_700_000_000_000,
+        text: 'sk-ant-secret-sentinel-must-not-persist',
+        input: { email: 'private@example.test', token: 'ghp_secret-sentinel' },
+      }),
+    ]);
+
+    expect(silent.result.record.events).toEqual([]);
+    expect(silent.result.record.lifecycle).toMatchObject({
+      capturedLineCount: 0,
+      eventCounts: {},
+      toolCounts: {},
+      status: 'unavailable',
+    });
+    expect(progress.result.record.events).toEqual([]);
+    expect(progress.result.record.coverage.primarySessionId).toBeNull();
+    expect(progress.result.record.lifecycle).toMatchObject({
+      capturedLineCount: 1,
+      eventCounts: { step_start: 1 },
+      toolCounts: {},
+      firstTimestamp: new Date(1_700_000_000_000).toISOString(),
+      lastTimestamp: new Date(1_700_000_000_000).toISOString(),
+      durationMs: 0,
+      status: 'complete',
+    });
+    expect(JSON.stringify(silent.persisted)).toContain('"lifecycle"');
+    expect(JSON.stringify(progress.persisted)).not.toMatch(
+      /sk-ant-secret-sentinel|ghp_secret-sentinel|private@example\.test|synthetic-session/,
+    );
+  });
+
+  it('marks bounded or malformed lifecycle capture honestly', async () => {
+    const result = await finalizeSkillEvidence(
+      {
+        invocation: buildEvidenceInvocation({
+          worker: 'agent-fix-cycle',
+          command: 'address-review',
+          axis: 'address-review',
+          attempt: 1,
+          workerStartHead: 'b'.repeat(40),
+          env: {},
+        }),
+        lines: ['not-json'],
+        truncatedStream: true,
+      },
+      {
+        dir: '.test-evidence',
+        mkdir: () => Promise.resolve(),
+        writeFile: () => Promise.resolve(),
+      },
+    );
+
+    expect(result.record.lifecycle).toMatchObject({
+      capturedLineCount: 1,
+      malformed: 1,
+      captureTruncated: true,
+      status: 'incomplete',
+    });
+    expect(JSON.stringify(result.record.lifecycle)).not.toContain('not-json');
+  });
+});
