@@ -43,7 +43,9 @@ function loggedPath(c: Context<AppBindings>): string {
     }
   } catch {
     // No matched route (unknown paths, early failures): the raw pathname is
-    // the only operation identity available and carries no route values.
+    // the only operation identity available. Unknown paths carry no
+    // parameter values by construction; only matched parameterized patterns
+    // redact values.
   }
   return new URL(c.req.url).pathname;
 }

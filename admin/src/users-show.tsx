@@ -38,7 +38,11 @@ export function UsersShow() {
   const { data, error, isFetching, refetch } = useGetOne<AdminUser>(
     'users',
     { id: userId ?? '' },
-    { retry: false, staleTime: 0, enabled: userId !== undefined && userId.length > 0 },
+    {
+      retry: false,
+      staleTime: 0,
+      enabled: userId !== undefined && userId.length > 0 && userId.length <= 128,
+    },
   );
 
   if (userId === undefined || userId.length === 0 || userId.length > 128) {
