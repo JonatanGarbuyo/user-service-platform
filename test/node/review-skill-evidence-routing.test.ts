@@ -784,7 +784,14 @@ describe('persisted lifecycle diagnostics', () => {
           workerStartHead: 'b'.repeat(40),
           env: {},
         }),
-        lines: ['not-json'],
+        lines: [
+          'not-json',
+          JSON.stringify({
+            type: 'unsupported_event',
+            timestamp: 'not-a-timestamp',
+            payload: 'raw-field-must-not-persist',
+          }),
+        ],
         truncatedStream: true,
       },
       {
@@ -797,9 +804,15 @@ describe('persisted lifecycle diagnostics', () => {
     expect(result.record.lifecycle).toMatchObject({
       capturedLineCount: 1,
       malformed: 1,
+      unknownEvents: 1,
+      firstTimestamp: null,
+      lastTimestamp: null,
+      durationMs: null,
       captureTruncated: true,
       status: 'incomplete',
     });
     expect(JSON.stringify(result.record.lifecycle)).not.toContain('not-json');
+    expect(JSON.stringify(result.record.lifecycle)).not.toContain('unsupported_event');
+    expect(JSON.stringify(result.record.lifecycle)).not.toContain('raw-field-must-not-persist');
   });
 });
