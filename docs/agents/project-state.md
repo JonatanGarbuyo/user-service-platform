@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-11
+Last verified: 2026-10-12
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -95,38 +95,38 @@ Verified on 2026-10-06 against live GitHub state; main is `e885e1c84460b2af6c7ae
 
 GitHub-only skill-usage audit (25 worker runs: 16 fix-cycle + 9 ticket executions; 19 runs belong to #82; not productivity comparisons) is recorded separately from unavailable ChatGPT conversation data — no ChatGPT session dataset exists and none is inferred. Observed skill-tool minima: implement 17, code-review 13, tdd 10, custom better-typescript 5.
 
-Current execution frontier (verified 2026-10-11 against live GitHub state;
-main is `c24215b84019f8b42887854a3a9559399d33c3a9`):
+Current execution frontier (verified 2026-10-12 against live GitHub state;
+main is `324933913cff9100bedd1d2d80b39740a72b1429`):
 
 ```text
 #123 read-only administration parent spec (open)
   -> #127 recovery evidence: completed through PR #128
   -> #124 sign-in/authorize/sign-out: completed through PR #129
-  -> #125 User search/pagination: active
-  -> #126 User detail: blocked until #125 is accepted and merged
+  -> #125 User search/pagination: completed through PR #130
+  -> #126 User detail: active on its isolated ticket branch
 ```
 
 #124 is accepted and closed after PR #129 was merged into main as
 `c24215b84019f8b42887854a3a9559399d33c3a9` (both independent reviews and
-exact-HEAD CI passed). Main CI 38057103931 and the current main sandbox deployment, run
+exact-HEAD CI passed). Main CI 38057103931 and the sandbox deployment, run
 38057103943, completed with `success` on that main commit. The sandbox
 allowlist has three approved recipients: stable smoke `jonatangarbuyo@gmail.com`,
 regular QA `cronistadev@gmail.com`, administrator QA `ingaladev@gmail.com`.
-#125 (protected User listing with literal email search and bounded server
-pagination) is the active implementation slice on its isolated ticket branch;
-it is not merged or deployed. #126 remains blocked until #125 is accepted
-and merged. There is no other accepted or deployed administration UI change
-beyond #124.
+#125 is accepted and closed after PR #130 was squash-merged into main as
+`324933913cff9100bedd1d2d80b39740a72b1429`. Configured Standards and Spec
+both PASS on the exact accepted HEAD `e9191c0df0024a5ace52da345a4c658e3c36142e`;
+CI 38249267972 passed all gates including genuine isolated Worker/D1 Chromium
+acceptance. The accepted merge is deployed to sandbox: deployment and the
+configured automated smoke both completed successfully in run
+38249656941 (owner-reported on the ticket; verify its actual outcome before
+relying on it beyond this checkpoint). #126 (real read-only User detail with
+safe deep links and matched-route telemetry) is the active implementation
+slice on its isolated ticket branch; it is not merged or deployed. There is
+no other accepted administration UI change beyond #124/#125.
 
-The #125 remote implement run 38057127365 reached its unchanged 30-minute
-bound without publishing a branch/PR. Recovery evidence recorded base
-`c24215b84019f8b42887854a3a9559399d33c3a9`, local HEAD
-`fada7ce3933e8e4464c54b98996f270f6eac6d5d`, 16 committed paths, eight included
-and eight excluded; no workflow changes or truncation. The eight preserved
-backend/test/checkpoint paths were reapplied with `git apply --check` on a fresh
-isolated worktree at the exact base. Excluded frontend/generated files were
-re-authored explicitly. This is recovery progress, not accepted behavior:
-configured Standards/Spec and full exact-HEAD CI remain required before merge.
+The earlier #125 remote-implement timeout (run 38057127365) and its recovery
+reapplication are historical and superseded by the accepted PR #130 merge
+above; they must not be treated as current blockers.
 
 ## Remote execution/review gate
 
@@ -158,7 +158,7 @@ The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-p
 
 The former Standards startup and trusted-approval blockers are resolved and merged on main through PR #109. The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; the agent workflows reinstall dependencies deterministically (`npm ci`) before quality gates, so no dependency-restoration blocker remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Recovery #127 is completed via merged PR #128 (main `87fe7c15770835d7b03f511868262d0c66e80d94`; CI 37853951844 and sandbox deploy 37853951800 succeeded). #124 is accepted and closed via merged PR #129 (main `c24215b84019f8b42887854a3a9559399d33c3a9`); sandbox deploy run 38057103943 succeeded on that commit. Current work is the #123-parented #125 User search/pagination slice on its isolated ticket branch; #126 remains blocked until #125 is accepted and merged: run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
+#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Recovery #127 is completed via merged PR #128 (main `87fe7c15770835d7b03f511868262d0c66e80d94`; CI 37853951844 and sandbox deploy 37853951800 succeeded). #124 is accepted and closed via merged PR #129 (main `c24215b84019f8b42887854a3a9559399d33c3a9`); sandbox deploy run 38057103943 succeeded on that commit. #125 is accepted and closed via merged PR #130 (main `324933913cff9100bedd1d2d80b39740a72b1429`; CI 38249267972, sandbox deploy run 38249656941 reported success). Current work is the #123-parented #126 User detail slice on its isolated ticket branch: run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
 
 ### Administration UI checkpoint (2026-10-09)
 
@@ -180,18 +180,39 @@ reload/logout, regular-User denial with its session preserved, service retry,
 expiry, routing and keyboard/mobile behavior.
 
 PR #129 is merged and issue #124 is accepted and closed; the first-slice panel
-described above is deployed to sandbox (run 38057103943, success). The active
-slice is #125 (protected User listing with literal email search and bounded
-server pagination) on its isolated ticket branch; #126 stays blocked until
-#125 is accepted and merged. Local listeners are
+described above is deployed to sandbox (run 38057103943, success). PR #130
+is merged and issue #125 is accepted and closed; the protected User listing
+with literal email search and bounded server pagination is deployed to
+sandbox on main `324933913cff9100bedd1d2d80b39740a72b1429` (deploy run
+38249656941, owner-reported success). The active slice is #126 (real
+read-only User detail with safe deep links and matched-route telemetry) on
+its isolated ticket branch. Local listeners are
 restricted in the ChatGPT execution environment, so remote CI is the authority
 for full browser/Worker execution. GitHub/OpenCode evidence is not a ChatGPT
 conversation or evidence of private conversation content.
 
+### Completed read-only panel sandbox acceptance checklist (2026-10-12)
+
+Source evidence: main `324933913cff9100bedd1d2d80b39740a72b1429`
+(#124 via PR #129, #125 via PR #130); CI 38249267972 passed including genuine
+isolated Worker/D1 Chromium acceptance; sandbox deploy run
+[38249656941](https://github.com/JonatanGarbuyo/user-service-platform/actions/runs/38249656941)
+reported deployment plus automated smoke success. Automated local acceptance
+for #126 (176 Workers tests, 753 harness tests including the extended real
+browser list/detail/reload/back/denial flow) passes on the ticket branch but
+is not sandbox evidence.
+
+- [x] Sandbox deployment of the accepted main reports success (run 38249656941).
+- [x] Configured automated sandbox smoke reports success (same run).
+- [ ] Operator signs in as `ingaladev@gmail.com` and sees the real User list — pending until actually observed.
+- [ ] Operator searches, pages, opens a User detail, reloads the detail URL, and returns to the list with search state — pending until actually observed.
+- [ ] Operator confirms a missing-User detail and regular-User (`cronistadev@gmail.com`) denial read distinctly — pending until actually observed.
+- [ ] No production promotion is authorized by this checklist.
+
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The current open ticket inventory is #123 (admin parent spec), #125 (active list/search slice) and #126 (blocked until #125 merges); #124 is closed (PR #129 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
+- The current open ticket inventory is #123 (admin parent spec) and #126 (active detail slice); #124 is closed (PR #129 merged), #125 is closed (PR #130 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Query GitHub before selecting new work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint

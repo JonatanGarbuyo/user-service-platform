@@ -2,8 +2,10 @@ import {
   AdminMeSchema,
   AdminUserListQuerySchema,
   AdminUserListSchema,
+  AdminUserSchema,
   LoginRequestSchema,
   type AdminMe,
+  type AdminUser,
   type AdminUserList,
   type AdminUserListQuery,
   type LoginRequest,
@@ -99,6 +101,19 @@ export async function adminUsers(
   if (input.data.email !== undefined) search.set('email', input.data.email);
   const parsed = AdminUserListSchema.safeParse(
     await request(`/v1/admin/users?${search.toString()}`, undefined, signal),
+  );
+  if (!parsed.success) throw new ApiError(502);
+  return parsed.data;
+}
+
+// Reads one administrative User through the application-owned detail
+// contract (ticket #126). The identifier stays opaque client-side: only
+// nonempty bounded strings reach the Worker, and the response is parsed
+// against the exact safe projection before it touches the UI.
+export async function adminUserDetail(id: string, signal?: AbortSignal): Promise<AdminUser> {
+  if (typeof id !== 'string' || id.length === 0 || id.length > 128) throw new ApiError(400);
+  const parsed = AdminUserSchema.safeParse(
+    await request(`/v1/admin/users/${encodeURIComponent(id)}`, undefined, signal),
   );
   if (!parsed.success) throw new ApiError(502);
   return parsed.data;

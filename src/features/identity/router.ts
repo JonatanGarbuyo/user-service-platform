@@ -5,13 +5,14 @@ import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
 import { createIdentityAuth } from './auth.js';
 import { resolveAdminIdentity } from './authorization.js';
-import { listAdminUsers } from './admin-users.js';
+import { getAdminUserById, listAdminUsers } from './admin-users.js';
 import { bootstrapAdminUser } from './admin.js';
 import { deferredAuthMailer, resolveAuthMailer, type AuthMailer } from './mailer.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
 import {
   adminBootstrapRoute,
   adminMeRoute,
+  adminUserDetailRoute,
   adminUsersRoute,
   currentUserRoute,
   loginRoute,
@@ -142,7 +143,7 @@ function scopedAuth(
 
 function problem(
   c: IdentityContext,
-  status: 400 | 401 | 403 | 409 | 500,
+  status: 400 | 401 | 403 | 404 | 409 | 500,
   code: ProblemCode,
   title: string,
   detail?: string,
@@ -476,6 +477,40 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       email: query.email,
     });
     return c.json(listing, 200);
+  });
+
+  router.openapi(adminUserDetailRoute, async (c) => {
+    const session = await resolveSessionContext({
+      env: c.env,
+      headers: c.req.raw.headers,
+      baseURL: new URL(c.req.url).origin,
+      authMailer: override,
+      background: backgroundScheduler(c),
+      requestId: c.get('requestId'),
+    });
+    if (session === null) {
+      return problem(c, 401, 'unauthenticated', 'Unauthenticated');
+    }
+    const { auth } = scopedAuth(c, override, 'deferred');
+    const admin = await resolveAdminIdentity({
+      auth,
+      db: c.env.DB,
+      userId: session.user.id,
+      headers: c.req.raw.headers,
+    });
+    if (admin === null) {
+      return problem(c, 403, 'forbidden', 'Forbidden', 'Administrator access is required.');
+    }
+    // The permission boundary resolved before this lookup: anonymous,
+    // expired, revoked and non-administrative callers never reach the read,
+    // so a regular User receives 403 even for an identifier that does not
+    // exist. Only validated opaque identifiers reach the store.
+    const params = c.req.valid('param');
+    const detail = await getAdminUserById({ db: c.env.DB, userId: params.userId });
+    if (detail === null) {
+      return problem(c, 404, 'not-found', 'Not Found', 'No such User.');
+    }
+    return c.json(detail, 200);
   });
 
   router.openapi(adminBootstrapRoute, async (c) => {

@@ -923,6 +923,53 @@
         }
       }
     },
+    "/v1/admin/users/{userId}": {
+      "get": {
+        "operationId": "getAdminUser",
+        "summary": "Read one User for administrators",
+        "description": "Returns the stable application-owned administrative User representation for one opaque identifier. Anonymous or invalid sessions receive the standard unauthenticated Problem Details response; valid non-administrative sessions receive the forbidden Problem Details response even when the identifier does not exist. Authorized missing Users receive the not-found Problem Details response.",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "Opaque administrative User identifier.",
+              "example": "abc123"
+            },
+            "required": true,
+            "description": "Opaque administrative User identifier.",
+            "name": "userId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching administrative User.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Authorization failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/auth/admin/bootstrap": {
       "post": {
         "operationId": "bootstrapAdmin",

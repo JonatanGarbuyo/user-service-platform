@@ -1,6 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { requestId } from 'hono/request-id';
+import { routePath } from 'hono/route';
 import type { Env } from './env.js';
 import { createHealthRouter } from './features/health/index.js';
 import {
@@ -27,6 +28,24 @@ export interface AppBindings {
 function readEnvironment(c: Context<AppBindings>): string {
   const bindings = c.env as Partial<Env> | undefined;
   return bindings?.ENVIRONMENT ?? 'local';
+}
+
+// Telemetry-safe request path (ticket #126, ADR-0009): parameterized routes
+// such as `/v1/admin/users/{userId}` must never leak raw User identifiers or
+// personal data into ordinary request/error logs. The matched route pattern
+// (for example `/v1/admin/users/:userId`) carries the operation identity
+// without values; unmatched paths fall back to the raw pathname.
+function loggedPath(c: Context<AppBindings>): string {
+  try {
+    const pattern = routePath(c);
+    if (typeof pattern === 'string' && pattern.length > 0) {
+      return pattern;
+    }
+  } catch {
+    // No matched route (unknown paths, early failures): the raw pathname is
+    // the only operation identity available and carries no route values.
+  }
+  return new URL(c.req.url).pathname;
 }
 
 // Application composition root. Feature slices register their OpenAPI-aware
@@ -108,11 +127,11 @@ export function createApp(identityOptions: IdentityRouterOptions = {}) {
 
   app.use(requestId());
 
-  // Structured request log (ADR-0009): correlation id, request path, status and
-  // duration. Credentials, tokens and personal data are never logged. The current
-  // public surface has no parameterized paths; when feature slices introduce
-  // `:param` segments, this middleware must log the matched route pattern
-  // instead of raw paths that could carry sensitive values.
+  // Structured request log (ADR-0009): correlation id, matched route
+  // pattern, status and duration. Credentials, tokens and personal data are
+  // never logged. Parameterized feature routes log the matched pattern
+  // (for example `/v1/admin/users/:userId`) instead of raw paths that could
+  // carry User identifiers or search values.
   app.use(async (c, next) => {
     const started = Date.now();
     await next();
@@ -120,7 +139,7 @@ export function createApp(identityOptions: IdentityRouterOptions = {}) {
       level: c.error === undefined ? 'info' : 'error',
       requestId: c.get('requestId'),
       method: c.req.method,
-      path: new URL(c.req.url).pathname,
+      path: loggedPath(c),
       status: c.res.status,
       durationMs: Date.now() - started,
       environment: readEnvironment(c),
@@ -161,14 +180,15 @@ export function createApp(identityOptions: IdentityRouterOptions = {}) {
 
   // Exception messages are never logged: future auth/DB/provider errors can
   // carry secrets, so the log carries only stable identifiers and safe
-  // metadata (ADR-0009, PR #15 acceptance review).
+  // metadata (ADR-0009, PR #15 acceptance review). The path is the matched
+  // route pattern so parameterized detail failures cannot leak identifiers.
   app.onError((_err, c) => {
     console.log(
       JSON.stringify({
         level: 'error',
         requestId: c.get('requestId'),
         method: c.req.method,
-        path: new URL(c.req.url).pathname,
+        path: loggedPath(c),
         status: 500,
         code: 'internal-error',
         environment: readEnvironment(c),

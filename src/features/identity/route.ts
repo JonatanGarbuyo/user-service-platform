@@ -4,8 +4,10 @@ import {
   AdminBootstrapRequestSchema,
   AdminBootstrapResultSchema,
   AdminMeSchema,
+  AdminUserDetailParamsSchema,
   AdminUserListQuerySchema,
   AdminUserListSchema,
+  AdminUserSchema,
   CurrentUserSchema,
   LoginRequestSchema,
   LoginResultSchema,
@@ -256,6 +258,31 @@ export const adminUsersRoute = createRoute({
     200: {
       content: { 'application/json': { schema: AdminUserListSchema } },
       description: 'The matching administrative Users and their total.',
+    },
+    ...problemResponses('Authorization failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const adminUserDetailRoute = createRoute({
+  method: 'get',
+  path: '/admin/users/{userId}',
+  operationId: 'getAdminUser',
+  summary: 'Read one User for administrators',
+  description:
+    'Returns the stable application-owned administrative User representation ' +
+    'for one opaque identifier. Anonymous or invalid sessions receive the ' +
+    'standard unauthenticated Problem Details response; valid ' +
+    'non-administrative sessions receive the forbidden Problem Details ' +
+    'response even when the identifier does not exist. Authorized missing ' +
+    'Users receive the not-found Problem Details response.',
+  tags: ['admin'],
+  request: {
+    params: AdminUserDetailParamsSchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: AdminUserSchema } },
+      description: 'The matching administrative User.',
     },
     ...problemResponses('Authorization failure as RFC 9457 Problem Details.'),
   },

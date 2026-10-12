@@ -340,6 +340,47 @@ export async function runAdminBrowserTest(): Promise<void> {
     await page.getByRole('button', { name: 'Limpiar búsqueda', exact: true }).click();
     await page.getByText('Página 1 de 2', { exact: true }).waitFor();
     await table.getByText(admin, { exact: true }).waitFor();
+    phase = 'user detail, reload, back and direct navigation';
+    const detailLookup = await http(`/v1/admin/users?email=${encodeURIComponent(regular)}`, {
+      headers: { cookie: cookieHeader },
+    });
+    assert(detailLookup.status === 200, 'admin detail lookup for fixture');
+    const detailPayload = (await detailLookup.json()) as {
+      items?: { id?: unknown; email?: unknown }[];
+    };
+    const regularDetailId = detailPayload.items?.[0]?.id;
+    assert(
+      typeof regularDetailId === 'string' && regularDetailId.length > 0,
+      'regular detail identifier resolved',
+    );
+    await searchBox.fill(regular);
+    await page.getByRole('button', { name: 'Buscar', exact: true }).click();
+    await page.getByText('1 usuario en total', { exact: true }).waitFor();
+    await table.getByText(regular, { exact: true }).waitFor();
+    await page.getByRole('link', { name: `Ver detalle de ${regular}`, exact: true }).click();
+    await visible(page, 'Detalle de usuario');
+    await page.getByText(regular, { exact: true }).waitFor();
+    await page.getByText('Correo verificado', { exact: true }).waitFor();
+    await page.getByText('Identificador', { exact: true }).waitFor();
+    await page.getByText('Rol', { exact: true }).waitFor();
+    await page.reload();
+    await visible(page, 'Detalle de usuario');
+    await page.getByText(regular, { exact: true }).waitFor();
+    await page.getByRole('link', { name: 'Volver a la lista', exact: true }).click();
+    await visible(page, 'Usuarios');
+    await page.getByText('1 usuario en total', { exact: true }).waitFor();
+    await table.getByText(regular, { exact: true }).waitFor();
+    await page.goto(`${base}/admin/users/${encodeURIComponent(regularDetailId)}`);
+    await visible(page, 'Detalle de usuario');
+    await page.getByText(regular, { exact: true }).waitFor();
+    await page.reload();
+    await visible(page, 'Detalle de usuario');
+    await page.getByText(regular, { exact: true }).waitFor();
+    await page.goto(`${base}/admin/users/does-not-exist-41`);
+    await visible(page, 'Usuario no encontrado');
+    await page.getByRole('link', { name: 'Volver a la lista', exact: true }).click();
+    await visible(page, 'Usuarios');
+    await page.getByText('15 usuarios en total', { exact: true }).waitFor();
     phase = 'retryable User list failure';
     await sql('ALTER TABLE "session" RENAME TO "session_qa_list_unavailable"');
     try {
@@ -403,6 +444,8 @@ export async function runAdminBrowserTest(): Promise<void> {
     assert(deniedResponse.status() === 403, 'server remains permission authority');
     await page.goto(`${base}/admin/users`);
     await visible(page, 'Acceso denegado');
+    await page.goto(`${base}/admin/users/${encodeURIComponent(regularDetailId)}`);
+    await visible(page, 'Acceso denegado');
     await page.goto(`${base}/admin/denegado`);
     await visible(page, 'Acceso denegado');
     assert(
@@ -413,6 +456,8 @@ export async function runAdminBrowserTest(): Promise<void> {
     assert(deniedList.status() === 403, 'user list stays protected for regular Users');
     await deniedList.body();
     await page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+    await visible(page, 'Administración');
+    await page.goto(`${base}/admin/users/${encodeURIComponent(regularDetailId)}`);
     await visible(page, 'Administración');
     phase = 'unverified login';
     await signIn(page, unverified, password);
@@ -456,9 +501,18 @@ export async function runAdminBrowserTest(): Promise<void> {
       await page.evaluate<boolean>('document.documentElement.scrollWidth <= window.innerWidth'),
       'narrow user list fits viewport',
     );
+    await page
+      .getByRole('link', { name: `Ver detalle de ${admin}`, exact: true })
+      .first()
+      .click();
+    await visible(page, 'Detalle de usuario');
+    assert(
+      await page.evaluate<boolean>('document.documentElement.scrollWidth <= window.innerWidth'),
+      'narrow user detail fits viewport',
+    );
     await context.close();
     console.log(
-      'Administration browser acceptance passed: admin, regular denial, retry, expiry, logout, routing and keyboard/mobile.',
+      'Administration browser acceptance passed: admin, list/detail, regular denial, retry, expiry, logout, routing and keyboard/mobile.',
     );
   } catch (cause) {
     if (diagnosticPage !== undefined && !diagnosticPage.isClosed()) {

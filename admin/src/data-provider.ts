@@ -1,5 +1,12 @@
-import type { DataProvider, GetListParams, GetListResult, RaRecord } from 'ra-core';
-import { adminUsers } from './api.js';
+import type {
+  DataProvider,
+  GetListParams,
+  GetListResult,
+  GetOneParams,
+  GetOneResult,
+  RaRecord,
+} from 'ra-core';
+import { adminUserDetail, adminUsers } from './api.js';
 
 const unsupported = (): Promise<never> =>
   Promise.reject(new Error('Esta operación no está disponible en el panel.'));
@@ -28,7 +35,17 @@ export const dataProvider: DataProvider = {
     // This single-resource adapter has already parsed the application contract.
     return { data: result.items as unknown as RecordType[], total: result.total };
   },
-  getOne: unsupported,
+  getOne: async <RecordType extends RaRecord>(
+    resource: string,
+    params: GetOneParams<RecordType>,
+  ): Promise<GetOneResult<RecordType>> => {
+    if (resource !== 'users') return unsupported();
+    if (typeof params.id !== 'string') return unsupported();
+    const user = await adminUserDetail(params.id, params.signal ?? undefined);
+    // ra-core's provider interface is generic over the consumer's record type.
+    // This single-resource adapter has already parsed the application contract.
+    return { data: user as unknown as RecordType };
+  },
   getMany: unsupported,
   getManyReference: unsupported,
   create: unsupported,

@@ -1,5 +1,6 @@
 import { useState, type SyntheticEvent } from 'react';
 import { useGetList } from 'ra-core';
+import { Link, useLocation } from 'react-router';
 import type { AdminUser } from '../../src/features/identity/contract.js';
 import { ApiError } from './api.js';
 import { Button } from './kit/components/ui/button.js';
@@ -7,9 +8,29 @@ import { Input } from './kit/components/ui/input.js';
 
 const perPage = 10;
 
+interface UsersLocationState {
+  readonly fromList?: { readonly email: string; readonly page: number };
+}
+
+function initialQuery(state: unknown): { email: string; page: number } {
+  if (state !== null && typeof state === 'object' && 'fromList' in state) {
+    const fromList = (state as UsersLocationState).fromList;
+    if (
+      fromList !== undefined &&
+      typeof fromList.email === 'string' &&
+      Number.isInteger(fromList.page) &&
+      fromList.page >= 1
+    ) {
+      return { email: fromList.email.slice(0, 254), page: fromList.page };
+    }
+  }
+  return { email: '', page: 1 };
+}
+
 export function UsersList() {
-  const [draft, setDraft] = useState('');
-  const [query, setQuery] = useState({ email: '', page: 1 });
+  const location = useLocation();
+  const [draft, setDraft] = useState(() => initialQuery(location.state).email);
+  const [query, setQuery] = useState(() => initialQuery(location.state));
   const { data, total, error, isFetching, refetch } = useGetList<AdminUser>(
     'users',
     {
@@ -87,6 +108,9 @@ export function UsersList() {
                     <th scope="col">Correo electrónico</th>
                     <th scope="col">Verificación</th>
                     <th scope="col">Rol</th>
+                    <th scope="col">
+                      <span className="sr-only">Acciones</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -95,6 +119,15 @@ export function UsersList() {
                       <td>{user.email}</td>
                       <td>{user.emailVerified ? 'Correo verificado' : 'Correo sin verificar'}</td>
                       <td>{user.role}</td>
+                      <td>
+                        <Link
+                          to={`/users/${encodeURIComponent(user.id)}`}
+                          state={{ fromList: query }}
+                          aria-label={`Ver detalle de ${user.email}`}
+                        >
+                          Ver detalle
+                        </Link>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
