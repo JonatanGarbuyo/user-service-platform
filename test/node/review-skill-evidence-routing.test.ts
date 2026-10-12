@@ -739,6 +739,7 @@ describe('persisted lifecycle diagnostics', () => {
     };
 
     const silent = await persist([]);
+    const blank = await persist(['   ']);
     const progress = await persist([
       JSON.stringify({
         type: 'step_start',
@@ -755,6 +756,12 @@ describe('persisted lifecycle diagnostics', () => {
       eventCounts: {},
       toolCounts: {},
       status: 'unavailable',
+    });
+    expect(blank.result.record.lifecycle).toMatchObject({
+      capturedLineCount: 1,
+      eventCounts: {},
+      status: 'incomplete',
+      reasons: ['no recognized worker events captured'],
     });
     expect(progress.result.record.events).toEqual([]);
     expect(progress.result.record.coverage.primarySessionId).toBeNull();
