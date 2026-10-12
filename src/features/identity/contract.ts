@@ -195,6 +195,20 @@ export const AdminUserListQuerySchema = z
   })
   .openapi('AdminUserListQuery');
 
+// Path parameters for the protected administrative User detail (ticket #126).
+// The identifier is an opaque nonempty bounded string (maximum 128
+// characters), never an email or an assumed UUID shape. Violations end in the
+// service-wide 400 Problem Details through the composition-root validation
+// hook.
+export const AdminUserDetailParamsSchema = z
+  .object({
+    userId: z.string().min(1).max(128).openapi({
+      description: 'Opaque administrative User identifier.',
+      example: 'abc123',
+    }),
+  })
+  .openapi('AdminUserDetailParams');
+
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
 export type RegisteredUser = z.infer<typeof RegisteredUserSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
@@ -213,3 +227,4 @@ export type AdminBootstrapResult = z.infer<typeof AdminBootstrapResultSchema>;
 export type AdminUser = z.infer<typeof AdminUserSchema>;
 export type AdminUserList = z.infer<typeof AdminUserListSchema>;
 export type AdminUserListQuery = z.infer<typeof AdminUserListQuerySchema>;
+export type AdminUserDetailParams = z.infer<typeof AdminUserDetailParamsSchema>;

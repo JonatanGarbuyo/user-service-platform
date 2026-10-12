@@ -21,6 +21,7 @@ import { i18nProvider } from './i18n.js';
 import { LoginPage } from './login-page.js';
 import { dataProvider } from './data-provider.js';
 import { UsersList } from './users-list.js';
+import { UsersShow } from './users-show.js';
 
 const store = memoryStore();
 
@@ -185,6 +186,14 @@ export function App() {
     >
       <Resource name="users" list={UsersList} options={{ label: 'Usuarios' }} />
       <CustomRoutes noLayout>
+        <Route
+          path="/users/:userId"
+          element={
+            <ProtectedView>
+              <UsersShow />
+            </ProtectedView>
+          }
+        />
         <Route
           path="/"
           element={

@@ -89,6 +89,19 @@ describe('administration SPA assets', () => {
     expect(await res.text()).toBe('<html>admin</html>');
   });
 
+  it('falls back to the SPA entry for the User detail deep link', async () => {
+    const app = createApp();
+    const res = await app.request(
+      '/admin/users/some-opaque-user-id',
+      { method: 'GET' },
+      assetsEnv((path) => (path === '/index.html' ? entryHtml() : null)),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toBe('<html>admin</html>');
+  });
+
   it('serves the SPA entry at /admin', async () => {
     const app = createApp();
     const seen: string[] = [];

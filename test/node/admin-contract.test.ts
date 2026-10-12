@@ -49,6 +49,26 @@ describe('administration API contract', () => {
     ]);
   });
 
+  it('publishes GET /v1/admin/users/{userId} with the exact administrative representation', async () => {
+    const doc = await document();
+
+    const operation = doc.paths['/v1/admin/users/{userId}']?.get;
+    expect(operation?.operationId).toBe('getAdminUser');
+
+    const schema = operation?.responses?.['200']?.content?.['application/json']?.schema as
+      { $ref?: string } | undefined;
+    expect(schema?.$ref).toBe('#/components/schemas/AdminUser');
+
+    const adminUser = doc.components.schemas.AdminUser;
+    expect(adminUser?.required?.slice().sort()).toEqual(['email', 'emailVerified', 'id', 'role']);
+    expect(Object.keys(adminUser?.properties ?? {}).sort()).toEqual([
+      'email',
+      'emailVerified',
+      'id',
+      'role',
+    ]);
+  });
+
   it('reuses the existing login and sign-out operations unchanged', async () => {
     const doc = await document();
 

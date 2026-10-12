@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import { asc, count, sql } from 'drizzle-orm';
+import { asc, count, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import type { AdminUser, AdminUserList } from './contract.js';
 import { identitySchema, user } from './schema.js';
@@ -46,6 +46,37 @@ function toAdminUser(row: {
   };
 }
 
+export interface GetAdminUserInput {
+  // Slice-owned D1 binding, used read-only for the single-row lookup.
+  readonly db: D1Database;
+  // Validated opaque identifier from the public contract (nonempty, <= 128).
+  readonly userId: string;
+}
+
+// Reads one administrative User through the exact safe projection. Returns
+// null when no row matches the opaque identifier. Like the listing, this
+// read performs no permission check itself: callers resolve the
+// administrator through `resolveAdminIdentity` before this lookup, so
+// anonymous and non-administrative callers never reach it. Identifiers and
+// result contents are never logged here.
+export async function getAdminUserById(input: GetAdminUserInput): Promise<AdminUser | null> {
+  const database = drizzle(input.db, { schema: identitySchema });
+  const rows = await database
+    .select({
+      id: user.id,
+      email: user.email,
+      emailVerified: user.emailVerified,
+      role: user.role,
+    })
+    .from(user)
+    .where(eq(user.id, input.userId))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  return toAdminUser(row);
+}
 // Lists administrative Users with deterministic ascending-email pagination.
 // `total` counts every literal match before limit/offset apply, so clients
 // can page without re-reading. Search terms, addresses and result contents
