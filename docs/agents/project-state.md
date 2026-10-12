@@ -237,6 +237,14 @@ ChatGPT browser observations.
 - [x] Missing-User URL, clear and multi-page pagination: automated validation evidence only (reviewed real Worker/D1 browser/HTTP suite on PR #131); not individually reported manually and not marked as manually observed.
 - [x] No production promotion is authorized by this checklist; none was performed.
 
+## Reviewer lifecycle evidence pilot (2026-10-12)
+
+Ticket #135 is being implemented in draft PR [Persist safe reviewer lifecycle diagnostics](https://github.com/JonatanGarbuyo/user-service-platform/pull/136). Two prior hosted `/implement` executions failed without partial changes; the captured evidence showed an error event and no tool events, but does not establish the external provider/CLI cause. Do not launch an identical third worker or change model, timeout, retry, permission, workflow, or gate configuration without new evidence and authorization.
+
+The proposed additive `lifecycle` summary reuses the existing safe worker lifecycle summarizer and is persisted alongside the existing skill-evidence record. It distinguishes zero captured lines (`unavailable`) from recognized protocol progress such as `step_start` without tool calls; protocol progress does not imply skill invocation, session attribution, reviewer success, or approval. Raw event fields are not persisted, and truncation/malformed input must be reported honestly. Collection remains best-effort on success, failure and timeout.
+
+Draft PR exact-HEAD CI passed at `5562a9a3b62898d4dd04a16bd84606980d90e813` (lint, format, typecheck, OpenAPI drift, Workers tests and Node harness tests). Documentation updates are being checked on the newer PR HEAD. The configured independent Standards/Spec reviews remain outstanding, and the external hang remains unproven. No merge or deployment has been performed.
+
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
