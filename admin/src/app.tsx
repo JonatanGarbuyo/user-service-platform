@@ -4,6 +4,8 @@ import {
   CustomRoutes,
   HasDashboardContextProvider,
   memoryStore,
+  Resource,
+  type CoreLayoutProps,
   useAuthState,
   useGetIdentity,
   useLogout,
@@ -17,6 +19,8 @@ import { ApiError } from './api.js';
 import { Layout } from './kit/components/admin/layout.js';
 import { i18nProvider } from './i18n.js';
 import { LoginPage } from './login-page.js';
+import { dataProvider } from './data-provider.js';
+import { UsersList } from './users-list.js';
 
 const store = memoryStore();
 
@@ -137,12 +141,10 @@ function AuthFailure({ error }: { error: unknown }) {
 
 function ProtectedNotFound() {
   return (
-    <ProtectedView>
-      <section className="identity-card">
-        <h1>Página no encontrada</h1>
-        <Link to="/">Volver al inicio</Link>
-      </section>
-    </ProtectedView>
+    <section className="identity-card">
+      <h1>Página no encontrada</h1>
+      <Link to="/">Volver al inicio</Link>
+    </section>
   );
 }
 
@@ -160,11 +162,18 @@ function ProtectedView({ children }: PropsWithChildren) {
   );
 }
 
+function ProtectedLayout({ children }: CoreLayoutProps) {
+  return <ProtectedView>{children}</ProtectedView>;
+}
+
 export function App() {
   return (
     <Admin
       title="Administración"
       authProvider={authProvider}
+      dataProvider={dataProvider}
+      layout={ProtectedLayout}
+      catchAll={ProtectedNotFound}
       i18nProvider={i18nProvider}
       store={store}
       disableTelemetry
@@ -174,6 +183,7 @@ export function App() {
       authenticationError={ServiceFailure}
       accessDenied={Denied}
     >
+      <Resource name="users" list={UsersList} options={{ label: 'Usuarios' }} />
       <CustomRoutes noLayout>
         <Route
           path="/"
@@ -183,7 +193,7 @@ export function App() {
             </ProtectedView>
           }
         />
-        <Route path="/*" element={<ProtectedNotFound />} />
+        <Route path="/denegado" element={<Denied />} />
       </CustomRoutes>
     </Admin>
   );

@@ -182,7 +182,7 @@ export async function runAdminBrowserTest(): Promise<void> {
     // Actual verify-email transitions are covered by Workers-runtime tests.
     await sql(`UPDATE "user" SET email_verified = 1 WHERE email IN ('${admin}', '${regular}')`);
     phase = 'assets';
-    for (const path of ['/admin', '/admin/', '/admin/login']) {
+    for (const path of ['/admin', '/admin/', '/admin/login', '/admin/denegado']) {
       const response = await http(path);
       assert(
         response.status === 200 && response.headers.get('content-type')?.includes('text/html'),
@@ -291,6 +291,75 @@ export async function runAdminBrowserTest(): Promise<void> {
         'exact application-owned identity fields',
       );
     }
+    phase = 'user list, search and pagination';
+    for (let i = 0; i < 12; i++) {
+      const email = `qa-list-${String(i).padStart(2, '0')}@example.com`;
+      const response = await http('/v1/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: `QA List ${String(i)}`, email, password }),
+      });
+      assert(response.status === 201, 'list fixture created through public HTTP');
+      await response.arrayBuffer();
+    }
+    await page.goto(`${base}/admin/users`);
+    await visible(page, 'Usuarios');
+    const table = page.getByRole('table');
+    await page.getByText('15 usuarios en total', { exact: true }).waitFor();
+    await page.getByText('Página 1 de 2', { exact: true }).waitFor();
+    await table.getByText(admin, { exact: true }).waitFor();
+    await table.getByText('Correo verificado', { exact: true }).first().waitFor();
+    const searchBox = page.getByRole('searchbox', {
+      name: 'Buscar por correo electrónico',
+      exact: true,
+    });
+    await searchBox.fill(regular.toUpperCase());
+    await page.getByRole('button', { name: 'Buscar', exact: true }).click();
+    await page.getByText('1 usuario en total', { exact: true }).waitFor();
+    await page.getByText('Página 1 de 1', { exact: true }).waitFor();
+    await table.getByText(regular, { exact: true }).waitFor();
+    assert((await table.getByText(admin, { exact: true }).count()) === 0, 'search replaces rows');
+    await searchBox.fill('no-such-user@example.com');
+    await page.getByRole('button', { name: 'Buscar', exact: true }).click();
+    await visible(page, 'Sin resultados');
+    await page.getByRole('button', { name: 'Limpiar búsqueda', exact: true }).click();
+    await page.getByText('15 usuarios en total', { exact: true }).waitFor();
+    await page.getByText('Página 1 de 2', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Siguiente', exact: true }).click();
+    await page.getByText('Página 2 de 2', { exact: true }).waitFor();
+    assert(
+      (await table.getByText(admin, { exact: true }).count()) === 0,
+      'next page has no stale rows',
+    );
+    await table.getByText('qa-list-11@example.com', { exact: true }).waitFor();
+    await searchBox.fill(regular);
+    await page.getByRole('button', { name: 'Buscar', exact: true }).click();
+    await page.getByText('1 usuario en total', { exact: true }).waitFor();
+    await page.getByText('Página 1 de 1', { exact: true }).waitFor();
+    await table.getByText(regular, { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Limpiar búsqueda', exact: true }).click();
+    await page.getByText('Página 1 de 2', { exact: true }).waitFor();
+    await table.getByText(admin, { exact: true }).waitFor();
+    phase = 'retryable User list failure';
+    await sql('ALTER TABLE "session" RENAME TO "session_qa_list_unavailable"');
+    try {
+      await page.getByRole('button', { name: 'Siguiente', exact: true }).click();
+      await page
+        .getByRole('alert')
+        .getByText('No pudimos cargar los usuarios. Tu sesión se conserva.', { exact: true })
+        .waitFor();
+      assert((await page.getByRole('table').count()) === 0, 'list error hides previous page');
+    } finally {
+      await sql('ALTER TABLE "session_qa_list_unavailable" RENAME TO "session"');
+    }
+    await page.getByRole('button', { name: 'Reintentar', exact: true }).click();
+    await page.getByText('Página 2 de 2', { exact: true }).waitFor();
+    await table.getByText('qa-list-11@example.com', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Anterior', exact: true }).click();
+    await page.getByText('Página 1 de 2', { exact: true }).waitFor();
+    await table.getByText(admin, { exact: true }).waitFor();
+    await page.goto(`${base}/admin/`);
+    await visible(page, 'Sesión de administración');
     phase = 'retryable service failure';
     await sql('ALTER TABLE "session" RENAME TO "session_qa_unavailable"');
     try {
@@ -332,6 +401,17 @@ export async function runAdminBrowserTest(): Promise<void> {
     assert(regularResponse.status() === 200, '403 denial preserves regular User session');
     const deniedResponse = await context.request.get(`${base}/v1/admin/me`);
     assert(deniedResponse.status() === 403, 'server remains permission authority');
+    await page.goto(`${base}/admin/users`);
+    await visible(page, 'Acceso denegado');
+    await page.goto(`${base}/admin/denegado`);
+    await visible(page, 'Acceso denegado');
+    assert(
+      (await page.getByRole('button', { name: 'Menú de usuario', exact: true }).count()) === 0,
+      'denied route does not expose administrative layout',
+    );
+    const deniedList = await context.request.get(`${base}/v1/admin/users`);
+    assert(deniedList.status() === 403, 'user list stays protected for regular Users');
+    await deniedList.body();
     await page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
     await visible(page, 'Administración');
     phase = 'unverified login';
@@ -367,6 +447,14 @@ export async function runAdminBrowserTest(): Promise<void> {
     assert(
       await page.evaluate<boolean>('document.documentElement.scrollWidth <= window.innerWidth'),
       'narrow login fits viewport',
+    );
+    await signIn(page, admin, password);
+    await page.goto(`${base}/admin/users`);
+    await visible(page, 'Usuarios');
+    await page.getByRole('table').waitFor();
+    assert(
+      await page.evaluate<boolean>('document.documentElement.scrollWidth <= window.innerWidth'),
+      'narrow user list fits viewport',
     );
     await context.close();
     console.log(

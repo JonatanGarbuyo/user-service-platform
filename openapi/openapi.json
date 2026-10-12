@@ -361,6 +361,57 @@
           "role"
         ]
       },
+      "AdminUserList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            },
+            "description": "Ascending email order."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Matches before pagination.",
+            "example": 42
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ]
+      },
+      "AdminUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "abc123"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "example": "ada@example.com"
+          },
+          "emailVerified": {
+            "type": "boolean",
+            "example": true
+          },
+          "role": {
+            "type": "string",
+            "example": "admin"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "emailVerified",
+          "role"
+        ]
+      },
       "AdminBootstrapResult": {
         "type": "object",
         "properties": {
@@ -782,6 +833,79 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AdminMe"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Authorization failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/users": {
+      "get": {
+        "operationId": "listAdminUsers",
+        "summary": "List Users for administrators",
+        "description": "Returns the stable application-owned administrative User representation in ascending email order with bounded server pagination and optional case-insensitive literal email substring search. Anonymous or invalid sessions receive the standard unauthenticated Problem Details response; valid non-administrative sessions receive the forbidden Problem Details response. The `total` counts all matches before pagination.",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25,
+              "example": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "default": 0,
+              "example": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 254,
+              "description": "Case-insensitive literal email substring.",
+              "example": "ada"
+            },
+            "required": false,
+            "description": "Case-insensitive literal email substring.",
+            "name": "email",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching administrative Users and their total.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserList"
                 }
               }
             }
