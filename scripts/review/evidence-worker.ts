@@ -22,7 +22,9 @@ import {
   type SkillEvidenceInvocation,
   type SkillEvidenceRecord,
   type SkillEvidenceWorker,
+  type SkillEvidenceLifecycle,
 } from './skill-evidence.js';
+import { summarizeWorkerLifecycle } from './implementation-recovery.js';
 import { runBoundedCommand, withJsonFormat, type CommandExecutor } from './runner.js';
 
 export const SKILL_EVIDENCE_PATH_MESSAGE_PREFIX = 'Skill evidence:';
