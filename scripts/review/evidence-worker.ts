@@ -267,6 +267,46 @@ export interface FinalizeEvidenceResult {
 // Persists useful minimal evidence on success, error and timeout
 // finalization without masking the original exit or timeout. All failures
 // are best-effort: the caller always keeps its own outcome.
+function buildSkillEvidenceLifecycle(
+  lines: readonly string[],
+  truncatedStream: boolean,
+): SkillEvidenceLifecycle {
+  const capturedLines = lines.slice(0, MAX_CAPTURED_LINES);
+  const captureTruncated = truncatedStream || lines.length > MAX_CAPTURED_LINES;
+  const summary = summarizeWorkerLifecycle(capturedLines);
+  const reasons = [...summary.reasons];
+  if (captureTruncated) {
+    reasons.push('captured stream truncated at configured bound');
+  }
+  const durationMs =
+    summary.durationMs !== null &&
+    Number.isFinite(summary.durationMs) &&
+    summary.durationMs >= 0
+      ? summary.durationMs
+      : null;
+  const status =
+    summary.status === 'unavailable'
+      ? 'unavailable'
+      : reasons.length > 0
+        ? 'incomplete'
+        : 'complete';
+
+  return {
+    capturedLineCount: capturedLines.length,
+    eventCounts: summary.eventCounts,
+    toolCounts: summary.toolCounts,
+    firstTimestamp: summary.firstTimestamp,
+    lastTimestamp: summary.lastTimestamp,
+    durationMs,
+    lastStatus: summary.lastStatus,
+    malformed: summary.malformed,
+    unknownEvents: summary.unknownEvents,
+    status,
+    reasons: reasons.slice(0, 4),
+    captureTruncated,
+  };
+}
+
 export async function finalizeSkillEvidence(
   input: FinalizeEvidenceInput,
   deps: PersistEvidenceDeps = {},
