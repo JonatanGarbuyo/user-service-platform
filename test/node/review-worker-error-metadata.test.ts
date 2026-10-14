@@ -1,8 +1,10 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildEvidenceInvocation,
   createEvidenceCapture,
   finalizeSkillEvidence,
+  MAX_CAPTURED_LINES,
   suppressJsonWorkerLines,
 } from '../../scripts/review/evidence-worker.js';
 import {
@@ -11,8 +13,8 @@ import {
   summarizeWorkerLifecycle,
 } from '../../scripts/review/implementation-recovery.js';
 import { runFixCycleCorrection } from '../../scripts/agent/fix-cycle-correction.js';
-import { runWorkerStream } from '../../scripts/review/worker-stream.js';
-import { isWorkerTimeout } from '../../scripts/review/worker-timeout.js';
+import { runWorkerStream, type SpawnedWorker } from '../../scripts/review/worker-stream.js';
+import { isWorkerTimeout, WorkerTimeoutError } from '../../scripts/review/worker-timeout.js';
 import type { CommandExecutor } from '../../scripts/review/runner.js';
 
 // Seam under test (ticket #138): bounded structured worker error diagnostics.
@@ -183,15 +185,10 @@ describe('shared safe error projection', () => {
         timestamp: 1700000000000,
         error: { name: 'APIError', data: { statusCode: 600, isRetryable: {} } },
       }),
-      JSON.stringify({
-        type: 'error',
-        timestamp: 1700000000000,
-        error: {
-          name: 'APIError',
-          data: { statusCode: Number.NaN, isRetryable: undefined },
-          cause: { nested: { statusCode: 500, secret: 'sk-ant-nested' } },
-        },
-      }),
+      // Independently supplied overflowing exponent: JSON.parse('1e309')
+      // yields Infinity (JSON.stringify(Number.NaN) would emit null and never
+      // exercise parsed non-finite input).
+      '{"type":"error","timestamp":1700000000000,"error":{"name":"APIError","data":{"statusCode":1e309},"cause":{"nested":{"statusCode":500,"secret":"sk-ant-nested"}}}}',
       JSON.stringify({
         type: 'error',
         timestamp: 1700000000000,
@@ -239,13 +236,23 @@ describe('shared safe error projection', () => {
   });
 
   it('never persists sentinels from discarded error and tool fields', async () => {
+    // Pinned APIError sensitive data is nested under error.data (message,
+    // responseHeaders, responseBody, metadata); sentinels live in those real
+    // fields plus outer event/error and unknown-name/cause variants.
     const lines = [
       JSON.stringify({
         type: 'error',
         timestamp: 1700000000000,
         error: {
           name: 'APIError',
-          data: { statusCode: 401, isRetryable: false },
+          data: {
+            statusCode: 401,
+            isRetryable: false,
+            message: 'sk-ant-data-message-must-not-persist',
+            responseHeaders: { authorization: 'ghp_data-header-sentinel' },
+            responseBody: 'sk-ant-data-body-sentinel',
+            metadata: { token: 'github_pat_data-metadata-sentinel' },
+          },
           message: 'sk-ant-secret-message',
           stack: 'stack ghp_secret-stack',
           headers: { authorization: 'Bearer sk-ant-header' },
@@ -260,10 +267,28 @@ describe('shared safe error projection', () => {
         command: 'opencode run --secret',
         recipient: 'someone@example.test',
       }),
+      JSON.stringify({
+        type: 'error',
+        timestamp: 1700000000000,
+        error: {
+          name: 'CustomBoom',
+          data: {
+            statusCode: 500,
+            isRetryable: true,
+            message: 'sk-ant-unknown-data-message',
+            responseBody: 'sk-ant-unknown-data-body',
+            metadata: { sessionToken: 'ghp_unknown-data-sentinel' },
+          },
+          cause: { secret: 'sk-ant-unknown-cause-sentinel' },
+        },
+      }),
     ];
     const { result, persisted, logged } = await finalizeToMemory(lines);
 
-    expect(result.record.lifecycle?.errors?.byName).toMatchObject({ APIError: 1 });
+    expect(result.record.lifecycle?.errors).toMatchObject({
+      total: 2,
+      byName: { APIError: 1, unknown: 1 },
+    });
     const serialized = JSON.stringify(persisted);
     expect(serialized).not.toMatch(
       /sk-ant-|ghp_|github_pat_|OPENCODE_ZEN_API_KEY|BEGIN PRIVATE KEY|private@example\.test|rm -rf/,
@@ -291,6 +316,127 @@ describe('shared safe error projection', () => {
     expect(result.record.lifecycle?.status).toBe('incomplete');
     expect(JSON.stringify(result.record.lifecycle)).not.toContain('split-fragment');
     expect(JSON.stringify(result.record.lifecycle)).not.toContain('mystery-event');
+  });
+
+  it('assembles a valid error envelope from split worker-stream chunks into persisted errors', async () => {
+    const envelope = JSON.stringify({
+      type: 'error',
+      timestamp: 1700000000000,
+      error: { name: 'APIError', data: { statusCode: 429, isRetryable: true } },
+    });
+    const splitAt = Math.floor(envelope.length / 2);
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as SpawnedWorker;
+    child.stdout = stdout;
+    child.stderr = stderr;
+    const capture = createEvidenceCapture();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        { label: 'split-fixture', stdoutLogFilter: suppressJsonWorkerLines },
+        () => child,
+        {
+          onStdoutLine: (line) => {
+            capture.pushLine(line);
+          },
+        },
+      );
+      stdout.emit('data', envelope.slice(0, splitAt));
+      stdout.emit('data', `${envelope.slice(splitAt)}\n`);
+      child.emit('close', 0);
+      await pending;
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+
+    expect(capture.lines).toEqual([envelope]);
+    expect(capture.wasTruncated()).toBe(false);
+
+    const { result, persisted } = await finalizeToMemory(capture.lines);
+    expect(result.record.lifecycle?.capturedLineCount).toBe(1);
+    expect(result.record.lifecycle?.captureTruncated).toBe(false);
+    expect(result.record.lifecycle?.status).toBe('complete');
+    expect(result.record.lifecycle?.errors).toMatchObject({
+      total: 1,
+      byName: { APIError: 1 },
+      apiStatusCounts: { '429': 1 },
+      apiRetryableTrue: 1,
+      apiRetryableFalse: 0,
+      apiRetryableUnknown: 0,
+    });
+    expect(JSON.stringify(persisted)).toContain('"429"');
+  });
+
+  it('retains only the captured prefix when the stream exceeds the configured bound', async () => {
+    const retained = JSON.stringify({
+      type: 'error',
+      timestamp: 1700000000000,
+      error: { name: 'APIError', data: { statusCode: 401, isRetryable: false } },
+    });
+    const beyond = JSON.stringify({
+      type: 'error',
+      timestamp: 1700000000000,
+      error: { name: 'APIError', data: { statusCode: 429, isRetryable: true } },
+    });
+    const capture = createEvidenceCapture();
+    for (let index = 0; index < MAX_CAPTURED_LINES; index += 1) {
+      capture.pushLine(retained);
+    }
+    for (let index = 0; index < 3; index += 1) {
+      capture.pushLine(beyond);
+    }
+
+    expect(capture.lines).toHaveLength(MAX_CAPTURED_LINES);
+    expect(capture.wasTruncated()).toBe(true);
+
+    const written = new Map<string, string>();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const result = await finalizeSkillEvidence(
+        {
+          invocation: buildEvidenceInvocation({
+            worker: 'review-cycle',
+            command: 'review-standards',
+            axis: 'standards',
+            attempt: 1,
+            workerStartHead: 'a'.repeat(40),
+            env: {},
+          }),
+          lines: capture.lines,
+          truncatedStream: capture.wasTruncated(),
+        },
+        {
+          dir: '.test-evidence',
+          mkdir: () => Promise.resolve(),
+          writeFile: (path: string, contents: string) => {
+            written.set(path, contents);
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(result.record.lifecycle?.capturedLineCount).toBe(MAX_CAPTURED_LINES);
+      expect(result.record.lifecycle?.captureTruncated).toBe(true);
+      expect(result.record.lifecycle?.status).toBe('incomplete');
+      expect(result.record.lifecycle?.reasons.join(' ')).toMatch(/truncated/);
+      expect(result.record.lifecycle?.errors?.total).toBe(MAX_CAPTURED_LINES);
+      expect(result.record.lifecycle?.errors?.apiStatusCounts).toEqual({
+        '401': MAX_CAPTURED_LINES,
+      });
+      expect(result.record.lifecycle?.errors?.apiRetryableFalse).toBe(MAX_CAPTURED_LINES);
+      const persisted = JSON.parse(
+        written.get(result.evidencePath ?? '.test-evidence/missing') ?? '{}',
+      ) as { lifecycle?: { errors?: { apiStatusCounts?: Record<string, number> } } };
+      expect(persisted.lifecycle?.errors?.apiStatusCounts).toEqual({
+        '401': MAX_CAPTURED_LINES,
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('shares identical error semantics between recovery and finalized evidence', async () => {
@@ -334,6 +480,7 @@ describe('shared safe error projection', () => {
       error: { name: 'APIError', data: { statusCode: 429, isRetryable: true } },
     });
     const written = new Map<string, string>();
+    const sentinels = new Map<string, string>();
     const realFinalizer = async (input: {
       worker: 'agent-fix-cycle';
       command: string;
@@ -381,12 +528,17 @@ describe('shared safe error projection', () => {
       getHead: () => Promise.resolve('a'.repeat(40)),
     });
     expect(success.exitCode).toBe(0);
+    expect(success.evidencePath).toContain('agent-fix-cycle');
     const persistedSuccess = JSON.parse([...written.values()].at(0) ?? '{}') as {
       lifecycle?: { errors?: Record<string, unknown> };
     };
     expect(persistedSuccess.lifecycle?.errors).toMatchObject({
       total: 1,
       byName: { APIError: 1 },
+      apiStatusCounts: { '429': 1 },
+      apiRetryableTrue: 1,
+      apiRetryableFalse: 0,
+      apiRetryableUnknown: 0,
     });
 
     written.clear();
@@ -400,14 +552,204 @@ describe('shared safe error projection', () => {
     });
     expect(failure.exitCode).toBe(1);
     expect(failure.reason).toMatch(/boom/);
+    expect(failure.evidencePath).toContain('agent-fix-cycle');
     const persistedFailure = JSON.parse([...written.values()].at(0) ?? '{}') as {
       lifecycle?: { errors?: Record<string, unknown> };
     };
     expect(persistedFailure.lifecycle?.errors).toMatchObject({
       total: 1,
       byName: { APIError: 1 },
+      apiStatusCounts: { '429': 1 },
+      apiRetryableTrue: 1,
+      apiRetryableFalse: 0,
+      apiRetryableUnknown: 0,
+    });
+
+    written.clear();
+    const timeout = await runFixCycleCorrection('42', {
+      runWorker: (_command, _args, onLine) => {
+        onLine(progress);
+        return Promise.reject(new WorkerTimeoutError('address-review', 500, 'opencode', true));
+      },
+      finalizeEvidence: realFinalizer,
+      writeSentinel: (path, contents) => {
+        sentinels.set(path, contents);
+        return Promise.resolve();
+      },
+      getHead: () => Promise.resolve('a'.repeat(40)),
+    });
+    expect(timeout.exitCode).toBe(1);
+    expect(timeout.timedOut).toBe(true);
+    expect(timeout.evidencePath).toContain('agent-fix-cycle');
+    expect(sentinels.get('.address-review-timeout')).toContain('address-review timed out');
+    const persistedTimeout = JSON.parse([...written.values()].at(0) ?? '{}') as {
+      lifecycle?: { errors?: Record<string, unknown> };
+    };
+    expect(persistedTimeout.lifecycle?.errors).toMatchObject({
+      total: 1,
+      byName: { APIError: 1 },
+      apiStatusCounts: { '429': 1 },
+      apiRetryableTrue: 1,
     });
   });
+
+  it('persists the additive summary through the real review worker-stream executor', async () => {
+    // Mirrors scripts/review-cycle.ts evidenceStreamingWorkerExecutor:
+    // runWorkerStream -> createEvidenceCapture -> finalizeSkillEvidence.
+    // Direct finalizeSkillEvidence calls alone are not claimed as executor
+    // integration here.
+    async function runReviewExecutor(input: {
+      command: string;
+      axis: string;
+      script: string;
+      workerOptions?: { timeoutMs?: number };
+    }): Promise<{
+      lines: string[];
+      workerError: unknown;
+      persisted: Record<string, unknown>;
+      terminated: unknown;
+    }> {
+      const capture = createEvidenceCapture();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let workerError: unknown = null;
+      try {
+        await runWorkerStream(
+          process.execPath,
+          ['-e', input.script],
+          {
+            label: 'review-error-fixture',
+            timeoutMs: input.workerOptions?.timeoutMs,
+            killGraceMs: 500,
+            groupPollMs: 20,
+            stdoutLogFilter: suppressJsonWorkerLines,
+          },
+          undefined,
+          {
+            onStdoutLine: (line) => {
+              capture.pushLine(line);
+            },
+          },
+        );
+      } catch (error: unknown) {
+        workerError = error;
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+      const written = new Map<string, string>();
+      const innerLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        const result = await finalizeSkillEvidence(
+          {
+            invocation: buildEvidenceInvocation({
+              worker: 'review-cycle',
+              command: input.command,
+              axis: input.axis,
+              attempt: 1,
+              workerStartHead: 'a'.repeat(40),
+              env: {},
+            }),
+            lines: capture.lines,
+            truncatedStream: capture.wasTruncated(),
+          },
+          {
+            dir: '.test-evidence',
+            mkdir: () => Promise.resolve(),
+            writeFile: (path: string, contents: string) => {
+              written.set(path, contents);
+              return Promise.resolve();
+            },
+          },
+        );
+        const persisted = JSON.parse(
+          written.get(result.evidencePath ?? '.test-evidence/missing') ?? '{}',
+        ) as Record<string, unknown>;
+        return {
+          lines: [...capture.lines],
+          workerError,
+          persisted,
+          terminated: (workerError as { terminated?: unknown } | null)?.terminated,
+        };
+      } finally {
+        innerLog.mockRestore();
+      }
+    }
+
+    const errorEnvelope = (status: number, retryable: boolean): string =>
+      JSON.stringify({
+        type: 'error',
+        timestamp: 1700000000000,
+        error: { name: 'APIError', data: { statusCode: status, isRetryable: retryable } },
+      });
+    const successScript = `console.log(${JSON.stringify(errorEnvelope(401, false))}); process.exit(0);`;
+    const failureScript = `console.log(${JSON.stringify(errorEnvelope(429, true))}); process.exit(1);`;
+    const timeoutScript = `console.log(${JSON.stringify(errorEnvelope(429, true))}); setInterval(() => undefined, 50);`;
+
+    const success = await runReviewExecutor({
+      command: 'review-standards',
+      axis: 'standards',
+      script: successScript,
+    });
+    expect(success.workerError).toBeNull();
+    expect(success.lines).toHaveLength(1);
+    expect(success.persisted).toMatchObject({
+      lifecycle: {
+        errors: {
+          total: 1,
+          byName: { APIError: 1 },
+          apiStatusCounts: { '401': 1 },
+          apiRetryableFalse: 1,
+        },
+      },
+    });
+
+    for (const invocation of [
+      { command: 'review-standards', axis: 'standards' },
+      { command: 'review-spec', axis: 'spec' },
+      { command: 'address-review', axis: 'address-review' },
+    ] as const) {
+      const failure = await runReviewExecutor({
+        ...invocation,
+        script: failureScript,
+      });
+      expect(failure.workerError).not.toBeNull();
+      expect(isWorkerTimeout(failure.workerError)).toBe(false);
+      expect(failure.terminated).toBe(true);
+      expect(failure.lines).toHaveLength(1);
+      expect(failure.persisted).toMatchObject({
+        lifecycle: {
+          errors: {
+            total: 1,
+            byName: { APIError: 1 },
+            apiStatusCounts: { '429': 1 },
+            apiRetryableTrue: 1,
+          },
+        },
+      });
+      expect(JSON.stringify(failure.persisted)).toContain('"APIError"');
+    }
+
+    const timeout = await runReviewExecutor({
+      command: 'review-spec',
+      axis: 'spec',
+      script: timeoutScript,
+      workerOptions: { timeoutMs: 500 },
+    });
+    expect(isWorkerTimeout(timeout.workerError)).toBe(true);
+    expect(timeout.terminated).toBe(true);
+    expect(timeout.lines).toHaveLength(1);
+    expect(timeout.persisted).toMatchObject({
+      lifecycle: {
+        errors: {
+          total: 1,
+          byName: { APIError: 1 },
+          apiStatusCounts: { '429': 1 },
+          apiRetryableTrue: 1,
+        },
+      },
+    });
+  }, 30000);
 
   it('keeps the record on persistence failure without manufacturing approval', async () => {
     const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
