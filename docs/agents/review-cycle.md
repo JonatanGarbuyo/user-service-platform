@@ -107,8 +107,13 @@ worker failure and never becomes `FATAL` or a fabricated `PASS`:
 
 Operator distinction: an unreadable end (`cannot prove CI checks for the
 reviewed HEAD`) means GitHub could not be read — it is not evidence about
-the commit, and rerunning the cycle reobserves the same SHA without
-repeating reviewer work. An observed nonpass (`CI checks for the reviewed
+the commit. Repeated reads inside the same still-running cycle reobserve
+the same SHA without launching additional reviewers, corrections, or
+gates; a new invocation after terminal unreadable `BLOCKED` reexecutes
+the normal review/gate flow. Unreadable `BLOCKED` leaves CI unproven and
+requires operator inspection of the exact-HEAD checks/evidence before
+choosing recovery; it does not reuse prior reviews. There is no CI-only
+resume mode. An observed nonpass (`CI checks for the reviewed
 HEAD are not successful`, or awaiting trusted approval) reports what CI
 actually said. No claim is made about why a historical read failed.
 
