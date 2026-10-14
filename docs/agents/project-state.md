@@ -1,6 +1,6 @@
 # Project state checkpoint
 
-Last verified: 2026-10-12
+Last verified: 2026-10-14
 
 This file is the durable operational checkpoint for starting a fresh ChatGPT/OpenCode session. It is an index and handoff, not a replacement for `GLOSSARY.md`, ADRs, specs, tickets, PRs, CI, or current repository state.
 
@@ -32,6 +32,37 @@ wayfinder -> to-spec -> to-tickets -> implement
 - “No automated merge” means the agent/workflow cannot self-merge. It does not prohibit ChatGPT, acting as the separately authorized final operator, from merging an accepted PR with an exact expected HEAD.
 - Deployment, production-infrastructure mutation, and secret mutation remain separately controlled even after final acceptance; merge authority does not imply deployment authority.
 - Review and run evidence lives on GitHub; manual copy/paste into chat is not part of the normal workflow.
+
+## Current product frontier (2026-10-14)
+
+Main is `a88774e6b5a7433c0c185b0152a5c10c634f2728`. Identity and the
+read-only administrative panel are accepted in sandbox. Subscription billing
+is not implemented. The active route is
+[Consumer-ready login and pluggable subscription billing backend](https://github.com/JonatanGarbuyo/user-service-platform/issues/146).
+Read that map and its current decision tickets before specifying or executing
+consumer-authentication or billing work.
+
+The operator confirmed this repository as the backend for the first consumer,
+`rugbychampagneweb.com` (Astro on Cloudflare). The frontend team owns site
+integration, content, UI and paywall policy/enforcement. This backend owns
+Identity and provider-independent subscription/billing contracts. Monthly and
+annual offers are required; prices remain pending. The operator selected
+Mercado Pago Argentina in ARS for the first adapter. Cancellation stops renewal
+and preserves the already-paid period; the consumer decides access. Remaining
+lifecycle and consumer transport details are tracked by the map. No consumer
+repository or service-copy repository is required for this backend increment.
+
+Product work takes priority over further tooling. The operator authorizes
+local development with their help as proxy when hosted bots, errors or Actions
+delay delivery. Preserve isolated work, meaningful checks and review evidence;
+production promotion and real charges remain separately controlled. The
+previous default hosted execution path remains available rather than being a
+prerequisite for progress.
+
+Maintenance #143/#144 has PR #145 READY at
+`fc3343e1bf90626e6a220d5076fc36fb2804469b` (run 38634721468 succeeded),
+pending final operator inspection; it does not block this product planning.
+The older dated product/administration snapshots below are historical.
 
 ## Architecture baseline
 
@@ -95,7 +126,7 @@ Verified on 2026-10-06 against live GitHub state; main is `e885e1c84460b2af6c7ae
 
 GitHub-only skill-usage audit (25 worker runs: 16 fix-cycle + 9 ticket executions; 19 runs belong to #82; not productivity comparisons) is recorded separately from unavailable ChatGPT conversation data — no ChatGPT session dataset exists and none is inferred. Observed skill-tool minima: implement 17, code-review 13, tdd 10, custom better-typescript 5.
 
-Current execution frontier (verified 2026-10-12 against live GitHub state;
+Administration milestone snapshot (verified 2026-10-12 against live GitHub state;
 main is `9a5e0c75717a6e4707e9964aa550ffbd9a091f52`):
 
 ```text
@@ -175,7 +206,7 @@ The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-p
 
 The former Standards startup and trusted-approval blockers are resolved and merged on main through PR #109. The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; the agent workflows reinstall dependencies deterministically (`npm ci`) before quality gates, so no dependency-restoration blocker remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Recovery #127 is completed via merged PR #128 (main `87fe7c15770835d7b03f511868262d0c66e80d94`; CI 37853951844 and sandbox deploy 37853951800 succeeded). #124 is accepted and closed via merged PR #129 (main `c24215b84019f8b42887854a3a9559399d33c3a9`); sandbox deploy run 38057103943 succeeded on that commit. #125 is accepted and closed via merged PR #130 (main `324933913cff9100bedd1d2d80b39740a72b1429`; CI 38249267972, sandbox deploy run 38249656941 succeeded). #126 is accepted and closed via merged PR #131 (main `9a5e0c75717a6e4707e9964aa550ffbd9a091f52`; reviewed HEAD `62e174d9ed0ca73733a9e69e18b26b4ecd6506e1` with Standards PASS 6125453202, Spec PASS 6125480704, exact-HEAD CI 38251894375, READY recovery 38255595340; main CI 38258618931 and sandbox deploy/smoke 38258618860 succeeded). Parent spec #123 is closed/completed by operator acceptance comment 6126035306. At that time, current work was ticket #132 (release-state reconciliation of this checkpoint and checklist); it introduced no product, architecture, or deployment change. That #132-active status is historical and superseded by the Reviewer lifecycle section below (#132 closed via PR #133; current diagnostic frontier #140/#141). Run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
+#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Recovery #127 is completed via merged PR #128 (main `87fe7c15770835d7b03f511868262d0c66e80d94`; CI 37853951844 and sandbox deploy 37853951800 succeeded). #124 is accepted and closed via merged PR #129 (main `c24215b84019f8b42887854a3a9559399d33c3a9`); sandbox deploy run 38057103943 succeeded on that commit. #125 is accepted and closed via merged PR #130 (main `324933913cff9100bedd1d2d80b39740a72b1429`; CI 38249267972, sandbox deploy run 38249656941 succeeded). #126 is accepted and closed via merged PR #131 (main `9a5e0c75717a6e4707e9964aa550ffbd9a091f52`; reviewed HEAD `62e174d9ed0ca73733a9e69e18b26b4ecd6506e1` with Standards PASS 6125453202, Spec PASS 6125480704, exact-HEAD CI 38251894375, READY recovery 38255595340; main CI 38258618931 and sandbox deploy/smoke 38258618860 succeeded). Parent spec #123 is closed/completed by operator acceptance comment 6126035306. At that time, current work was ticket #132 (release-state reconciliation of this checkpoint and checklist); it introduced no product, architecture, or deployment change. That #132-active status is historical and superseded by the Reviewer lifecycle section below (#132 closed via PR #133; diagnostics #140/#141 completed; current backend product planning is map #146). Run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
 
 ### Administration UI checkpoint (2026-10-09)
 
@@ -264,8 +295,10 @@ and truncation/malformed input is reported honestly. Collection remains
 best-effort on success, failure and timeout and never masks the original
 outcome, termination, review approval, READY or CI gates.
 
-Current diagnostic frontier is parent spec #140 (open) and implementation
-ticket #141 (active on its isolated ticket branch/worktree). Spec #137 and
+Spec #140 and implementation ticket #141 are accepted and closed via PR #142
+at main `a88774e6b5a7433c0c185b0152a5c10c634f2728`. Main CI 38626007788,
+sandbox deployment/automated smoke 38626007604 and Pages 38626006600
+succeeded; completion record is #140 comment 6176933913. Spec #137 and
 slice #138 are completed via merged PR #139 at
 `23c81a21529381598aba692fbf96e84535a46c4c` (main CI 38500280946 and
 sandbox deployment/automated smoke 38500281039 succeeded, per the #141
@@ -285,7 +318,7 @@ link and let them approve; use the integration, no browser login.
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), and reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`), and reviewer error diagnostics #137/#138 are completed via PR #139 (main `23c81a21529381598aba692fbf96e84535a46c4c`). The current open diagnostic work is spec #140 plus implementation ticket #141. Query GitHub before selecting new work.
+- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`), reviewer error diagnostics #137/#138 are completed via PR #139 (main `23c81a21529381598aba692fbf96e84535a46c4c`), and CI read recovery #140/#141 is completed via PR #142 (main `a88774e6b5a7433c0c185b0152a5c10c634f2728`). The current product route is map #146; maintenance #143/#144 awaits final inspection of PR #145. Query live GitHub before selecting work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint

@@ -40,7 +40,15 @@ User-facing account data such as display name, avatar reference, and preferences
 
 ### Subscription
 
-The user's commercial access state. Subscription is not an editorial role. It may contain plan, status, dates, and external billing references.
+A User's commercial agreement for a Plan, with a status and period of validity. The consuming product decides access from that state and owns its paywall; Subscription is separate from editorial roles.
+
+### Plan
+
+A subscription offer with a billing interval, price and currency.
+
+### Billing Provider
+
+An external service that manages collection authorizations and payments for a Subscription. Its identity is separate from the Plan and the consuming product's access rules.
 
 ### Follow
 
