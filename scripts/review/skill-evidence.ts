@@ -74,12 +74,29 @@ export interface SkillEvidenceCoverage {
   reasons: string[];
 }
 
+export interface SkillEvidenceLifecycle {
+  capturedLineCount: number;
+  eventCounts: Record<string, number>;
+  toolCounts: Record<string, number>;
+  firstTimestamp: string | null;
+  lastTimestamp: string | null;
+  durationMs: number | null;
+  lastStatus: string | null;
+  malformed: number;
+  unknownEvents: number;
+  status: SkillCoverageStatus;
+  reasons: string[];
+  captureTruncated: boolean;
+}
+
 export interface SkillEvidenceRecord {
   version: typeof SKILL_EVIDENCE_VERSION;
   invocation: SkillEvidenceInvocation;
   sessionLineage: { primarySessionId: string | null; parentIds: string[] };
   events: SkillEvidenceEvent[];
   coverage: SkillEvidenceCoverage;
+  /** Additive operator diagnostics; older evidence consumers may ignore it. */
+  lifecycle?: SkillEvidenceLifecycle;
   collectedAt: string;
 }
 
@@ -292,10 +309,20 @@ export function parsePrimaryToolRecord(
   if (status === null) {
     return null;
   }
-  const timestamp =
-    typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
-      ? new Date(record.timestamp).toISOString()
-      : null;
+  // An invalid Date-range timestamp (e.g. 1e100) must not throw and abort
+  // all evidence finalization: the attributable record persists with a null
+  // timestamp while the shared lifecycle summarizer discloses invalid input.
+  let timestamp: string | null = null;
+  if (typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)) {
+    try {
+      const instant = new Date(record.timestamp);
+      if (Number.isFinite(instant.getTime())) {
+        timestamp = instant.toISOString();
+      }
+    } catch {
+      timestamp = null;
+    }
+  }
   const input = asRecord(state.input);
   const metadata = asRecord(state.metadata);
   let skillName: string | null = null;

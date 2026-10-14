@@ -462,6 +462,7 @@ export function summarizeWorkerLifecycle(lines: readonly string[]): RecoveryDiag
   const toolCounts: Record<string, number> = {};
   let malformed = 0;
   let unknownEvents = 0;
+  let invalidTimestamps = 0;
   const reasons: string[] = [];
   let firstTimestamp: number | null = null;
   let lastTimestamp: number | null = null;
@@ -487,11 +488,18 @@ export function summarizeWorkerLifecycle(lines: readonly string[]): RecoveryDiag
     eventCounts[type] = (eventCounts[type] ?? 0) + 1;
     const timestamp = record?.timestamp;
     if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
-      if (firstTimestamp === null || timestamp < firstTimestamp) {
-        firstTimestamp = timestamp;
-      }
-      if (lastTimestamp === null || timestamp > lastTimestamp) {
-        lastTimestamp = timestamp;
+      // A finite number outside Date's valid range (e.g. 1e100) must not
+      // contaminate the shared extrema: validate before accumulation so a
+      // later valid timestamp is retained and the invalid input is disclosed.
+      if (Number.isFinite(new Date(timestamp).getTime())) {
+        if (firstTimestamp === null || timestamp < firstTimestamp) {
+          firstTimestamp = timestamp;
+        }
+        if (lastTimestamp === null || timestamp > lastTimestamp) {
+          lastTimestamp = timestamp;
+        }
+      } else {
+        invalidTimestamps += 1;
       }
     }
     if (type === 'tool_use') {
@@ -515,6 +523,9 @@ export function summarizeWorkerLifecycle(lines: readonly string[]): RecoveryDiag
   }
   if (unknownEvents > 0) {
     reasons.push(`ignored ${String(unknownEvents)} unknown worker events`);
+  }
+  if (invalidTimestamps > 0) {
+    reasons.push(`ignored ${String(invalidTimestamps)} invalid worker timestamps`);
   }
 
   const toIso = (value: number | null): string | null => {

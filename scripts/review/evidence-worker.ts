@@ -20,9 +20,11 @@ import {
   SKILL_EVIDENCE_DIR,
   type SessionExportInput,
   type SkillEvidenceInvocation,
+  type SkillEvidenceLifecycle,
   type SkillEvidenceRecord,
   type SkillEvidenceWorker,
 } from './skill-evidence.js';
+import { summarizeWorkerLifecycle } from './implementation-recovery.js';
 import { runBoundedCommand, withJsonFormat, type CommandExecutor } from './runner.js';
 
 export const SKILL_EVIDENCE_PATH_MESSAGE_PREFIX = 'Skill evidence:';
@@ -262,6 +264,52 @@ export interface FinalizeEvidenceResult {
   diagnostic: string;
 }
 
+// Projects the captured stream into bounded, allowlisted lifecycle metadata.
+function buildSkillEvidenceLifecycle(
+  lines: readonly string[],
+  truncatedStream: boolean,
+): SkillEvidenceLifecycle {
+  const capturedLines = lines.slice(0, MAX_CAPTURED_LINES);
+  const captureTruncated = truncatedStream || lines.length > MAX_CAPTURED_LINES;
+  const summary = summarizeWorkerLifecycle(capturedLines);
+  const reasons = [...summary.reasons];
+  if (captureTruncated) {
+    reasons.push('captured stream truncated at configured bound');
+  }
+  const durationMs =
+    summary.firstTimestamp !== null &&
+    summary.lastTimestamp !== null &&
+    summary.durationMs !== null &&
+    Number.isFinite(summary.durationMs) &&
+    summary.durationMs >= 0
+      ? summary.durationMs
+      : null;
+  let status: SkillEvidenceLifecycle['status'];
+  if (summary.status === 'unavailable') {
+    status = 'unavailable';
+  } else {
+    if (capturedLines.length > 0 && Object.keys(summary.eventCounts).length === 0) {
+      reasons.push('no recognized worker events captured');
+    }
+    status = reasons.length > 0 ? 'incomplete' : 'complete';
+  }
+
+  return {
+    capturedLineCount: capturedLines.length,
+    eventCounts: summary.eventCounts,
+    toolCounts: summary.toolCounts,
+    firstTimestamp: summary.firstTimestamp,
+    lastTimestamp: summary.lastTimestamp,
+    durationMs,
+    lastStatus: summary.lastStatus,
+    malformed: summary.malformed,
+    unknownEvents: summary.unknownEvents,
+    status,
+    reasons: reasons.slice(0, 4),
+    captureTruncated,
+  };
+}
+
 // Persists useful minimal evidence on success, error and timeout
 // finalization without masking the original exit or timeout. All failures
 // are best-effort: the caller always keeps its own outcome.
@@ -297,15 +345,18 @@ export async function finalizeSkillEvidence(
       exportFailures.push(`export unavailable for session ${childId}`);
     }
   }
-  const record = buildSkillEvidence({
-    invocation: input.invocation,
-    primaryLines: input.lines,
-    primarySessionId,
-    childExports,
-    exportFailures,
-    truncatedStream: input.truncatedStream,
-    ...(input.worktreeRoot === undefined ? {} : { worktreeRoot: input.worktreeRoot }),
-  });
+  const record: SkillEvidenceRecord = {
+    ...buildSkillEvidence({
+      invocation: input.invocation,
+      primaryLines: input.lines,
+      primarySessionId,
+      childExports,
+      exportFailures,
+      truncatedStream: input.truncatedStream,
+      ...(input.worktreeRoot === undefined ? {} : { worktreeRoot: input.worktreeRoot }),
+    }),
+    lifecycle: buildSkillEvidenceLifecycle(input.lines, input.truncatedStream === true),
+  };
   try {
     const { evidencePath } = await persistSkillEvidence(record, deps);
     const diagnostic =
