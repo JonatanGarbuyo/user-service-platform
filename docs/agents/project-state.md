@@ -264,8 +264,16 @@ and truncation/malformed input is reported honestly. Collection remains
 best-effort on success, failure and timeout and never masks the original
 outcome, termination, review approval, READY or CI gates.
 
-Current diagnostic frontier is parent spec #137 (open) and implementation
-ticket #138 (active on its isolated ticket branch/worktree). The two
+Current diagnostic frontier is parent spec #140 (open) and implementation
+ticket #141 (active on its isolated ticket branch/worktree). Spec #137 and
+slice #138 are completed via merged PR #139 at
+`23c81a21529381598aba692fbf96e84535a46c4c` (main CI 38500280946 and
+sandbox deployment/automated smoke 38500281039 succeeded, per the #141
+ticket record); the #138-active status below is historical. #140 recovers
+bounded exact-HEAD CI read failures without rerunning agents: up to two
+consecutive failed check-run reads recover in the same review cycle against
+the existing 72-attempt/10-second budget, the third consecutive failure stops
+BLOCKED, and any successful read resets the consecutive-error state. The two
 historical implement failures (runs `38265600704` and `38267513787`) retain
 only one error event with no tools; their cause remains unproven, as does any
 live failure-rate improvement. Do not launch an identical third execution of
@@ -277,7 +285,7 @@ link and let them approve; use the integration, no browser login.
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), and reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`). The current open diagnostic work is spec #137 plus implementation ticket #138. Query GitHub before selecting new work.
+- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), and reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`), and reviewer error diagnostics #137/#138 are completed via PR #139 (main `23c81a21529381598aba692fbf96e84535a46c4c`). The current open diagnostic work is spec #140 plus implementation ticket #141. Query GitHub before selecting new work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
