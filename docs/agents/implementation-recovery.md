@@ -33,7 +33,11 @@ presented as proof of no progress:
   (local commits plus uncommitted tracked edits/deletions);
 - bounded full contents for eligible untracked source files;
 - safe worker-lifecycle diagnostics (allowlisted event/tool names, counts,
-  timestamps, last-known status only);
+  timestamps, last-known status only, plus the additive bounded structured
+  `errors` summary from the shared projection: exact permitted protocol error
+  names, validated APIError HTTP status and literal boolean retryability;
+  missing/invalid metadata stays unknown/unclassified and no raw error content
+  is retained);
 - workflow-file metadata (paths only) when the failed worktree touches
   `.github/workflows/**`, pointing back to the trusted-publication handoff
   policy instead of carrying workflow patch content.

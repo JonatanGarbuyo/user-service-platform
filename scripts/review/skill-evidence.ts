@@ -16,6 +16,8 @@
 // arbitrary arguments, transcripts, reasoning, environment values and secrets
 // are never sources of skill calls and never appear in evidence.
 
+import type { WorkerErrorSummary } from './implementation-recovery.js';
+
 export const SKILL_EVIDENCE_VERSION = 1 as const;
 export const SKILL_EVIDENCE_DIR = '.agent-ticket/skill-evidence';
 
@@ -87,6 +89,12 @@ export interface SkillEvidenceLifecycle {
   status: SkillCoverageStatus;
   reasons: string[];
   captureTruncated: boolean;
+  /**
+   * Additive bounded structured-error summary (ticket #138) using the shared
+   * implementation-recovery projection. Older persisted records may lack it;
+   * new finalizations always set it. Counts only, never raw error content.
+   */
+  errors?: WorkerErrorSummary;
 }
 
 export interface SkillEvidenceRecord {

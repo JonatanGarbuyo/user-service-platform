@@ -93,9 +93,23 @@ instead of changing code.
 
 Finalized review/correction workers add an optional `lifecycle` summary to the existing skill-evidence JSON. It reuses the implementation-recovery summarizer and records bounded captured-line counts, allowlisted event/tool counts, validated timestamps/duration, last status, malformed/unknown counts, coverage reasons, and capture truncation.
 
+The same `lifecycle` record carries an additive bounded `errors` summary from
+the single shared projection (`summarizeWorkerErrors`). It counts top-level
+`error` events by exact permitted protocol name (`APIError`,
+`ProviderAuthError`, `MessageOutputLengthError`, `MessageAbortedError`,
+`StructuredOutputError`, `ContextOverflowError`, `ContentFilterError`,
+`UnknownError`; missing/unsupported names use the fixed `unknown` bucket) and,
+for recognized `APIError` only, validated HTTP status (finite integer
+100..599) and literal boolean retryability. Missing/invalid metadata stays
+explicitly unknown/unclassified with no coercion. No raw names outside the
+whitelist, messages, stacks, headers/bodies, metadata/cause, provider
+identifiers, prompts, reasoning, tool inputs/outputs, commands, recipient data
+or credentials enter the summary or logs, and reported retryability has no
+execution authority.
+
 This describes only the captured stdout stream, not worker success. Zero captured lines means `unavailable`; a recognized `step_start` without tool calls counts as protocol progress but creates no skill invocation or session attribution. Truncated or malformed capture is marked incomplete. Raw fields, prompts, reasoning, text, tool inputs/outputs, commands, payloads, personal data and credentials are not persisted.
 
-Collection is best-effort on success, failure and timeout. It cannot change the original outcome, process-group termination, review approval, READY status, or CI gates. The external provider/CLI failure remains unproven.
+Collection is best-effort on success, failure and timeout. It cannot change the original outcome, process-group termination, review approval, READY status, or CI gates. Historical failure causes and any live failure-rate improvement remain unproven.
 
 ## Review markers
 
