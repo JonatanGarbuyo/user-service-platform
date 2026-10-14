@@ -76,12 +76,46 @@ Cycles: <n>
    Node/harness tests), then verify the PR still points at the reviewed HEAD
    and poll CI checks for that exact commit until they succeed, fail, or
    time out (an empty check list never counts as success) before finishing
-   ready for final acceptance.
+   ready for final acceptance. Check-run read recovery (ticket #141) applies
+   inside this poll: the first and second consecutive failed check-run reads
+   wait 10 seconds and reobserve the same SHA in the same cycle, and the
+   third consecutive failure stops `BLOCKED`.
 5. If a valid blocking `FAIL` exists, invoke Muse through the existing
    `/address-review` workflow for the smallest in-scope correction, commit
    locally, then rerun both axes against the new HEAD.
 6. Stop after the bounded number of correction cycles instead of looping
    indefinitely, and stop immediately when a finding reports `NEEDS-DECISION`.
+
+## Exact-HEAD CI read recovery
+
+CI observation reads the authoritative commit check-runs for the reviewed
+SHA (plus best-effort exact-HEAD workflow runs). A failed read is not a
+worker failure and never becomes `FATAL` or a fabricated `PASS`:
+
+- Up to two consecutive failed check-run reads recover in the same cycle:
+  each failed read consumes one of the existing 72 total poll attempts and
+  waits the existing 10 seconds before the next observation. There is no
+  nested retry budget, and no wait happens after the final allowed
+  observation or after the third consecutive failure.
+- Any successful fetch clears the consecutive-error state, even when the
+  checks are still pending, empty, or awaiting trusted approval. The final
+  summary reflects the last authoritative result.
+- Genuine CI failure still fails fast, and missing, pending, or
+  approval-waiting checks are never success. Standards, Spec, correction,
+  and gate invocations are unchanged during observation, and at most one
+  best-effort approval dispatch fires per cycle.
+
+Operator distinction: an unreadable end (`cannot prove CI checks for the
+reviewed HEAD`) means GitHub could not be read — it is not evidence about
+the commit. Repeated reads inside the same still-running cycle reobserve
+the same SHA without launching additional reviewers, corrections, or
+gates; a new invocation after terminal unreadable `BLOCKED` reexecutes
+the normal review/gate flow. Unreadable `BLOCKED` leaves CI unproven and
+requires operator inspection of the exact-HEAD checks/evidence before
+choosing recovery; it does not reuse prior reviews. There is no CI-only
+resume mode. An observed nonpass (`CI checks for the reviewed
+HEAD are not successful`, or awaiting trusted approval) reports what CI
+actually said. No claim is made about why a historical read failed.
 
 Both axes stay independent: one axis never cancels or reranks the other, and
 Muse is invoked only when blocking findings require an in-scope code

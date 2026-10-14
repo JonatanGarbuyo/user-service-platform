@@ -101,3 +101,95 @@ export async function getRepoSlug(execute: CommandExecutor = runCommand): Promis
   ]);
   return stdout.trim();
 }
+
+// Bounded read recovery for exact-HEAD CI observation (ticket #141). The
+// operator-approved policy recovers from up to two consecutive failed
+// authoritative check-run reads inside the same polling cycle; the third
+// consecutive failure stops as unreadable. Every failed read consumes one of
+// the existing total poll attempts and waits the existing interval when
+// another observation is allowed — there is no nested retry budget and no
+// wait after the final allowed observation or the third consecutive error.
+// Any successful fetch clears the consecutive-error state, even for
+// pending/empty/approval-waiting checks. Raw error payloads are never logged
+// or persisted; only the final error message travels with the result for the
+// existing terminal report.
+export const MAX_CONSECUTIVE_CHECK_READ_ERRORS = 3;
+
+export type CommitCheckPollOutcome = 'pass' | 'fail' | 'pending' | 'unreadable';
+
+export interface ObservedCheckReads {
+  runs: CommitCheckRun[];
+  decision: CheckPollDecision;
+  attempt: number;
+  totalAttempts: number;
+}
+
+export interface CommitCheckPollEvents {
+  fetchChecks: () => Promise<CommitCheckRun[]>;
+  sleep: (milliseconds: number) => Promise<void>;
+  onChecksObserved?: (observation: ObservedCheckReads) => void | Promise<void>;
+}
+
+export interface CommitCheckPollResult {
+  outcome: CommitCheckPollOutcome;
+  runs: CommitCheckRun[];
+  attemptsUsed: number;
+  failedReads: number;
+  readError?: string;
+}
+
+export async function pollCommitCheckRunsWithReadRecovery(
+  events: CommitCheckPollEvents,
+): Promise<CommitCheckPollResult> {
+  let consecutiveErrors = 0;
+  let failedReads = 0;
+  let lastRuns: CommitCheckRun[] = [];
+  let readError: string | undefined;
+  for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
+    const isLastAttempt = attempt === CHECK_POLL_ATTEMPTS - 1;
+    let runs: CommitCheckRun[];
+    try {
+      runs = await events.fetchChecks();
+    } catch (error) {
+      consecutiveErrors += 1;
+      failedReads += 1;
+      readError = error instanceof Error ? error.message : String(error);
+      if (consecutiveErrors >= MAX_CONSECUTIVE_CHECK_READ_ERRORS) {
+        return {
+          outcome: 'unreadable',
+          runs: lastRuns,
+          attemptsUsed: attempt + 1,
+          failedReads,
+          readError,
+        };
+      }
+      if (!isLastAttempt) {
+        await events.sleep(CHECK_POLL_DELAY_MS);
+      }
+      continue;
+    }
+    consecutiveErrors = 0;
+    readError = undefined;
+    lastRuns = runs;
+    const decision = decideCheckPoll(runs);
+    await events.onChecksObserved?.({
+      runs,
+      decision,
+      attempt,
+      totalAttempts: CHECK_POLL_ATTEMPTS,
+    });
+    if (decision !== 'pending') {
+      return { outcome: decision, runs, attemptsUsed: attempt + 1, failedReads };
+    }
+    if (!isLastAttempt) {
+      await events.sleep(CHECK_POLL_DELAY_MS);
+    }
+  }
+  return {
+    outcome: consecutiveErrors > 0 ? 'unreadable' : 'pending',
+    runs: lastRuns,
+    attemptsUsed: CHECK_POLL_ATTEMPTS,
+    failedReads,
+    ...(readError === undefined ? {} : { readError }),
+  };
+}

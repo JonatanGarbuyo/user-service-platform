@@ -18,12 +18,10 @@ import {
 } from './review/cycle-policy.js';
 import { qualityGatesPass, runQualityGates, type GateResult } from './review/gates.js';
 import {
-  CHECK_POLL_ATTEMPTS,
-  CHECK_POLL_DELAY_MS,
-  decideCheckPoll,
   fetchCommitCheckRuns,
   getRepoSlug,
   hasApprovalWaitingRuns,
+  pollCommitCheckRunsWithReadRecovery,
   type CheckPollDecision,
   type CommitCheckRun,
 } from './review/pr-checks.js';
@@ -658,10 +656,7 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       }
       const repoSlug = await getRepoSlug();
       await setCycleStage(recorder, 'exact-HEAD CI');
-      let checkDecision: CheckPollDecision = 'pending';
-      let lastRuns: CommitCheckRun[] = [];
       let lastWorkflowRuns: HeadWorkflowRun[] = [];
-      let ciFetchError: string | undefined;
       // Ticket #47 liveness: the first observation of `action_required`
       // triggers one best-effort immediate approval request via
       // `repository_dispatch` (which GitHub delivers even for
@@ -670,94 +665,98 @@ async function runCycle(recorder: RunSummaryRecorder): Promise<void> {
       // Corrected-HEAD regression (#60/PR #68): a zero-job `action_required`
       // ci run surfaces no commit check-run, so the canonical exact-HEAD
       // Actions workflow runs are observed alongside commit check-runs.
+      // Ticket #141: the shipped poll below recovers from up to two
+      // consecutive failed check-run reads inside this same cycle and stops
+      // unreadable on the third consecutive failure. Every failed read consumes
+      // the same 72-attempt/10-second budget, a successful read clears the
+      // error state, and recovery never reruns reviewers, gates, or
+      // corrections.
       let approvalDispatchRequested = false;
-      for (let attempt = 0; attempt < CHECK_POLL_ATTEMPTS; attempt += 1) {
-        let runs: CommitCheckRun[];
-        try {
-          runs = await fetchCommitCheckRuns(repoSlug, head);
-        } catch (error) {
-          // Ticket #47: a transient check-read failure is a recoverable
-          // BLOCKED wait, never an unhandled FATAL.
-          ciFetchError = errorMessage(error);
-          break;
-        }
-        lastRuns = runs;
-        for (const run of runs) {
-          console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
-        }
-        // Best-effort workflow-run observation only: a transient read failure
-        // degrades to commit check-runs plus the scheduled backstop and never
-        // fails the delivery flow.
-        let workflowRuns: HeadWorkflowRun[] = [];
-        try {
-          workflowRuns = await fetchHeadWorkflowRuns(repoSlug, head, runCommand);
-        } catch (error) {
-          console.log(
-            `Exact-HEAD workflow-run observation failed (check-runs remain authoritative): ${errorMessage(error)}`,
-          );
-        }
-        lastWorkflowRuns = workflowRuns;
-        for (const run of workflowRuns) {
-          console.log(
-            `workflow ${run.workflowName} run ${String(run.runId)}: ${run.status}/${run.conclusion ?? 'none'}`,
-          );
-        }
-        checkDecision = decideCheckPoll(runs);
-        if (checkDecision !== 'pending') {
-          break;
-        }
-        const approvalWaiting =
-          hasApprovalWaitingRuns(runs) || hasApprovalWaitingWorkflowRuns(workflowRuns);
-        if (approvalWaiting) {
-          console.log(
-            `CI checks for ${head} are awaiting trusted approval (action_required); waiting for the approver before rechecking.`,
-          );
-          if (!approvalDispatchRequested) {
-            approvalDispatchRequested = true;
-            try {
-              const ticket = parseTicketBranch(pr.headRefName);
-              const awaitingRun = workflowRuns.find((run) => run.conclusion === 'action_required');
-              await requestApprovalDispatch(
-                runCommand,
-                repoSlug,
-                ticket === null
-                  ? {
-                      pr: pr.number,
-                      headSha: head,
-                      ...(awaitingRun === undefined ? {} : { runId: awaitingRun.runId }),
-                    }
-                  : {
-                      pr: pr.number,
-                      headSha: head,
-                      ticket,
-                      ...(awaitingRun === undefined ? {} : { runId: awaitingRun.runId }),
-                    },
-              );
-              console.log(
-                `Requested trusted CI approval via repository_dispatch for PR #${String(pr.number)} at ${head}.`,
-              );
-            } catch (error) {
-              console.log(
-                `Approval dispatch request failed (scheduled backstop remains): ${errorMessage(error)}`,
-              );
-            }
+      const poll = await pollCommitCheckRunsWithReadRecovery({
+        fetchChecks: () => fetchCommitCheckRuns(repoSlug, head),
+        sleep: (milliseconds) => sleep(milliseconds),
+        onChecksObserved: async ({ runs, decision, attempt, totalAttempts }) => {
+          for (const run of runs) {
+            console.log(`check ${run.name}: ${run.status}/${run.conclusion ?? 'none'}`);
           }
-        } else if (attempt < CHECK_POLL_ATTEMPTS - 1) {
-          console.log(`CI checks for ${head} are pending; waiting before rechecking.`);
-        }
-        if (attempt < CHECK_POLL_ATTEMPTS - 1) {
-          await sleep(CHECK_POLL_DELAY_MS);
-        }
-      }
+          // Best-effort workflow-run observation only: a transient read failure
+          // degrades to commit check-runs plus the scheduled backstop and never
+          // fails the delivery flow.
+          let workflowRuns: HeadWorkflowRun[] = [];
+          try {
+            workflowRuns = await fetchHeadWorkflowRuns(repoSlug, head, runCommand);
+          } catch (error) {
+            console.log(
+              `Exact-HEAD workflow-run observation failed (check-runs remain authoritative): ${errorMessage(error)}`,
+            );
+          }
+          lastWorkflowRuns = workflowRuns;
+          for (const run of workflowRuns) {
+            console.log(
+              `workflow ${run.workflowName} run ${String(run.runId)}: ${run.status}/${run.conclusion ?? 'none'}`,
+            );
+          }
+          if (decision !== 'pending') {
+            return;
+          }
+          const approvalWaiting =
+            hasApprovalWaitingRuns(runs) || hasApprovalWaitingWorkflowRuns(workflowRuns);
+          if (approvalWaiting) {
+            console.log(
+              `CI checks for ${head} are awaiting trusted approval (action_required); waiting for the approver before rechecking.`,
+            );
+            if (!approvalDispatchRequested) {
+              approvalDispatchRequested = true;
+              try {
+                const ticket = parseTicketBranch(pr.headRefName);
+                const awaitingRun = workflowRuns.find(
+                  (run) => run.conclusion === 'action_required',
+                );
+                await requestApprovalDispatch(
+                  runCommand,
+                  repoSlug,
+                  ticket === null
+                    ? {
+                        pr: pr.number,
+                        headSha: head,
+                        ...(awaitingRun === undefined ? {} : { runId: awaitingRun.runId }),
+                      }
+                    : {
+                        pr: pr.number,
+                        headSha: head,
+                        ticket,
+                        ...(awaitingRun === undefined ? {} : { runId: awaitingRun.runId }),
+                      },
+                );
+                console.log(
+                  `Requested trusted CI approval via repository_dispatch for PR #${String(pr.number)} at ${head}.`,
+                );
+              } catch (error) {
+                console.log(
+                  `Approval dispatch request failed (scheduled backstop remains): ${errorMessage(error)}`,
+                );
+              }
+            }
+          } else if (attempt < totalAttempts - 1) {
+            console.log(`CI checks for ${head} are pending; waiting before rechecking.`);
+          }
+        },
+      });
+      const lastRuns: CommitCheckRun[] = poll.runs;
+      // The poll outcome is authoritative: a recovered `pass`/`fail` reflects
+      // the last successful read, while `pending`/`unreadable` never becomes a
+      // pass — unreadable exhaustion stays distinguishable below.
+      const checkDecision: CheckPollDecision =
+        poll.outcome === 'pass' ? 'pass' : poll.outcome === 'fail' ? 'fail' : 'pending';
       const ciDecision: CiDecision =
         checkDecision === 'pass' ? 'pass' : checkDecision === 'fail' ? 'fail' : 'pending';
       recorder.setCi(
         ciDecision,
         lastRuns.map((run) => ({ name: run.name, status: run.status, conclusion: run.conclusion })),
       );
-      if (ciFetchError !== undefined) {
+      if (poll.outcome === 'unreadable') {
         console.error(
-          `REVIEW-CYCLE BLOCKED: cannot prove CI checks for the exact reviewed HEAD: ${ciFetchError}`,
+          `REVIEW-CYCLE BLOCKED: cannot prove CI checks for the exact reviewed HEAD: ${poll.readError ?? '(unknown read error)'}`,
         );
         process.exitCode = 1;
         await concludeWithSummary(
