@@ -13,8 +13,14 @@ import {
   summarizeWorkerLifecycle,
 } from '../../scripts/review/implementation-recovery.js';
 import { runFixCycleCorrection } from '../../scripts/agent/fix-cycle-correction.js';
+import { evidenceStreamingWorkerExecutor } from '../../scripts/review/evidence-streaming-executor.js';
 import { runWorkerStream, type SpawnedWorker } from '../../scripts/review/worker-stream.js';
-import { isWorkerTimeout, WorkerTimeoutError } from '../../scripts/review/worker-timeout.js';
+import {
+  isWorkerTimeout,
+  WorkerTimeoutError,
+  type WorkerLabel,
+} from '../../scripts/review/worker-timeout.js';
+import { createRunSummaryRecorder } from '../../scripts/review/run-summary.js';
 import type { CommandExecutor } from '../../scripts/review/runner.js';
 
 // Seam under test (ticket #138): bounded structured worker error diagnostics.
@@ -593,67 +599,39 @@ describe('shared safe error projection', () => {
     });
   });
 
-  it('persists the additive summary through the real review worker-stream executor', async () => {
-    // Mirrors scripts/review-cycle.ts evidenceStreamingWorkerExecutor:
-    // runWorkerStream -> createEvidenceCapture -> finalizeSkillEvidence.
-    // Direct finalizeSkillEvidence calls alone are not claimed as executor
-    // integration here.
-    async function runReviewExecutor(input: {
+  it('persists the additive summary through the shipped review worker-stream executor', async () => {
+    // Invokes the exact shipped implementation used by review-cycle Standards,
+    // Spec and loop-correction workers
+    // (scripts/review/evidence-streaming-executor.ts, imported by
+    // scripts/review-cycle.ts). No test-local executor replica remains.
+    async function runShippedExecutor(input: {
+      label: WorkerLabel;
       command: string;
       axis: string;
       script: string;
-      workerOptions?: { timeoutMs?: number };
+      timeoutMs?: number;
     }): Promise<{
-      lines: string[];
       workerError: unknown;
       persisted: Record<string, unknown>;
       terminated: unknown;
+      evidencePaths: readonly string[] | undefined;
     }> {
-      const capture = createEvidenceCapture();
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      let workerError: unknown = null;
-      try {
-        await runWorkerStream(
-          process.execPath,
-          ['-e', input.script],
-          {
-            label: 'review-error-fixture',
-            timeoutMs: input.workerOptions?.timeoutMs,
-            killGraceMs: 500,
-            groupPollMs: 20,
-            stdoutLogFilter: suppressJsonWorkerLines,
-          },
-          undefined,
-          {
-            onStdoutLine: (line) => {
-              capture.pushLine(line);
-            },
-          },
-        );
-      } catch (error: unknown) {
-        workerError = error;
-      } finally {
-        logSpy.mockRestore();
-        errorSpy.mockRestore();
-      }
       const written = new Map<string, string>();
-      const innerLog = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      try {
-        const result = await finalizeSkillEvidence(
-          {
-            invocation: buildEvidenceInvocation({
-              worker: 'review-cycle',
-              command: input.command,
-              axis: input.axis,
-              attempt: 1,
-              workerStartHead: 'a'.repeat(40),
-              env: {},
-            }),
-            lines: capture.lines,
-            truncatedStream: capture.wasTruncated(),
-          },
-          {
+      const recorder = createRunSummaryRecorder();
+      const executor = evidenceStreamingWorkerExecutor(
+        input.label,
+        {
+          command: input.command,
+          axis: input.axis,
+          attempt: 1,
+          workerStartHead: 'a'.repeat(40),
+        },
+        recorder,
+        {
+          ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+          killGraceMs: 500,
+          groupPollMs: 20,
+          persistDeps: {
             dir: '.test-evidence',
             mkdir: () => Promise.resolve(),
             writeFile: (path: string, contents: string) => {
@@ -661,19 +639,35 @@ describe('shared safe error projection', () => {
               return Promise.resolve();
             },
           },
-        );
-        const persisted = JSON.parse(
-          written.get(result.evidencePath ?? '.test-evidence/missing') ?? '{}',
-        ) as Record<string, unknown>;
+        },
+      );
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let workerError: unknown = null;
+      try {
+        await executor(process.execPath, ['-e', input.script]);
+      } catch (error: unknown) {
+        workerError = error;
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+      const persisted = JSON.parse([...written.values()].at(0) ?? '{}') as Record<string, unknown>;
+      const summary = recorder.finish('READY');
+      if (workerError === null) {
         return {
-          lines: [...capture.lines],
           workerError,
           persisted,
-          terminated: (workerError as { terminated?: unknown } | null)?.terminated,
+          terminated: true,
+          evidencePaths: summary.skillEvidencePaths,
         };
-      } finally {
-        innerLog.mockRestore();
       }
+      return {
+        workerError,
+        persisted,
+        terminated: (workerError as { terminated?: unknown }).terminated,
+        evidencePaths: summary.skillEvidencePaths,
+      };
     }
 
     const errorEnvelope = (status: number, retryable: boolean): string =>
@@ -686,70 +680,78 @@ describe('shared safe error projection', () => {
     const failureScript = `console.log(${JSON.stringify(errorEnvelope(429, true))}); process.exit(1);`;
     const timeoutScript = `console.log(${JSON.stringify(errorEnvelope(429, true))}); setInterval(() => undefined, 50);`;
 
-    const success = await runReviewExecutor({
-      command: 'review-standards',
-      axis: 'standards',
-      script: successScript,
-    });
-    expect(success.workerError).toBeNull();
-    expect(success.lines).toHaveLength(1);
-    expect(success.persisted).toMatchObject({
-      lifecycle: {
-        errors: {
-          total: 1,
-          byName: { APIError: 1 },
-          apiStatusCounts: { '401': 1 },
-          apiRetryableFalse: 1,
-        },
-      },
-    });
+    const invocations = [
+      { label: 'standards', command: 'review-standards', axis: 'standards' },
+      { label: 'spec', command: 'review-spec', axis: 'spec' },
+      { label: 'address-review', command: 'address-review', axis: 'address-review' },
+    ] as const satisfies readonly { label: WorkerLabel; command: string; axis: string }[];
 
-    for (const invocation of [
-      { command: 'review-standards', axis: 'standards' },
-      { command: 'review-spec', axis: 'spec' },
-      { command: 'address-review', axis: 'address-review' },
-    ] as const) {
-      const failure = await runReviewExecutor({
-        ...invocation,
-        script: failureScript,
+    for (const invocation of invocations) {
+      const success = await runShippedExecutor({ ...invocation, script: successScript });
+      expect(success.workerError).toBeNull();
+      expect(success.terminated).toBe(true);
+      expect(success.evidencePaths).toHaveLength(1);
+      expect(success.persisted).toMatchObject({
+        lifecycle: {
+          capturedLineCount: 1,
+          errors: {
+            total: 1,
+            byName: { APIError: 1 },
+            apiStatusCounts: { '401': 1 },
+            apiRetryableTrue: 0,
+            apiRetryableFalse: 1,
+            apiRetryableUnknown: 0,
+          },
+        },
       });
+    }
+
+    for (const invocation of invocations) {
+      const failure = await runShippedExecutor({ ...invocation, script: failureScript });
       expect(failure.workerError).not.toBeNull();
       expect(isWorkerTimeout(failure.workerError)).toBe(false);
       expect(failure.terminated).toBe(true);
-      expect(failure.lines).toHaveLength(1);
+      expect(failure.evidencePaths).toHaveLength(1);
       expect(failure.persisted).toMatchObject({
         lifecycle: {
+          capturedLineCount: 1,
           errors: {
             total: 1,
             byName: { APIError: 1 },
             apiStatusCounts: { '429': 1 },
             apiRetryableTrue: 1,
+            apiRetryableFalse: 0,
+            apiRetryableUnknown: 0,
           },
         },
       });
       expect(JSON.stringify(failure.persisted)).toContain('"APIError"');
     }
 
-    const timeout = await runReviewExecutor({
-      command: 'review-spec',
-      axis: 'spec',
-      script: timeoutScript,
-      workerOptions: { timeoutMs: 500 },
-    });
-    expect(isWorkerTimeout(timeout.workerError)).toBe(true);
-    expect(timeout.terminated).toBe(true);
-    expect(timeout.lines).toHaveLength(1);
-    expect(timeout.persisted).toMatchObject({
-      lifecycle: {
-        errors: {
-          total: 1,
-          byName: { APIError: 1 },
-          apiStatusCounts: { '429': 1 },
-          apiRetryableTrue: 1,
+    for (const invocation of invocations) {
+      const timeout = await runShippedExecutor({
+        ...invocation,
+        script: timeoutScript,
+        timeoutMs: 500,
+      });
+      expect(isWorkerTimeout(timeout.workerError)).toBe(true);
+      expect(timeout.terminated).toBe(true);
+      expect(timeout.evidencePaths).toHaveLength(1);
+      expect(timeout.persisted).toMatchObject({
+        lifecycle: {
+          capturedLineCount: 1,
+          errors: {
+            total: 1,
+            byName: { APIError: 1 },
+            apiStatusCounts: { '429': 1 },
+            apiRetryableTrue: 1,
+            apiRetryableFalse: 0,
+            apiRetryableUnknown: 0,
+          },
         },
-      },
-    });
-  }, 30000);
+      });
+    }
+  }, 60000);
 
   it('keeps the record on persistence failure without manufacturing approval', async () => {
     const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
