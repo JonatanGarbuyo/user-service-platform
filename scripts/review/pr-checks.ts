@@ -31,6 +31,7 @@ export const CHECK_POLL_DELAY_MS = 10000;
 export function hasApprovalWaitingRuns(runs: CommitCheckRun[]): boolean {
   return runs.some((run) => run.conclusion === 'action_required');
 }
+
 // Polling policy for exact-SHA checks: pending/absent/awaiting-approval runs
 // wait, a completed non-success other than `action_required` fails fast, and
 // only a non-empty all-success set passes.
