@@ -12,9 +12,12 @@
 //   runtime state, credentials/key files, build outputs, evidence dirs,
 //   workflow files (trusted-publication boundary) and outside-worktree paths;
 // - symlinks are never followed;
-// - diagnostics carry only allowlisted event/tool names, counts, timestamps
-//   and last-known status — never prompts, reasoning, text, inputs, outputs,
-//   shell commands, payloads, recipients, credentials or tokens;
+// - diagnostics carry only allowlisted event/tool names, counts, timestamps,
+//   last-known status and the additive bounded structured `errors` summary
+//   (exact permitted protocol names, validated APIError status/retryability)
+//   — never prompts, reasoning, text, inputs, outputs, shell commands,
+//   payloads, recipients, credentials, tokens, raw error messages, stacks,
+//   headers/bodies, metadata/cause or provider identifiers;
 // - all snapshots are bounded (paths, per-file bytes, total bytes); bound
 //   exhaustion and command/filesystem failures report honest
 //   incomplete/unavailable status and never replace the original
@@ -76,6 +79,14 @@ export interface RecoveryDiagnostics {
   unknownEvents: number;
   status: RecoveryStatus;
   reasons: string[];
+  /**
+   * Additive bounded structured-error summary (ticket #138). Older persisted
+   * records may lack it; new summaries always set it. Counts only, never raw
+   * names outside the whitelist, messages, stacks, headers, bodies,
+   * metadata, provider identifiers, prompts, reasoning, tool I/O, commands,
+   * recipient data or credentials.
+   */
+  errors?: WorkerErrorSummary;
 }
 
 export interface ImplementationRecoveryRecord {
@@ -453,6 +464,117 @@ function asNonEmptyString(value: unknown): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
+// Pinned OpenCode 1.18.30 protocol error names (parent spec #137). These are
+// reported protocol types, not confirmed root causes. Any missing or
+// unsupported name maps to the fixed `unknown` bucket; raw names never become
+// keys or free text.
+export const WORKER_ERROR_NAMES = [
+  'APIError',
+  'ProviderAuthError',
+  'MessageOutputLengthError',
+  'MessageAbortedError',
+  'StructuredOutputError',
+  'ContextOverflowError',
+  'ContentFilterError',
+  'UnknownError',
+] as const;
+
+export type WorkerErrorName = (typeof WORKER_ERROR_NAMES)[number];
+
+export type WorkerErrorBucket = WorkerErrorName | 'unknown';
+
+const WORKER_ERROR_NAME_SET: ReadonlySet<string> = new Set(WORKER_ERROR_NAMES);
+
+// Bounded structured-error summary (ticket #138). Counts only, in the current
+// captured prefix. For recognized APIError only, validated HTTP status counts
+// (finite integer 100..599, keyed by its decimal string) and literal boolean
+// retryability are retained. Missing/invalid status/retryability stays
+// explicitly unknown/unclassified via absence from `apiStatusCounts` and via
+// `apiRetryableUnknown`. No coercion: strings, fractional, out-of-range and
+// non-finite numbers are never copied. Reported retryability has no execution
+// authority.
+export interface WorkerErrorSummary {
+  total: number;
+  byName: Partial<Record<WorkerErrorBucket, number>>;
+  apiStatusCounts: Record<string, number>;
+  apiRetryableTrue: number;
+  apiRetryableFalse: number;
+  apiRetryableUnknown: number;
+}
+
+export function emptyWorkerErrorSummary(): WorkerErrorSummary {
+  return {
+    total: 0,
+    byName: {},
+    apiStatusCounts: {},
+    apiRetryableTrue: 0,
+    apiRetryableFalse: 0,
+    apiRetryableUnknown: 0,
+  };
+}
+
+function isValidHttpStatus(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    Number.isFinite(value) &&
+    value >= 100 &&
+    value <= 599
+  );
+}
+
+// Single shared safe projection for implementation recovery and finalized
+// skill evidence. Inspects top-level `error` events in the captured prefix
+// only. Reads exactly `error.name`, `error.data.statusCode` and
+// `error.data.isRetryable`; every other field (messages, stacks,
+// headers/bodies, nested causes/metadata, provider identifiers, prompts,
+// reasoning, tool input/output, commands, recipient data, credentials) is
+// never read into the summary.
+export function summarizeWorkerErrors(lines: readonly string[]): WorkerErrorSummary {
+  const summary = emptyWorkerErrorSummary();
+  for (const line of lines) {
+    if (line.trim() === '') {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch {
+      continue;
+    }
+    const record = asRecord(parsed);
+    if (record?.type !== 'error') {
+      continue;
+    }
+    summary.total += 1;
+    const errorObj = asRecord(record.error);
+    const rawName = errorObj?.name;
+    const bucket: WorkerErrorBucket =
+      typeof rawName === 'string' && WORKER_ERROR_NAME_SET.has(rawName)
+        ? (rawName as WorkerErrorBucket)
+        : 'unknown';
+    summary.byName[bucket] = (summary.byName[bucket] ?? 0) + 1;
+    if (bucket !== 'APIError') {
+      continue;
+    }
+    const dataObj = asRecord(errorObj?.data);
+    const statusRaw = dataObj?.statusCode;
+    if (isValidHttpStatus(statusRaw)) {
+      const key = String(statusRaw);
+      summary.apiStatusCounts[key] = (summary.apiStatusCounts[key] ?? 0) + 1;
+    }
+    const retryRaw = dataObj?.isRetryable;
+    if (retryRaw === true) {
+      summary.apiRetryableTrue += 1;
+    } else if (retryRaw === false) {
+      summary.apiRetryableFalse += 1;
+    } else {
+      summary.apiRetryableUnknown += 1;
+    }
+  }
+  return summary;
+}
+
 // Safe lifecycle metadata: allowlisted event/tool names, counts, bounded
 // timestamps and last-known status only. Raw prompts, reasoning, text,
 // inputs, outputs, shell commands, payloads, recipients, credentials and
@@ -558,6 +680,7 @@ export function summarizeWorkerLifecycle(lines: readonly string[]): RecoveryDiag
     unknownEvents,
     status,
     reasons,
+    errors: summarizeWorkerErrors(lines),
   };
 }
 

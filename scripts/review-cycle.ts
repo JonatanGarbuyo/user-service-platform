@@ -36,7 +36,6 @@ import {
   runAddressReview,
   runCommand,
   runReviewAxis,
-  type CommandExecutor,
   type CommandResult,
 } from './review/runner.js';
 import {
@@ -59,21 +58,10 @@ import {
   listChangedWorkflowFiles,
   persistWorkflowHandoffBundle,
 } from './review/workflow-handoff.js';
-import {
-  isWorkerTimeout,
-  timeoutDetails,
-  timeoutForWorker,
-  type WorkerLabel,
-} from './review/worker-timeout.js';
+import { isWorkerTimeout, timeoutDetails, timeoutForWorker } from './review/worker-timeout.js';
 import { runWorkerStream } from './review/worker-stream.js';
 import { runReviewAxesSequentially } from './review/review-scheduling.js';
-import {
-  buildEvidenceInvocation,
-  commandSessionExporter,
-  createEvidenceCapture,
-  finalizeSkillEvidence,
-  suppressJsonWorkerLines,
-} from './review/evidence-worker.js';
+import { evidenceStreamingWorkerExecutor } from './review/evidence-streaming-executor.js';
 
 interface CycleOptions {
   maxCycles: number;
@@ -107,68 +95,6 @@ async function refreshPrUntilHead(
     }
   }
   return null;
-}
-
-// Evidence-capable worker seam (ticket #116): Standards, Spec and
-// address-review workers stream the same live output under the same bounds,
-// while real JSON tool records are captured into minimal attributable skill
-// evidence. Raw JSON tool/text/reasoning lines are captured but not echoed so
-// transcripts never become logs; lifecycle, heartbeat and watchdog messages
-// are preserved. Collection is best-effort and additive: persistence
-// failures and incomplete coverage never change the worker outcome, reviewer
-// markers, gates or exact-HEAD CI.
-function evidenceStreamingWorkerExecutor(
-  label: WorkerLabel,
-  evidence: {
-    command: string;
-    axis: string;
-    attempt: number;
-    workerStartHead: string;
-  },
-  recorder: RunSummaryRecorder,
-): CommandExecutor {
-  return async (command, args) => {
-    const capture = createEvidenceCapture();
-    const settle = async (): Promise<void> => {
-      try {
-        const result = await finalizeSkillEvidence({
-          invocation: buildEvidenceInvocation({
-            worker: 'review-cycle',
-            command: evidence.command,
-            axis: evidence.axis,
-            attempt: evidence.attempt,
-            workerStartHead: evidence.workerStartHead,
-          }),
-          lines: capture.lines,
-          exporter: commandSessionExporter(),
-          truncatedStream: capture.wasTruncated(),
-        });
-        if (result.evidencePath !== undefined) {
-          recorder.recordSkillEvidencePath(result.evidencePath);
-        }
-      } catch {
-        // Best-effort: evidence collection never changes the worker outcome.
-      }
-    };
-    try {
-      const result = await runWorkerStream(
-        command,
-        args,
-        { label, timeoutMs: timeoutForWorker(label), stdoutLogFilter: suppressJsonWorkerLines },
-        undefined,
-        {
-          onStdoutLine: (line) => {
-            capture.pushLine(line);
-          },
-        },
-      );
-      await settle();
-      return result;
-    } catch (error) {
-      await settle();
-      throw error;
-    }
-  };
 }
 
 // Quality gates run on the same bounded streaming path as OpenCode workers

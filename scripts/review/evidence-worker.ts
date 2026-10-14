@@ -24,7 +24,7 @@ import {
   type SkillEvidenceRecord,
   type SkillEvidenceWorker,
 } from './skill-evidence.js';
-import { summarizeWorkerLifecycle } from './implementation-recovery.js';
+import { emptyWorkerErrorSummary, summarizeWorkerLifecycle } from './implementation-recovery.js';
 import { runBoundedCommand, withJsonFormat, type CommandExecutor } from './runner.js';
 
 export const SKILL_EVIDENCE_PATH_MESSAGE_PREFIX = 'Skill evidence:';
@@ -307,6 +307,7 @@ function buildSkillEvidenceLifecycle(
     status,
     reasons: reasons.slice(0, 4),
     captureTruncated,
+    errors: summary.errors ?? emptyWorkerErrorSummary(),
   };
 }
 

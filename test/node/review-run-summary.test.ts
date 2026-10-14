@@ -210,16 +210,21 @@ describe('review-cycle evidence executor wiring (ticket #116)', () => {
     return readFileSync('scripts/review-cycle.ts', 'utf8');
   }
 
+  function readExecutorSource(): string {
+    return readFileSync('scripts/review/evidence-streaming-executor.ts', 'utf8');
+  }
+
   it('routes standards, spec and address-review workers through the evidence seam', () => {
     const source = readReviewCycleSource();
 
-    expect(source).toMatch(/function evidenceStreamingWorkerExecutor/);
+    expect(source).toMatch(/evidence-streaming-executor\.js/);
+    expect(source).toMatch(/evidenceStreamingWorkerExecutor/);
     const usages = source.match(/evidenceStreamingWorkerExecutor\(/g) ?? [];
     expect(usages.length).toBeGreaterThanOrEqual(4);
   });
 
   it('captures JSON worker lines while keeping live lifecycle output usable', () => {
-    const source = readReviewCycleSource();
+    const source = readExecutorSource();
 
     expect(source).toMatch(/createEvidenceCapture\(\)/);
     expect(source).toMatch(/finalizeSkillEvidence\(/);
@@ -229,7 +234,7 @@ describe('review-cycle evidence executor wiring (ticket #116)', () => {
   });
 
   it('finalizes evidence best-effort on success and failure without changing the worker outcome', () => {
-    const source = readReviewCycleSource();
+    const source = readExecutorSource();
 
     expect(source).toMatch(/await settle\(\)/);
     // The executor settles on both paths: after success and after a worker error.

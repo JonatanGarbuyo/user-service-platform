@@ -175,7 +175,7 @@ The [bounded startup diagnosis](https://github.com/JonatanGarbuyo/user-service-p
 
 The former Standards startup and trusted-approval blockers are resolved and merged on main through PR #109. The temporary runner probes were removed in main commit `3ed03977cce66bdd4029f7eddc93b0fa8d138440`; the agent workflows reinstall dependencies deterministically (`npm ci`) before quality gates, so no dependency-restoration blocker remains. The extra Standards-looking report emitted by Spec in run `36954225501` has an invalidated marker and remains informational. Every configured reviewer must publish only its own axis; legacy model identities never satisfy the recovered configuration.
 
-#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Recovery #127 is completed via merged PR #128 (main `87fe7c15770835d7b03f511868262d0c66e80d94`; CI 37853951844 and sandbox deploy 37853951800 succeeded). #124 is accepted and closed via merged PR #129 (main `c24215b84019f8b42887854a3a9559399d33c3a9`); sandbox deploy run 38057103943 succeeded on that commit. #125 is accepted and closed via merged PR #130 (main `324933913cff9100bedd1d2d80b39740a72b1429`; CI 38249267972, sandbox deploy run 38249656941 succeeded). #126 is accepted and closed via merged PR #131 (main `9a5e0c75717a6e4707e9964aa550ffbd9a091f52`; reviewed HEAD `62e174d9ed0ca73733a9e69e18b26b4ecd6506e1` with Standards PASS 6125453202, Spec PASS 6125480704, exact-HEAD CI 38251894375, READY recovery 38255595340; main CI 38258618931 and sandbox deploy/smoke 38258618860 succeeded). Parent spec #123 is closed/completed by operator acceptance comment 6126035306. Current work is ticket #132 (release-state reconciliation of this checkpoint and checklist); it introduces no product, architecture, or deployment change. Run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
+#114 (local Matt skill dependencies) and #115 (its publication) are closed/completed on main at `e885e1c84460b2af6c7aeceac156314645febba1`. The 25-GitHub-run skill-usage audit is complete and recorded in the Product frontier section above; no ChatGPT conversation dataset exists and none is inferred. Skill-evidence work (#116/#117, PR #118) and the manual-QA mailbox slice (#119, PR #120) are closed/merged. #121 (release reconciliation for the operator-authorized three-recipient sandbox configuration plus the 2026-10-07 manual Identity acceptance) is closed/completed via PR #122. Recovery #127 is completed via merged PR #128 (main `87fe7c15770835d7b03f511868262d0c66e80d94`; CI 37853951844 and sandbox deploy 37853951800 succeeded). #124 is accepted and closed via merged PR #129 (main `c24215b84019f8b42887854a3a9559399d33c3a9`); sandbox deploy run 38057103943 succeeded on that commit. #125 is accepted and closed via merged PR #130 (main `324933913cff9100bedd1d2d80b39740a72b1429`; CI 38249267972, sandbox deploy run 38249656941 succeeded). #126 is accepted and closed via merged PR #131 (main `9a5e0c75717a6e4707e9964aa550ffbd9a091f52`; reviewed HEAD `62e174d9ed0ca73733a9e69e18b26b4ecd6506e1` with Standards PASS 6125453202, Spec PASS 6125480704, exact-HEAD CI 38251894375, READY recovery 38255595340; main CI 38258618931 and sandbox deploy/smoke 38258618860 succeeded). Parent spec #123 is closed/completed by operator acceptance comment 6126035306. At that time, current work was ticket #132 (release-state reconciliation of this checkpoint and checklist); it introduced no product, architecture, or deployment change. That #132-active status is historical and superseded by the Reviewer lifecycle section below (#132 closed via PR #133; current diagnostic frontier #137/#138). Run the configured review cycle on the published HEAD, preserve independent reviewer identities and exact-HEAD evidence, and reconcile any new finding or moved HEAD against live GitHub.
 
 ### Administration UI checkpoint (2026-10-09)
 
@@ -237,18 +237,47 @@ ChatGPT browser observations.
 - [x] Missing-User URL, clear and multi-page pagination: automated validation evidence only (reviewed real Worker/D1 browser/HTTP suite on PR #131); not individually reported manually and not marked as manually observed.
 - [x] No production promotion is authorized by this checklist; none was performed.
 
-## Reviewer lifecycle evidence pilot (2026-10-12)
+## Reviewer lifecycle and structured error diagnostics (2026-10-14)
 
-Ticket #135 is being implemented in draft PR [Persist safe reviewer lifecycle diagnostics](https://github.com/JonatanGarbuyo/user-service-platform/pull/136). Two prior hosted `/implement` executions failed without partial changes; the captured evidence showed an error event and no tool events, but does not establish the external provider/CLI cause. Do not launch an identical third worker or change model, timeout, retry, permission, workflow, or gate configuration without new evidence and authorization.
+Spec #134 and slice #135 are accepted and closed via merged PR #136
+(`5eee5bacc41d0f5db5050e233312757f7a5c5ad6`). Configured Standards PASS
+`6131563456` and Spec PASS `6131587502`; exact-HEAD CI `38299332952`
+succeeded after maintainer approval; post-merge main CI `38489267066`,
+sandbox deployment/automated smoke `38489267070` and Pages `38489266293`
+succeeded. Completion record:
+https://github.com/JonatanGarbuyo/user-service-platform/issues/134#issuecomment-6158017483.
 
-The proposed additive `lifecycle` summary reuses the existing safe worker lifecycle summarizer and is persisted alongside the existing skill-evidence record. It distinguishes zero captured lines (`unavailable`) from recognized protocol progress such as `step_start` without tool calls; protocol progress does not imply skill invocation, session attribution, reviewer success, or approval. Raw event fields are not persisted, and truncation/malformed input must be reported honestly. Collection remains best-effort on success, failure and timeout.
+The additive `lifecycle` summary reuses the shared safe worker lifecycle
+summarizer and is persisted alongside the existing skill-evidence record. It
+distinguishes zero captured lines (`unavailable`) from recognized protocol
+progress such as `step_start` without tool calls; protocol progress does not
+imply skill invocation, session attribution, reviewer success, or approval.
+Ticket #138 adds the additive structured `errors` summary on the same shared
+projection: exact permitted protocol error names, validated APIError HTTP
+status (finite integer 100..599) and literal boolean retryability only.
+Missing/unsupported/invalid metadata stays explicitly unknown/unclassified;
+raw names outside the whitelist, messages, stacks, headers/bodies,
+metadata/cause, provider identifiers, prompts, reasoning, tool input/output,
+commands, recipient data and credentials are never stored or logged. Reported
+retryability has no execution authority. Raw event fields are not persisted,
+and truncation/malformed input is reported honestly. Collection remains
+best-effort on success, failure and timeout and never masks the original
+outcome, termination, review approval, READY or CI gates.
 
-Draft PR exact-HEAD CI passed at `5562a9a3b62898d4dd04a16bd84606980d90e813` (lint, format, typecheck, OpenAPI drift, Workers tests and Node harness tests). Documentation updates are being checked on the newer PR HEAD. The configured independent Standards/Spec reviews remain outstanding, and the external hang remains unproven. No merge or deployment has been performed.
+Current diagnostic frontier is parent spec #137 (open) and implementation
+ticket #138 (active on its isolated ticket branch/worktree). The two
+historical implement failures (runs `38265600704` and `38267513787`) retain
+only one error event with no tools; their cause remains unproven, as does any
+live failure-rate improvement. Do not launch an identical third execution of
+#135, change model, timeout, retry, permission, workflow, or gate
+configuration, or infer provider/CLI cause without new evidence and
+authorization. When GitHub approval is needed, give the user the exact run
+link and let them approve; use the integration, no browser login.
 
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. The remaining open work is ticket #132 (this release-state reconciliation). Query GitHub before selecting new work.
+- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), and reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`). The current open diagnostic work is spec #137 plus implementation ticket #138. Query GitHub before selecting new work.
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
