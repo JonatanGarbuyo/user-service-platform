@@ -12,9 +12,20 @@ const execFileAsync = promisify(execFile);
 // real exit status, the real persisted summary, exact child-invocation counts
 // and the exact queried SHA — no test-local orchestration replica. Fixture
 // children validate orchestration behavior only, never model/gate success.
+//
+// Ticket #144 confines accelerated time to this suite's explicitly spawned
+// test CLI child: the child environment sets REVIEW_CYCLE_ACCELERATE_POLL=1
+// and appends `--import <test-owned preload>` to its own NODE_OPTIONS only.
+// The parent vitest process, normal production invocations and unrelated
+// timers are unaffected. The preload accelerates only the known 10_000ms CI
+// polling sleep, records each original requested duration to
+// REVIEW_CYCLE_POLL_LOG, preserves callback arguments/handle semantics, and
+// delegates every other timer unchanged.
 const REPO_ROOT = process.cwd();
 const HEAD = '1234567890abcdef1234567890abcdef12345678';
 const PR_NUMBER = 42;
+const CI_POLL_PRELOAD = join(REPO_ROOT, 'test', 'node', 'ci-poll-time-control.mjs');
+const EXPECTED_CI_POLL_DELAY_MS = 10000;
 
 interface CheckReadScript {
   exit: 0 | 1;
@@ -158,6 +169,15 @@ async function runScenario(scenario: Scenario): Promise<CycleResult> {
 
   const tsxBin = join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
   const cycleScript = join(REPO_ROOT, 'scripts', 'review-cycle.ts');
+  // Isolated test-time control (ticket #144): only this suite's spawned CLI
+  // child observes the preload, through its own environment. The parent
+  // process environment is never mutated.
+  const pollLog = join(stateDir, 'poll-delays.log');
+  const parentNodeOptions = process.env.NODE_OPTIONS;
+  const childNodeOptions =
+    parentNodeOptions === undefined || parentNodeOptions === ''
+      ? `--import ${CI_POLL_PRELOAD}`
+      : `${parentNodeOptions} --import ${CI_POLL_PRELOAD}`;
   try {
     const { stdout, stderr } = await execFileAsync(tsxBin, [cycleScript, '--no-bell'], {
       cwd: workDir,
@@ -168,6 +188,9 @@ async function runScenario(scenario: Scenario): Promise<CycleResult> {
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
         FIXTURE_STATE: stateDir,
         FIXTURE_HEAD: HEAD,
+        REVIEW_CYCLE_ACCELERATE_POLL: '1',
+        REVIEW_CYCLE_POLL_LOG: pollLog,
+        NODE_OPTIONS: childNodeOptions,
       },
     });
     return { code: 0, stdout, stderr, workDir, stateDir };
@@ -236,6 +259,23 @@ async function expectSingleReviewPass(stateDir: string): Promise<void> {
   ]);
 }
 
+// Requested-delay vectors (ticket #144): the isolated preload records the
+// original duration of every accelerated CI polling sleep in the real child.
+// Each vector below is the deterministic sleep count for its scenario at the
+// unchanged production 10_000ms cadence.
+async function readRequestedPollDelays(stateDir: string): Promise<number[]> {
+  const lines = await readLines(stateDir, 'poll-delays.log');
+  return lines.map((line) => Number.parseInt(line.trim(), 10));
+}
+
+async function expectRequestedPollDelays(stateDir: string, expectedSleeps: number): Promise<void> {
+  const delays = await readRequestedPollDelays(stateDir);
+  expect(delays).toHaveLength(expectedSleeps);
+  for (const delay of delays) {
+    expect(delay).toBe(EXPECTED_CI_POLL_DELAY_MS);
+  }
+}
+
 describe('review-cycle CI read recovery (ticket #141)', () => {
   it('passes immediately when the first check-run read succeeds', async () => {
     const result = await runScenario({ checks: [{ exit: 0, out: passedCheck }] });
@@ -247,6 +287,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.ci).toMatchObject({ decision: 'pass' });
     await expectExactHeadQueries(result.stateDir, 1);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 0);
     expect(await readLines(result.stateDir, 'dispatch.log')).toHaveLength(0);
   });
 
@@ -265,6 +306,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.ci).toMatchObject({ decision: 'pass' });
     await expectExactHeadQueries(result.stateDir, 2);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 1);
   });
 
   it('recovers READY after two consecutive failed check-run reads', async () => {
@@ -283,6 +325,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.ci).toMatchObject({ decision: 'pass' });
     await expectExactHeadQueries(result.stateDir, 3);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 2);
   });
 
   it('blocks after three consecutive failed reads without extra reviewer or gate work', async () => {
@@ -301,6 +344,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.detail).toBe('cannot prove CI checks for the reviewed HEAD');
     await expectExactHeadQueries(result.stateDir, 3);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 2);
     expect(await readLines(result.stateDir, 'dispatch.log')).toHaveLength(0);
   });
 
@@ -319,6 +363,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.ci).toMatchObject({ decision: 'fail' });
     await expectExactHeadQueries(result.stateDir, 2);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 1);
   });
 
   it('resets the error state across valid pending reads instead of accumulating', async () => {
@@ -342,6 +387,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.ci).toMatchObject({ decision: 'pass' });
     await expectExactHeadQueries(result.stateDir, 6);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 5);
   });
 
   it('waits on missing check runs instead of reporting success', async () => {
@@ -357,6 +403,7 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.outcome).toBe('READY');
     expect(summary.ci).toMatchObject({ decision: 'pass' });
     await expectExactHeadQueries(result.stateDir, 2);
+    await expectRequestedPollDelays(result.stateDir, 1);
   });
 
   it('waits on approval-waiting checks with a single approval dispatch', async () => {
@@ -372,6 +419,99 @@ describe('review-cycle CI read recovery (ticket #141)', () => {
     expect(summary.outcome).toBe('READY');
     await expectExactHeadQueries(result.stateDir, 2);
     await expectSingleReviewPass(result.stateDir);
+    await expectRequestedPollDelays(result.stateDir, 1);
     expect(await readLines(result.stateDir, 'dispatch.log')).toHaveLength(1);
+  });
+});
+
+describe('review-cycle test-time isolation (ticket #144)', () => {
+  it('accelerates only the known CI polling sleep and preserves timer semantics', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ci-poll-isolation-'));
+    tmpRoots.push(root);
+    const logPath = join(root, 'poll-delays.log');
+    const script = [
+      'const started = Date.now();',
+      'const handle = setTimeout((first, second) => {',
+      "  console.log(JSON.stringify({ fired: 'poll', first, second, elapsed: Date.now() - started,",
+      '    hasRefresh: typeof handle.refresh, hasUnref: typeof handle.unref }));',
+      "}, 10000, 'x', 'y');",
+      'setTimeout(() => {',
+      "  console.log(JSON.stringify({ fired: 'other', elapsed: Date.now() - started }));",
+      '}, 25);',
+    ].join('\n');
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--import', CI_POLL_PRELOAD, '--eval', script],
+      {
+        timeout: 30000,
+        env: {
+          ...process.env,
+          REVIEW_CYCLE_ACCELERATE_POLL: '1',
+          REVIEW_CYCLE_POLL_LOG: logPath,
+        },
+      },
+    );
+    const events = stdout
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const poll = events.find((event) => event.fired === 'poll');
+    const other = events.find((event) => event.fired === 'other');
+    // The known 10_000ms polling sleep completes without a wall-clock wait,
+    // while callback arguments and a real timer handle survive acceleration.
+    expect(poll?.first).toBe('x');
+    expect(poll?.second).toBe('y');
+    expect(poll?.hasRefresh).toBe('function');
+    expect(poll?.hasUnref).toBe('function');
+    expect(typeof poll?.elapsed).toBe('number');
+    expect(poll?.elapsed as number).toBeLessThan(2000);
+    // An unrelated timer keeps its normal behavior.
+    expect(typeof other?.elapsed).toBe('number');
+    expect(other?.elapsed as number).toBeLessThan(2000);
+    const delays = await readRequestedPollDelays(root);
+    expect(delays).toEqual([EXPECTED_CI_POLL_DELAY_MS]);
+  });
+
+  it('leaves normal timers alone when the acceleration flag is absent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ci-poll-isolation-'));
+    tmpRoots.push(root);
+    const script = [
+      'const started = Date.now();',
+      'setTimeout(() => {',
+      "  console.log(JSON.stringify({ fired: 'other', elapsed: Date.now() - started }));",
+      '}, 25);',
+    ].join('\n');
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--import', CI_POLL_PRELOAD, '--eval', script],
+      {
+        timeout: 30000,
+        env: { ...process.env, REVIEW_CYCLE_POLL_LOG: join(root, 'poll-delays.log') },
+      },
+    );
+    const firstLine = stdout.split('\n').find((line) => line.trim() !== '');
+    if (firstLine === undefined) {
+      throw new Error('expected one JSON line on stdout');
+    }
+    const event = JSON.parse(firstLine) as Record<string, unknown>;
+    expect(event.fired).toBe('other');
+    expect(event.elapsed as number).toBeLessThan(2000);
+    await expect(readFile(join(root, 'poll-delays.log'), 'utf8')).rejects.toThrow();
+  });
+
+  it('keeps production sources free of the test-owned helper', async () => {
+    const cycleSource = await readFile(join(REPO_ROOT, 'scripts', 'review-cycle.ts'), 'utf8');
+    const pollSource = await readFile(join(REPO_ROOT, 'scripts', 'review', 'pr-checks.ts'), 'utf8');
+    for (const source of [cycleSource, pollSource]) {
+      expect(source).not.toContain('ci-poll-time-control');
+      expect(source).not.toContain('REVIEW_CYCLE_ACCELERATE_POLL');
+      expect(source).not.toContain('REVIEW_CYCLE_POLL_LOG');
+    }
+  });
+
+  it('does not mutate the parent process environment', () => {
+    expect(process.env.REVIEW_CYCLE_ACCELERATE_POLL).toBeUndefined();
+    expect(process.env.REVIEW_CYCLE_POLL_LOG).toBeUndefined();
+    expect(process.env.NODE_OPTIONS ?? '').not.toContain('ci-poll-time-control');
   });
 });
