@@ -71,13 +71,34 @@ function isExactHttpOrigin(value: string): boolean {
 
 // Evaluates one cookie-auth mutation request. An explicit `Origin` header
 // must match the request origin or an exact configured gateway origin;
-// otherwise `Sec-Fetch-Site`, when present, must not claim a cross-site
-// context. Requests with neither header are headerless non-browser flows
-// and are accepted.
+// a present `Sec-Fetch-Site`, when present, is still validated even when the
+// origin matches: unknown values always fail closed, and a service-origin
+// request claiming cross-site metadata is contradictory and rejected.
+// Configured gateway origins keep their exact-match semantics with any known
+// fetch-metadata value. Requests with neither header are headerless
+// non-browser flows and are accepted.
 export function evaluateCookieMutationOrigin(input: CookieMutationOriginInput): boolean {
   const allowed = new Set<string>([input.requestOrigin, ...input.gatewayOrigins]);
   if (input.origin !== null && input.origin.trim().length > 0) {
-    return allowed.has(input.origin.trim());
+    const origin = input.origin.trim();
+    if (!allowed.has(origin)) {
+      return false;
+    }
+    if (input.secFetchSite !== null && input.secFetchSite.trim().length > 0) {
+      const site = input.secFetchSite.trim().toLowerCase();
+      if (
+        site !== 'same-origin' &&
+        site !== 'same-site' &&
+        site !== 'none' &&
+        site !== 'cross-site'
+      ) {
+        return false;
+      }
+      if (origin === input.requestOrigin && site === 'cross-site') {
+        return false;
+      }
+    }
+    return true;
   }
   if (input.secFetchSite !== null && input.secFetchSite.trim().length > 0) {
     const site = input.secFetchSite.trim().toLowerCase();

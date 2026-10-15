@@ -139,4 +139,37 @@ describe('evaluateCookieMutationOrigin', () => {
       }),
     ).toBe(false);
   });
+
+  it('rejects contradictory fetch metadata even when the Origin matches the service', () => {
+    expect(
+      evaluateCookieMutationOrigin({
+        requestOrigin: serviceOrigin,
+        origin: serviceOrigin,
+        secFetchSite: 'cross-site',
+        gatewayOrigins: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects unsupported fetch metadata even when the Origin matches the service', () => {
+    expect(
+      evaluateCookieMutationOrigin({
+        requestOrigin: serviceOrigin,
+        origin: serviceOrigin,
+        secFetchSite: 'super-future-value',
+        gatewayOrigins: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects unsupported fetch metadata even when the Origin matches a gateway', () => {
+    expect(
+      evaluateCookieMutationOrigin({
+        requestOrigin: serviceOrigin,
+        origin: 'https://shop.example',
+        secFetchSite: 'super-future-value',
+        gatewayOrigins: ['https://shop.example'],
+      }),
+    ).toBe(false);
+  });
 });

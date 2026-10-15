@@ -559,6 +559,46 @@ describe('consumer token origin protection', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects contradictory fetch metadata even when the Origin matches the service', async () => {
+    const cookie = await registerVerifyLogin('contradictory-meta@example.com');
+
+    const crossSite = await post(
+      '/v1/auth/token',
+      {},
+      { cookie, headers: { origin: 'http://localhost', 'sec-fetch-site': 'cross-site' } },
+    );
+    expect(crossSite.status).toBe(403);
+    expect(await crossSite.json()).toMatchObject({ code: 'forbidden', status: 403 });
+
+    const unknown = await post(
+      '/v1/auth/token',
+      {},
+      { cookie, headers: { origin: 'http://localhost', 'sec-fetch-site': 'super-future-value' } },
+    );
+    expect(unknown.status).toBe(403);
+    expect(await unknown.json()).toMatchObject({ code: 'forbidden', status: 403 });
+  });
+
+  it('preserves exact gateway semantics with fetch metadata on token issuance', async () => {
+    const cookie = await registerVerifyLogin('gateway-meta@example.com');
+    const gateway = 'https://shop.example';
+    const overrides = { AUTH_GATEWAY_ORIGINS: gateway };
+
+    const gatewayCrossSite = await post(
+      '/v1/auth/token',
+      {},
+      { cookie, headers: { origin: gateway, 'sec-fetch-site': 'cross-site' }, overrides },
+    );
+    expect(gatewayCrossSite.status).toBe(200);
+
+    const gatewayUnknown = await post(
+      '/v1/auth/token',
+      {},
+      { cookie, headers: { origin: gateway, 'sec-fetch-site': 'super-future-value' }, overrides },
+    );
+    expect(gatewayUnknown.status).toBe(403);
+  });
+
   it('preserves existing login, current-User, logout and admin behavior', async () => {
     const cookie = await registerVerifyLogin('preserved@example.com');
 
