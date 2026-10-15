@@ -10,9 +10,9 @@ import { createConsumerClient, type ConsumerClient } from '../index.js';
 //
 // ```astro
 // <script>
-//   import { consumerClient, showSnapshot } from './astro-page-script.js';
-//   await showSnapshot(consumerClient(), (text) => {
-//   });
+//   import { consumerClient, snapshotText } from './astro-page-script.js';
+//   const client = consumerClient({ baseUrl: location.origin, issuer, audience });
+//   const text = await snapshotText(client, { anonymousText: '', unavailableText: '' });
 // </script>
 // ```
 const SINGLETON_KEY = '__userServiceConsumerClient';

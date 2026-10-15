@@ -9,8 +9,8 @@ import {
 // the tab singleton from `./astro-page-script.js` (or one built here) so
 // concurrent islands coalesce into a single lazy renewal. This module is
 // framework-neutral on purpose — no React import — and maps onto island state
-// with the host's subscription primitive (see
-// docs/operations/consumer-client.md for the `useSyncExternalStore` shape).
+// with the host's subscription primitive (wire `current`/`observe` to the
+// host primitive, such as `useSyncExternalStore` in the consumer app).
 export interface IslandConsumerState {
   readonly status: 'anonymous' | 'authenticated' | 'unavailable';
   readonly snapshot: ConsumerIdentitySnapshot | null;
