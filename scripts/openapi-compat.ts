@@ -3,14 +3,17 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // OpenAPI compatibility gate for the first external consumer (ADR-0007,
-// ticket #152). Additive evolution within `/v1` — new operations, optional
-// fields, new schemas — passes. Removing/renaming contract members, changing
-// their type or meaning, or making optional input mandatory fails: those need
-// an explicit versioned transition (normally `/v2`).
+// ticket #152). This project-owned comparator is the retained tool for this
+// increment, not universal OpenAPI analysis. Additive evolution within `/v1`
+// — new operations, optional fields, new schemas — passes. Removing/renaming
+// contract members, changing their type or meaning, or making optional input
+// mandatory fails: those need an explicit versioned transition (normally
+// `/v2`).
 //
 // Only contract keywords are compared (`type`, `format`, `required`,
 // `properties`, `items`, `enum`, operations, parameters). Documentation text
-// (`description`, `example`) never breaks compatibility.
+// (`description`, `example`) never breaks compatibility. Other changed
+// validation constraints/compositions conservatively require review.
 export interface CompatFinding {
   readonly breaking: boolean;
   readonly message: string;

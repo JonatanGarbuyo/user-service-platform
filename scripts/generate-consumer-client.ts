@@ -10,7 +10,9 @@ const exec = promisify(execFile);
 // source-generated OpenAPI document (ADR-0007, ticket #152). The generated
 // file is an output: never hand-edit it. CI fails on drift
 // (`npm run consumer:check`) so the shipped client cannot silently diverge
-// from the published contract.
+// from the published contract. The generator runs in the isolated
+// tools/consumer-codegen workspace under its scoped TypeScript 5 exception
+// (ADR-0006); application/admin remain on TypeScript 6.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const input = resolve(root, 'openapi', 'openapi.json');
 const outDir = resolve(root, 'src', 'features', 'identity', 'consumer-client', 'generated');

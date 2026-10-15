@@ -17,8 +17,15 @@ part of this handoff.
 - Generated TypeScript contracts:
   `src/features/identity/consumer-client/generated/api.d.ts`, produced from
   the source-generated `openapi/openapi.json` with `openapi-typescript`
-  (`npm run consumer:generate`). The generator is isolated in the consumer-codegen workspace with its supported TypeScript 5 peer; the service stays on its pinned TypeScript 6 toolchain and ordinary `npm ci` installs both without peer overrides. Generated code is never hand edited; drift
-  fails `npm run consumer:check`.
+  (`npm run consumer:generate`). The generator is isolated in the
+  consumer-codegen workspace under the scoped TypeScript 5 exception
+  (ADR-0006): pinned `openapi-typescript@7.13.0` declares peer
+  `typescript@^5.x`, so the workspace pins supported 5.x version 5.9.3;
+  the service stays on its pinned TypeScript 6 toolchain and ordinary
+  `npm ci` installs both without peer overrides. A declared peer
+  restriction is not proof that TypeScript 6 cannot run the generator;
+  the desired end state is TypeScript 6 here too. Generated code is never
+  hand edited; drift fails `npm run consumer:check`.
 - Vanilla TypeScript handoff examples:
   `src/features/identity/consumer-client/examples/` — Astro page-script
   singleton (`astro-page-script.ts`), shared React-island consumption
@@ -27,8 +34,11 @@ part of this handoff.
   (`same-origin-gateway.ts`).
 - Compatibility protection: `npm run openapi:compat` diffs the published
   document against the pinned previous-main baseline
-  (`openapi/baseline/a88774e.json`, byte-identical to that commit). Additive
-  paths and optional fields pass; breaking changes fail before external adoption. Changes to other validation constraints or compositions conservatively require review rather than silently passing.
+  (`openapi/baseline/a88774e.json`, byte-identical to that commit) using
+  the retained project-owned comparator (ADR-0007), not universal OpenAPI
+  analysis. Additive paths and optional fields pass; breaking changes fail
+  before external adoption. Changes to other validation constraints or
+  compositions conservatively require review rather than silently passing.
 
 ## Transport and gateway configuration
 
