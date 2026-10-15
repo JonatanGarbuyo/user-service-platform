@@ -40,6 +40,12 @@ describe('environment profiles', () => {
     });
   });
 
+  it('defaults direct-browser consumer origins to same-origin-only in every profile', () => {
+    for (const profile of [LOCAL_PROFILE, SANDBOX_PROFILE, PRODUCTION_PROFILE]) {
+      expect(profile.AUTH_CONSUMER_ORIGINS).toBe('');
+    }
+  });
+
   it('keeps profiles independent instead of inheriting from a shared base', () => {
     expect(LOCAL_PROFILE).not.toBe(SANDBOX_PROFILE);
     expect(SANDBOX_PROFILE).not.toBe(PRODUCTION_PROFILE);
