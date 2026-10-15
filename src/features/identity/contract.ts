@@ -209,6 +209,53 @@ export const AdminUserDetailParamsSchema = z
   })
   .openapi('AdminUserDetailParams');
 
+// Response for the application-owned consumer token issuance/renewal
+// operation (spec #150). The same operation serves initial issue and
+// renewal from the live HttpOnly session; `expiresAt` is an integer Unix
+// timestamp in seconds.
+export const ConsumerTokenResponseSchema = z
+  .object({
+    accessToken: z.string().min(1).openapi({
+      description: 'Short-lived application-owned access token.',
+      example: 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhYmMxMjMifQ.sig',
+    }),
+    tokenType: z.literal('Bearer').openapi({ example: 'Bearer' }),
+    expiresAt: z.number().int().min(1).openapi({
+      description: 'Token expiry as integer Unix seconds.',
+      example: 1790000900,
+    }),
+  })
+  .openapi('ConsumerToken');
+
+// Public verification key entry (RFC 7517 JSON Web Key, public material
+// only). Only asymmetric signature parameters are representable; private
+// material never reaches this contract.
+export const ConsumerJsonWebKeySchema = z
+  .object({
+    kid: z.string().min(1).openapi({ description: 'Stable durable key id.', example: 'abc123' }),
+    kty: z.string().min(1).openapi({ description: 'Key type.', example: 'OKP' }),
+    alg: z.string().min(1).openapi({ description: 'Fixed supported algorithm.', example: 'EdDSA' }),
+    use: z.string().optional().openapi({ description: 'Intended use.', example: 'sig' }),
+    crv: z.string().optional().openapi({ description: 'Curve name.', example: 'Ed25519' }),
+    x: z.string().optional().openapi({ description: 'Public x coordinate.' }),
+    y: z.string().optional().openapi({ description: 'Public y coordinate.' }),
+    n: z.string().optional().openapi({ description: 'Public RSA modulus.' }),
+    e: z.string().optional().openapi({ description: 'Public RSA exponent.' }),
+  })
+  .openapi('ConsumerJsonWebKey');
+
+export const ConsumerJwksResponseSchema = z
+  .object({
+    keys: z.array(ConsumerJsonWebKeySchema).openapi({
+      description: 'Active and retained public verification keys.',
+    }),
+  })
+  .openapi('ConsumerJwks');
+
+export type ConsumerTokenResponse = z.infer<typeof ConsumerTokenResponseSchema>;
+export type ConsumerJsonWebKey = z.infer<typeof ConsumerJsonWebKeySchema>;
+export type ConsumerJwksResponse = z.infer<typeof ConsumerJwksResponseSchema>;
+
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
 export type RegisteredUser = z.infer<typeof RegisteredUserSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
