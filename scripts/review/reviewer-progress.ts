@@ -42,7 +42,6 @@ export interface ReviewerProgressIdentity {
   axis: string;
   attempt: number;
   workerStartHead: string;
-  targetHead?: string;
   boundMs?: number;
 }
 
@@ -171,9 +170,11 @@ export interface ReviewerProgressProbe {
 
 // Incremental timeout-resilient capture over a live worker stdout capture.
 // The probe observes the same mutable capture the worker executor pushes into
-// and persists one allowlisted snapshot per observer tick plus a final
-// snapshot on stop, so a timeout or termination retains the latest projected
-// progress (or an explicit incomplete/unavailable record) instead of nothing.
+// and persists one allowlisted snapshot per observer tick, so a timeout or
+// termination retains the latest projected progress (or an explicit
+// incomplete/unavailable record) instead of nothing. End-of-run state stays
+// with the existing settle-time skill-evidence finalization; `stop` only
+// clears the observer cadence.
 export function startReviewerProgressProbe(
   identity: ReviewerProgressIdentity,
   capture: ReviewerProgressCapture,
@@ -189,24 +190,30 @@ export function startReviewerProgressProbe(
   const latestPath = `${dir}/${progressFileName(identity)}`;
   let sequence = 0;
   let stopped = false;
+  // Serialize snapshots so a slow tick can never overwrite a newer one: each
+  // observation chains behind its predecessor and the chain never rejects.
+  let pending: Promise<void> = Promise.resolve();
 
-  const snapshotNow = async (): Promise<void> => {
-    if (stopped) {
-      return;
-    }
-    sequence += 1;
-    try {
-      const snapshot = projectReviewerProgress(capture.lines, identity, sequence, {
-        observedAt: now(),
-        captureTruncated: capture.wasTruncated(),
-      });
-      await mkdir(dirname(latestPath), { recursive: true });
-      await writeFile(latestPath, serializeReviewerProgress(snapshot));
-    } catch {
-      // Best-effort: fixed metadata-only diagnostic, never the failure
-      // detail (which could carry paths or provider output).
-      console.error(`Reviewer progress snapshot failed for ${identity.axis}`);
-    }
+  const snapshotNow = (): Promise<void> => {
+    pending = pending.then(async () => {
+      if (stopped) {
+        return;
+      }
+      sequence += 1;
+      try {
+        const snapshot = projectReviewerProgress(capture.lines, identity, sequence, {
+          observedAt: now(),
+          captureTruncated: capture.wasTruncated(),
+        });
+        await mkdir(dirname(latestPath), { recursive: true });
+        await writeFile(latestPath, serializeReviewerProgress(snapshot));
+      } catch {
+        // Best-effort: fixed metadata-only diagnostic, never the failure
+        // detail (which could carry paths or provider output).
+        console.error(`Reviewer progress snapshot failed for ${identity.axis}`);
+      }
+    });
+    return pending;
   };
 
   const timer = setInterval(() => {

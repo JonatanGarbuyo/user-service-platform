@@ -43,7 +43,6 @@ const identity: ReviewerProgressIdentity = {
   axis: 'standards',
   attempt: 1,
   workerStartHead: '93171c25ecc6d2f360d94c8d02af5e773b65defa',
-  targetHead: '93171c25ecc6d2f360d94c8d02af5e773b65defa',
   boundMs: 1_200_000,
 };
 
@@ -306,22 +305,6 @@ describe('reviewer progress executor wiring', () => {
   // with controlled short bounds prove incremental progress survives a
   // timeout, unobservable progress stays unknown, and capture failures never
   // mask the reviewer result.
-  function progressLine(call: string, tool: string, timestamp: number): string {
-    return JSON.stringify({
-      type: 'tool_use',
-      timestamp,
-      sessionID: 'session-1',
-      part: {
-        id: call,
-        sessionID: 'session-1',
-        messageID: 'msg-1',
-        type: 'tool',
-        tool,
-        state: { status: 'completed' },
-      },
-    });
-  }
-
   async function runShippedExecutor(input: {
     script: string;
     timeoutMs?: number;
@@ -380,7 +363,7 @@ describe('reviewer progress executor wiring', () => {
   }
 
   it('retains incremental progress when the worker times out', async () => {
-    const emit = `console.log(${JSON.stringify(progressLine('call-1', 'read', 1_700_000_000_000))});console.log(${JSON.stringify(progressLine('call-2', 'bash', 1_700_000_030_000))});`;
+    const emit = `console.log(${JSON.stringify(toolLine('call-1', 'session-1', 'read', 1_700_000_000_000))});console.log(${JSON.stringify(toolLine('call-2', 'session-1', 'bash', 1_700_000_030_000))});`;
     const { workerError, progressFiles } = await runShippedExecutor({
       script: `${emit} setInterval(() => undefined, 50);`,
       timeoutMs: 600,
@@ -434,7 +417,7 @@ describe('reviewer progress executor wiring', () => {
   }, 30000);
 
   it('never lets probe persistence failure mask worker success', async () => {
-    const emit = `console.log(${JSON.stringify(progressLine('call-1', 'read', 1_700_000_000_000))});`;
+    const emit = `console.log(${JSON.stringify(toolLine('call-1', 'session-1', 'read', 1_700_000_000_000))});`;
     const { workerError, progressFiles } = await runShippedExecutor({
       script: `${emit} process.exit(0);`,
       progress: {
@@ -447,7 +430,7 @@ describe('reviewer progress executor wiring', () => {
   }, 30000);
 
   it('writes nothing when the probe is disabled', async () => {
-    const emit = `console.log(${JSON.stringify(progressLine('call-1', 'read', 1_700_000_000_000))});`;
+    const emit = `console.log(${JSON.stringify(toolLine('call-1', 'session-1', 'read', 1_700_000_000_000))});`;
     const { workerError, progressFiles } = await runShippedExecutor({
       script: `${emit} process.exit(0);`,
       progress: { enabled: false },
