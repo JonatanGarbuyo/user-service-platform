@@ -332,6 +332,104 @@
           "status"
         ]
       },
+      "ConsumerToken": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short-lived application-owned access token.",
+            "example": "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhYmMxMjMifQ.sig"
+          },
+          "tokenType": {
+            "type": "string",
+            "enum": [
+              "Bearer"
+            ],
+            "example": "Bearer"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Token expiry as integer Unix seconds.",
+            "example": 1790000900
+          }
+        },
+        "required": [
+          "accessToken",
+          "tokenType",
+          "expiresAt"
+        ]
+      },
+      "ConsumerJwks": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsumerJsonWebKey"
+            },
+            "description": "Active and retained public verification keys."
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "ConsumerJsonWebKey": {
+        "type": "object",
+        "properties": {
+          "kid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable durable key id.",
+            "example": "abc123"
+          },
+          "kty": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Key type.",
+            "example": "OKP"
+          },
+          "alg": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Fixed supported algorithm.",
+            "example": "EdDSA"
+          },
+          "use": {
+            "type": "string",
+            "description": "Intended use.",
+            "example": "sig"
+          },
+          "crv": {
+            "type": "string",
+            "description": "Curve name.",
+            "example": "Ed25519"
+          },
+          "x": {
+            "type": "string",
+            "description": "Public x coordinate."
+          },
+          "y": {
+            "type": "string",
+            "description": "Public y coordinate."
+          },
+          "n": {
+            "type": "string",
+            "description": "Public RSA modulus."
+          },
+          "e": {
+            "type": "string",
+            "description": "Public RSA exponent."
+          }
+        },
+        "required": [
+          "kid",
+          "kty",
+          "alg"
+        ]
+      },
       "AdminMe": {
         "type": "object",
         "properties": {
@@ -807,6 +905,70 @@
           },
           "default": {
             "description": "Sign-out failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/token": {
+      "post": {
+        "operationId": "issueConsumerToken",
+        "summary": "Issue or renew a consumer access token",
+        "description": "Issues or renews a short-lived application-owned access token from the live HttpOnly cookie session. The request carries no user, claims, issuer or audience: the token holds the opaque session subject, the deployment-configured issuer/audience, integer issued/expiry bounds and an empty entitlements list. Expiry never exceeds the live session expiry. Revoked or expired sessions are denied further issuance; already-issued offline tokens remain valid until their own expiry (at most 15 minutes initially). All responses are private, no-store.",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "The access token, its type and its integer Unix expiry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Issuance failure as RFC 9457 Problem Details.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/jwks": {
+      "get": {
+        "operationId": "getConsumerJwks",
+        "summary": "Publish consumer token verification keys",
+        "description": "Returns the active and retained public asymmetric verification keys as an RFC 7517 JSON Web Key Set. Private key material is never published. Responses carry bounded public caching; verification keys remain available through every outstanding token lifetime plus the documented clock tolerance.",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "The public verification keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerJwks"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Publication failure as RFC 9457 Problem Details.",
             "content": {
               "application/problem+json": {
                 "schema": {

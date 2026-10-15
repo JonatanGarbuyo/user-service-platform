@@ -114,6 +114,48 @@ describe('generated OpenAPI artifact', () => {
     expect(serialized).not.toContain('session');
   });
 
+  it('describes the consumer token and JWKS operations (spec #150)', async () => {
+    const raw = await readFile(artifactPath, 'utf8');
+    const document = JSON.parse(raw) as {
+      components: {
+        schemas: Record<string, { required?: string[]; properties?: Record<string, unknown> }>;
+      };
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            operationId?: string;
+            responses?: Record<
+              string,
+              { content?: Record<string, { schema?: { $ref?: string } }> }
+            >;
+          }
+        >
+      >;
+    };
+
+    expect(document.paths['/v1/auth/token']?.post?.operationId).toBe('issueConsumerToken');
+    expect(document.paths['/v1/auth/jwks']?.get?.operationId).toBe('getConsumerJwks');
+    expect(
+      document.paths['/v1/auth/token']?.post?.responses?.['200']?.content?.['application/json']
+        ?.schema?.$ref,
+    ).toBe('#/components/schemas/ConsumerToken');
+    expect(
+      document.paths['/v1/auth/jwks']?.get?.responses?.['200']?.content?.['application/json']
+        ?.schema?.$ref,
+    ).toBe('#/components/schemas/ConsumerJwks');
+
+    // The token response carries only the access token, its type and expiry.
+    expect(document.components.schemas.ConsumerToken?.required).toEqual([
+      'accessToken',
+      'tokenType',
+      'expiresAt',
+    ]);
+    const serialized = JSON.stringify(document.components.schemas);
+    expect(serialized).not.toContain('privateKey');
+  });
+
   it('regenerates byte-identically from source contracts', async () => {
     const raw = await readFile(artifactPath, 'utf8');
     const regenerated = `${JSON.stringify(createApp().getOpenAPI31Document(openApiConfig), null, 2)}\n`;

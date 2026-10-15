@@ -69,6 +69,23 @@ export const verification = sqliteTable('verification', {
   updatedAt: integer('updated_at', { mode: 'timestamp' }),
 });
 
+// Durable consumer-JWT signing-key ring (spec #150, ADR-0013). This table
+// backs the pinned Better Auth JWT capability through its Drizzle adapter:
+// one row per asymmetric signing key, with the private key encrypted through
+// the engine facility. Keys persist per deployment in D1 so separate
+// auth/Worker instances with the same database reuse them; no per-request or
+// per-isolate ephemeral generation. Only public key material ever leaves the
+// service through GET /v1/auth/jwks.
+export const jwks = sqliteTable('jwks', {
+  id: text('id').primaryKey(),
+  publicKey: text('public_key').notNull(),
+  privateKey: text('private_key').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+  expiresAt: integer('expires_at', { mode: 'timestamp' }),
+  alg: text('alg'),
+  crv: text('crv'),
+});
+
 // Adapter-facing schema object for Better Auth's Drizzle adapter. Kept next
 // to the tables so the mapping cannot drift from the table definitions.
-export const identitySchema = { user, session, account, verification };
+export const identitySchema = { user, session, account, verification, jwks };

@@ -2,15 +2,29 @@ import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import type { D1Database } from '@cloudflare/workers-types';
 import { betterAuth } from 'better-auth';
 import { admin } from 'better-auth/plugins/admin';
+import { jwt } from 'better-auth/plugins/jwt';
 import { drizzle } from 'drizzle-orm/d1';
 import {
   RESET_PASSWORD_ACTION_PATH,
   VERIFY_EMAIL_ACTION_PATH,
   buildAuthActionUrl,
 } from './action-urls.js';
+import { capTokenExpirySeconds } from './consumer-tokens.js';
 import type { AuthMailer } from './mailer.js';
 import type { AuthPolicy } from './policy.js';
 import { identitySchema } from './schema.js';
+
+// Application-owned consumer-token options (spec #150, ADR-0013). Issuer,
+// audience and lifetime arrive validated from the effective non-secret
+// configuration via `resolveConsumerTokenConfig`; this layer only translates
+// them into the pinned engine JWT capability.
+export interface ConsumerTokenOptions {
+  readonly issuer: string;
+  readonly audience: string;
+  // Bounded token lifetime in seconds (1..900). The minted `exp`
+  // additionally never exceeds the authoritative renewal-session expiry.
+  readonly ttlSeconds: number;
+}
 
 // Identity infrastructure boundary (ADR-0005, ADR-0010). This is the only
 // module allowed to import Better Auth or the slice persistence schema:
@@ -36,6 +50,13 @@ export interface IdentityAuthInput {
   readonly background: (task: Promise<unknown>) => void;
 }
 
+export interface ConsumerTokenAuthInput extends IdentityAuthInput {
+  // Validated consumer-token options (issuer/audience/TTL). Required here so
+  // the JWT capability is always configured explicitly; deployments without
+  // stable values fail closed before this builder runs.
+  readonly consumerTokens: ConsumerTokenOptions;
+}
+
 // Better Auth internal log sink (ADR-0009): structured level + message only.
 // Extra arguments can carry user objects or error instances, so they are
 // never forwarded; messages themselves contain no passwords, tokens,
@@ -56,6 +77,71 @@ function createRedactingLogger(): NonNullable<Parameters<typeof betterAuth>[0]['
 // so the precise engine options type flows to consumers instead of the
 // generic default, which is not variance-compatible with it.
 export function createIdentityAuth(input: IdentityAuthInput) {
+  return betterAuth({
+    ...sharedOptions(input),
+    // Better Auth supported administration capability (ticket #59, spec #8).
+    // Roles, bans and session administration belong to the Identity boundary;
+    // they are not editorial CMS roles and imply no custom admin UI. The
+    // plugin's management endpoints are never mounted on the public Worker:
+    // administration is exercised server-side through `auth.api` (notably the
+    // explicit first-admin bootstrap), so enabling the plugin adds no public
+    // HTTP surface by itself.
+    plugins: [admin()],
+  });
+}
+
+// Builds a request-scoped Better Auth instance with the consumer JWT
+// capability enabled (spec #150, ADR-0013). Used only by the
+// application-owned POST /v1/auth/token and GET /v1/auth/jwks operations;
+// every other identity operation uses `createIdentityAuth` so no ambient
+// token header or key provisioning can occur elsewhere. The engine auth
+// router is never mounted; handlers reach this capability through `auth.api`
+// only. The return type is intentionally inferred so the plugin endpoints
+// (`getToken`, `getJwks`) flow to consumers with precise types.
+export function createConsumerTokenAuth(input: ConsumerTokenAuthInput) {
+  const consumerTokens = input.consumerTokens;
+  return betterAuth({
+    ...sharedOptions(input),
+    plugins: [
+      admin(),
+      // Pinned engine JWT/JWKS capability behind the identity adapter. Its
+      // default whole-user payload is replaced with the explicit
+      // application-owned claims contract (opaque sub, configured iss/aud,
+      // integer iat/exp, entitlements). The supported algorithm is fixed to
+      // EdDSA/Ed25519 with durable D1-backed key ids as stable kids.
+      // Ambient token headers stay disabled: issuance happens only through
+      // the application-owned token operation.
+      jwt({
+        disableSettingJwtHeader: true,
+        jwks: { keyPairConfig: { alg: 'EdDSA', crv: 'Ed25519' } },
+        jwt: {
+          issuer: consumerTokens.issuer,
+          audience: consumerTokens.audience,
+          expirationTime: `${consumerTokens.ttlSeconds.toString()} seconds`,
+          definePayload: ({ session }) => {
+            const nowSeconds = Math.floor(Date.now() / 1000);
+            const sessionExpirySeconds = Math.floor(session.expiresAt.getTime() / 1000);
+            return {
+              entitlements: [],
+              iss: consumerTokens.issuer,
+              aud: consumerTokens.audience,
+              exp: capTokenExpirySeconds({
+                nowSeconds,
+                ttlSeconds: consumerTokens.ttlSeconds,
+                sessionExpirySeconds,
+              }),
+            };
+          },
+          getSubject: ({ user }) => user.id,
+        },
+      }),
+    ],
+  });
+}
+
+// Shared engine options for both builders. Plugin lists stay literal at each
+// call site so endpoint inference keeps the precise plugin type.
+function sharedOptions(input: IdentityAuthInput) {
   const {
     db,
     policy,
@@ -68,22 +154,14 @@ export function createIdentityAuth(input: IdentityAuthInput) {
   } = input;
   const database = drizzle(db, { schema: identitySchema });
 
-  return betterAuth({
+  return {
     baseURL,
     secret,
     logger: createRedactingLogger(),
     database: drizzleAdapter(database, { provider: 'sqlite', schema: identitySchema }),
-    // Better Auth supported administration capability (ticket #59, spec #8).
-    // Roles, bans and session administration belong to the Identity boundary;
-    // they are not editorial CMS roles and imply no custom admin UI. The
-    // plugin's management endpoints are never mounted on the public Worker:
-    // administration is exercised server-side through `auth.api` (notably the
-    // explicit first-admin bootstrap), so enabling the plugin adds no public
-    // HTTP surface by itself.
-    plugins: [admin()],
     advanced: {
       backgroundTasks: {
-        handler: (task) => {
+        handler: (task: Promise<unknown>) => {
           background(task);
         },
       },
@@ -103,7 +181,7 @@ export function createIdentityAuth(input: IdentityAuthInput) {
       // the configured consumer page (or the service-owned fallback route on
       // the request origin) plus the engine token.
       revokeSessionsOnPasswordReset: true,
-      sendResetPassword: async ({ user, token }) => {
+      sendResetPassword: async ({ user, token }: { user: { email: string }; token: string }) => {
         const url = buildAuthActionUrl({
           varName: 'AUTH_RESET_PASSWORD_ACTION_URL',
           configured: resetPasswordActionURL ?? '',
@@ -121,7 +199,13 @@ export function createIdentityAuth(input: IdentityAuthInput) {
       // (ticket #77): the user-facing action targets the configured consumer
       // page or the service-owned fallback route with the engine token as the
       // single `token` query parameter.
-      sendVerificationEmail: async ({ user, token }) => {
+      sendVerificationEmail: async ({
+        user,
+        token,
+      }: {
+        user: { email: string };
+        token: string;
+      }) => {
         const url = buildAuthActionUrl({
           varName: 'AUTH_VERIFY_EMAIL_ACTION_URL',
           configured: verifyEmailActionURL ?? '',
@@ -132,5 +216,5 @@ export function createIdentityAuth(input: IdentityAuthInput) {
         await mailer.sendVerificationEmail({ to: user.email, url, token });
       },
     },
-  });
+  };
 }
