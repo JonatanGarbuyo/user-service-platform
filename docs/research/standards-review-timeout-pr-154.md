@@ -40,12 +40,12 @@ scoped follow-up.
 
 Review cycle `12:11:01Z`–`12:33:54Z` (22m53s):
 
-| Phase            | Window (UTC)      | Duration      | Outcome / evidence                                                                     |
-| ---------------- | ----------------- | ------------- | -------------------------------------------------------------------------------------- |
-| address-review   | 12:05:37–12:07:22 | ~1m45s        | success; correction pushed `93171c2`                                                   |
-| quality gates    | 12:07:36–12:10:59 | 3m23s         | success                                                                                |
-| Standards worker | 12:11:03–12:31:03 | 1200s (bound) | TIMEOUT; zero parent-stdout lines, only `still running (waiting for output)` every 30s |
-| Spec worker      | 12:31:04–12:33:52 | 2m48s, exit 0 | PASS published 12:33:31Z                                                               |
+| Phase            | Window (UTC)      | Duration      | Outcome / evidence                                                                                                         |
+| ---------------- | ----------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| address-review   | 12:05:37–12:07:22 | ~1m45s        | success, no HEAD change (reviewed HEAD `7439225` unchanged; `93171c2` landed later at `2026-10-15T13:18:11Z` in Attempt 2) |
+| quality gates    | 12:07:36–12:10:59 | 3m23s         | success                                                                                                                    |
+| Standards worker | 12:11:03–12:31:03 | 1200s (bound) | TIMEOUT; zero parent-stdout lines, only `still running (waiting for output)` every 30s                                     |
+| Spec worker      | 12:31:04–12:33:52 | 2m48s, exit 0 | PASS published 12:33:31Z                                                                                                   |
 
 Actual progress evidence (this attempt only):
 
@@ -66,12 +66,12 @@ Actual progress evidence (this attempt only):
 
 Review cycle `13:22:28Z`–`13:46:37Z` (24m09s):
 
-| Phase            | Window (UTC)      | Duration       | Outcome / evidence                                         |
-| ---------------- | ----------------- | -------------- | ---------------------------------------------------------- |
-| address-review   | 13:14:35–13:18:23 | 3m48s          | success, no HEAD change (no-code outcome)                  |
-| quality gates    | 13:18:40–13:22:25 | 3m45s          | success                                                    |
-| Standards worker | 13:22:32–13:42:32 | 1200s (bound)  | TIMEOUT; zero parent-stdout lines; no PR comment published |
-| Spec worker      | 13:42:32–13:46:34 | ~4m02s, exit 0 | PASS published 13:45:45Z                                   |
+| Phase            | Window (UTC)      | Duration       | Outcome / evidence                                                                |
+| ---------------- | ----------------- | -------------- | --------------------------------------------------------------------------------- |
+| address-review   | 13:14:35–13:18:23 | 3m48s          | success; correction pushed `93171c2` (`2026-10-15T13:18:11Z` per commit metadata) |
+| quality gates    | 13:18:40–13:22:25 | 3m45s          | success                                                                           |
+| Standards worker | 13:22:32–13:42:32 | 1200s (bound)  | TIMEOUT; zero parent-stdout lines; no PR comment published                        |
+| Spec worker      | 13:42:32–13:46:34 | ~4m02s, exit 0 | PASS published 13:45:45Z                                                          |
 
 Actual progress evidence: none observable. Standards lifecycle in the
 artifact is `unavailable` (`no worker events captured`, primary session
@@ -97,9 +97,11 @@ comment). Same honest limit applies.
 ## Comparison evidence (same runner shape, same models)
 
 - Spec (Muse Spark) on the identical large #154 diff completes in
-  2m48s / ~4m02s / ~3m04s across the three runs. Runner, checkout,
-  dependencies and model transport are healthy; the failure is
-  Standards-specific, not a generic outage.
+  2m48s / ~4m02s / ~3m04s across the three runs. Runner, checkout
+  and dependencies are healthy for that path, and the failure is
+  Standards-specific rather than a generic outage; because Spec
+  uses a different model, this does not by itself rule out
+  Standards-specific model transport delay.
 - Standards (MiMo) on the small 7-file PR #157 diff completes in 5m41s
   (run `38759200656`, exit 0, PASS), with the same silent-parent-stdout
   pattern until exit. Silence alone is normal for these `--format json`
@@ -109,13 +111,18 @@ comment). Same honest limit applies.
 - Exact-HEAD CI `38742149831` SUCCESS plus in-run gates passing in
   ~3–4 minutes each time rules out a gate hang as the cause.
 - Launch lag is 1–4s in every run (review-cycle start to worker
-  start), ruling out launch/transport delay. Sequential scheduling
-  (Standards then Spec) worked as designed in all three runs.
+  start), proving prompt subprocess launch, not time to first model
+  response; it does not rule out Standards-specific model transport
+  delay. Sequential scheduling (Standards then Spec) worked as
+  designed in all three runs.
 
 ## Cause assessment (facts first)
 
-- Launch/transport delay: not supported. All workers start within
-  seconds.
+- Launch delay (subprocess start): not supported. All workers start
+  within seconds, proving prompt subprocess launch.
+- Standards-specific model transport delay: cannot be ruled out on
+  available evidence. Worker/phase start does not measure time to
+  first model response, and Spec success uses a different model.
 - Nested delegation runaway: not supported. Only observed delegation
   is the single `task` tool_use inside attempt 1's partial capture;
   no evidence of repeated or nested worker launches.
@@ -169,8 +176,9 @@ weakening of independent/exact-HEAD acceptance.
   decision #149; ADR-0013.
 - Runs: `38731980384`, `38740905612`, `38759201551`; CI
   `38742149831`; comparison run `38759200656` (PR #157).
-- Review comments: Standards FAIL + Spec PASS on run 319; Spec PASS
-  on runs 409/592; CI SUCCESS record (PR #154 comment 15:18:44Z).
+- Review comments: Standards FAIL + Spec PASS on run `38731980384`;
+  Spec PASS on runs `38740905612` / `38759201551`; CI SUCCESS record
+  (PR #154 comment 15:18:44Z).
 - Config inspected as needed only: `.opencode/commands/review-standards.md`,
   `.opencode/agents/reviewer-standards.md`,
   `scripts/review-cycle.ts`, `scripts/review/worker-stream.ts`,
