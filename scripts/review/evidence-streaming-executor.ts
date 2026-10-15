@@ -18,6 +18,7 @@ import {
   type PersistEvidenceDeps,
   type SessionExporter,
 } from './evidence-worker.js';
+import { startReviewerProgressProbe, type ReviewerProgressProbeDeps } from './reviewer-progress.js';
 import type { CommandExecutor } from './runner.js';
 import type { RunSummaryRecorder } from './run-summary.js';
 import { runWorkerStream, type SpawnFn } from './worker-stream.js';
@@ -37,6 +38,13 @@ export interface EvidenceStreamingExecutorDeps {
   exporter?: SessionExporter;
   killGraceMs?: number;
   groupPollMs?: number;
+  // Additive timeout-resilient progress probe (ticket #161): while the worker
+  // runs, bounded allowlisted lifecycle metadata is persisted incrementally
+  // so a timeout retains the latest projected progress (or an explicit
+  // incomplete/unavailable record). Enabled by default; pass
+  // `{ enabled: false }` to opt out. Failures are best-effort and never mask
+  // the worker outcome.
+  progress?: ReviewerProgressProbeDeps & { enabled?: boolean };
 }
 
 export function evidenceStreamingWorkerExecutor(
@@ -47,6 +55,23 @@ export function evidenceStreamingWorkerExecutor(
 ): CommandExecutor {
   return async (command, args) => {
     const capture = createEvidenceCapture();
+    const boundMs = deps.timeoutMs ?? timeoutForWorker(label);
+    const progressOpts = deps.progress ?? {};
+    const { enabled: progressEnabled = true, ...probeDeps } = progressOpts;
+    const probe = progressEnabled
+      ? startReviewerProgressProbe(
+          {
+            worker: 'review-cycle',
+            command: evidence.command,
+            axis: evidence.axis,
+            attempt: evidence.attempt,
+            workerStartHead: evidence.workerStartHead,
+            boundMs,
+          },
+          { lines: capture.lines, wasTruncated: () => capture.wasTruncated() },
+          probeDeps,
+        )
+      : undefined;
     const settle = async (): Promise<void> => {
       try {
         const result = await finalizeSkillEvidence(
@@ -77,7 +102,7 @@ export function evidenceStreamingWorkerExecutor(
         args,
         {
           label,
-          timeoutMs: deps.timeoutMs ?? timeoutForWorker(label),
+          timeoutMs: boundMs,
           stdoutLogFilter: suppressJsonWorkerLines,
           ...(deps.killGraceMs === undefined ? {} : { killGraceMs: deps.killGraceMs }),
           ...(deps.groupPollMs === undefined ? {} : { groupPollMs: deps.groupPollMs }),
@@ -94,6 +119,8 @@ export function evidenceStreamingWorkerExecutor(
     } catch (error) {
       await settle();
       throw error;
+    } finally {
+      probe?.stop();
     }
   };
 }
