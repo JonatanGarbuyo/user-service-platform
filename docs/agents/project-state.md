@@ -49,7 +49,8 @@ Identity and provider-independent subscription/billing contracts. Monthly and
 annual offers are required; prices remain pending. The operator selected
 Mercado Pago Argentina in ARS for the first adapter. Cancellation stops renewal
 and preserves the already-paid period; the consumer decides access. Remaining
-lifecycle and consumer transport details are tracked by the map. No consumer
+commercial lifecycle details are tracked by decision #147. Consumer transport
+and reusable-token behavior are settled by decision #149 and spec #150. No consumer
 repository or service-copy repository is required for this backend increment.
 
 Product work takes priority over further tooling. The operator authorizes
@@ -63,6 +64,33 @@ Maintenance #143/#144 has PR #145 READY at
 `fc3343e1bf90626e6a220d5076fc36fb2804469b` (run 38634721468 succeeded),
 pending final operator inspection; it does not block this product planning.
 The older dated product/administration snapshots below are historical.
+
+## Consumer JWT delivery (approved 2026-10-14)
+
+The operator approved navigation and local rights evaluation without an
+Identity request per page. [Decision #149](https://github.com/JonatanGarbuyo/user-service-platform/issues/149)
+settles the consumer handoff; [spec #150](https://github.com/JonatanGarbuyo/user-service-platform/issues/150)
+defines two complete slices:
+[token issue/renewal and durable JWKS #151](https://github.com/JonatanGarbuyo/user-service-platform/issues/151),
+then [the multi-page consumer client #152](https://github.com/JonatanGarbuyo/user-service-platform/issues/152).
+Only #151 is initially executable; #152 waits for its accepted merge.
+ADR-0013 records the accepted architecture and revocation trade-off.
+
+These capabilities are approved, not implemented or deployed. Current main
+still uses authoritative cookie sessions; do not claim that JWT, generated
+external clients, social login or paid entitlements already work. Initial
+JWTs grant no paid Entitlements. The browser reuses a short-lived token
+between navigations and renews through the HttpOnly session, with an initial
+maximum 15-minute snapshot; existing admin checks retain immediate store-backed
+session validation. Initial browser transport is a documented same-origin
+gateway owned by the consumer team, not unconfigured cross-origin requests.
+
+Decision #147 remains open for commercial activation/payment/period semantics.
+Mercado Pago handles collection behind the backend boundary. Backend-local
+facts will drive future Entitlement snapshots; the consumer owns content,
+paywall, SEO and CDN configuration. Identity delivery does not wait for
+commercial prices or the Astro repository. Maintenance PR #145 remains a
+separate open READY candidate, not a product prerequisite.
 
 ## Architecture baseline
 
