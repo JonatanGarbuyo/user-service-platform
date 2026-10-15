@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { chromium, type Browser, type Page } from 'playwright-core';
+import { DEV_AUTH_SECRET } from '../src/features/identity/secret.js';
 
 // Direct-browser consumer transport acceptance (spec #164, ADR-0013).
 //
@@ -18,16 +19,56 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 // service-only session cookie never reaches the editorial hostname.
 //
 // No API responses are mocked; the fixture database is a disposable mkdtemp
-// D1. Email verification is seeded through isolated SQL exactly like the
-// existing administration browser test, because the actual verify-email
-// transition is covered at the Workers-runtime HTTP seam
-// (`src/features/identity/consumer-cors.test.ts`).
+// D1. Registration and email verification both run from the approved browser
+// document through the real public HTTP seams: the verification token is
+// minted with the isolated dev secret under the exact HS256 email contract
+// the engine verifies (same shape as `expiredTokenFor` in
+// `src/features/identity/identity.test.ts`), then submitted to the real
+// `/v1/auth/verify-email` endpoint from the consumer origin. Nothing seeds
+// `email_verified` via SQL and no Identity response is mocked.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exec = promisify(execFile);
 const pause = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Consumer CORS browser assertion: ${message}`);
+}
+
+// Mints a genuine email-verification token under the exact HS256 contract
+// Better Auth verifies (payload `{ email, iat, exp }`, dev secret), mirroring
+// `expiredTokenFor` in `src/features/identity/identity.test.ts` but with a
+// live expiry. The isolated Worker uses the same dev-secret fallback (empty
+// `.env`, `ENVIRONMENT=local`), so the real `/v1/auth/verify-email` endpoint
+// accepts it and performs the actual verification transition in D1.
+async function mintVerificationToken(email: string): Promise<string> {
+  const secret = new TextEncoder().encode(DEV_AUTH_SECRET);
+  const encode = (value: unknown): string =>
+    Buffer.from(JSON.stringify(value))
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+  const now = Math.floor(Date.now() / 1000);
+  const header = encode({ alg: 'HS256', typ: 'JWT' });
+  const payload = encode({ email: email.toLowerCase(), iat: now, exp: now + 3600 });
+  const key = await crypto.subtle.importKey(
+    'raw',
+    secret,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`${header}.${payload}`),
+  );
+  const signaturePart = Buffer.from(signature)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+  return `${header}.${payload}.${signaturePart}`;
 }
 
 async function command(label: string, args: string[]): Promise<void> {
@@ -104,12 +145,23 @@ async function stopWorker(child: ChildProcess): Promise<void> {
   if (running()) kill('SIGKILL');
 }
 
+interface RegisterResult {
+  readonly registerStatus: number;
+}
+
+interface VerifyResult {
+  readonly verifyStatus: number;
+  readonly emailVerified: boolean;
+}
+
 interface AuthenticateResult {
   readonly loginStatus: number;
   readonly meStatus: number;
   readonly meEmail: string | null;
   readonly tokenStatus: number;
   readonly hasToken: boolean;
+  readonly renewStatus: number;
+  readonly hasRenewedToken: boolean;
   readonly jwksStatus: number;
   readonly documentCookie: string;
 }
@@ -215,22 +267,6 @@ export async function runConsumerCorsBrowserTest(
 
     const email = 'consumer-browser@example.com';
     const password = 'isolated-consumer-credential-41';
-    const registered = await http('/v1/auth/register', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Consumer Browser', email, password }),
-    });
-    assert(registered.status === 201, 'fixture created through public HTTP');
-    await registered.arrayBuffer();
-    await command('isolated fixture SQL', [
-      cli,
-      'd1',
-      'execute',
-      'DB',
-      ...flags,
-      '--command',
-      `UPDATE "user" SET email_verified = 1 WHERE email = '${email}'`,
-    ]);
 
     phase = 'frontend origin';
     frontend = await startFrontend(frontendPort);
@@ -269,6 +305,42 @@ export async function runConsumerCorsBrowserTest(
     const editorial = await page.goto(`${frontendBase}/`);
     assert(editorial !== null && editorial.status() === 200, 'editorial document served');
 
+    phase = 'direct-browser registration';
+    const registered = await page.evaluate<RegisterResult>(`(async () => {
+      const service = ${JSON.stringify(serviceBase)};
+      const email = ${JSON.stringify(email)};
+      const password = ${JSON.stringify(password)};
+      const response = await fetch(service + '/v1/auth/register', {
+        method: 'POST', credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Consumer Browser', email, password })
+      });
+      await response.text();
+      return { registerStatus: response.status };
+    })()`);
+    assert(registered.registerStatus === 201, 'registration from the approved origin succeeds');
+
+    phase = 'direct-browser verification';
+    const verificationToken = await mintVerificationToken(email);
+    const verified = await page.evaluate<VerifyResult>(`(async () => {
+      const service = ${JSON.stringify(serviceBase)};
+      const token = ${JSON.stringify(verificationToken)};
+      const response = await fetch(service + '/v1/auth/verify-email', {
+        method: 'POST', credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      const body = response.status === 200 ? await response.json() : null;
+      return {
+        verifyStatus: response.status,
+        emailVerified: !!(body && body.emailVerified === true)
+      };
+    })()`);
+    assert(
+      verified.verifyStatus === 200 && verified.emailVerified,
+      'actual verify-email from the approved origin succeeds',
+    );
+
     phase = 'direct-browser lifecycle';
     const authenticated = await page.evaluate<AuthenticateResult>(`(async () => {
       const service = ${JSON.stringify(serviceBase)};
@@ -288,6 +360,11 @@ export async function runConsumerCorsBrowserTest(
       });
       const tokenStatus = token.status;
       const tokenBody = tokenStatus === 200 ? await token.json() : null;
+      const renewed = await fetch(service + '/v1/auth/token', {
+        method: 'POST', credentials: 'include', headers: json, body: '{}'
+      });
+      const renewStatus = renewed.status;
+      const renewBody = renewStatus === 200 ? await renewed.json() : null;
       const jwks = await fetch(service + '/v1/auth/jwks');
       const jwksStatus = jwks.status;
       return {
@@ -295,6 +372,8 @@ export async function runConsumerCorsBrowserTest(
         meEmail: meBody && typeof meBody.email === 'string' ? meBody.email : null,
         tokenStatus,
         hasToken: !!(tokenBody && typeof tokenBody.accessToken === 'string'),
+        renewStatus,
+        hasRenewedToken: !!(renewBody && typeof renewBody.accessToken === 'string'),
         jwksStatus, documentCookie: document.cookie
       };
     })()`);
@@ -305,6 +384,10 @@ export async function runConsumerCorsBrowserTest(
     assert(authenticated.meStatus === 200, 'credentialed /v1/me resolves the session');
     assert(authenticated.meEmail === email, 'resolved identity matches the fixture');
     assert(authenticated.tokenStatus === 200 && authenticated.hasToken, 'access token issued');
+    assert(
+      authenticated.renewStatus === 200 && authenticated.hasRenewedToken,
+      'access token renewed with the same live session',
+    );
     assert(authenticated.jwksStatus === 200, 'public JWKS readable across origins');
     assert(
       !authenticated.documentCookie.includes('session_token'),
@@ -372,13 +455,18 @@ export async function runConsumerCorsBrowserTest(
 
     await context.close();
     console.log(
-      'Consumer CORS browser acceptance passed: direct credentialed login/me/token/jwks/sign-out across distinct same-site origins, host-only service cookie, hostile-origin rejection.',
+      'Consumer CORS browser acceptance passed: direct credentialed register/verify/login/me/token/renew/jwks/sign-out across distinct same-site origins, host-only service cookie, hostile-origin rejection.',
     );
   } catch (cause) {
     if (diagnosticPage !== undefined && !diagnosticPage.isClosed()) {
+      // Metadata only: path and viewport. Cookie, storage, response-body and
+      // token material never enter diagnostics, even though this scenario
+      // expects no script-readable session cookie.
       const summary = await Promise.race([
         diagnosticPage
-          .evaluate<string>(`JSON.stringify({ path: location.pathname, cookie: document.cookie })`)
+          .evaluate<string>(
+            `JSON.stringify({ path: location.pathname, width: window.innerWidth, height: window.innerHeight })`,
+          )
           .catch(() => 'Page diagnostics unavailable'),
         pause(2000).then(() => 'Page diagnostics timed out'),
       ]);

@@ -102,13 +102,25 @@ function verificationToken(): string {
 
 async function registerVerifyLogin(email: string): Promise<string> {
   const originHeaders = { origin: CONSUMER_ORIGIN, 'sec-fetch-site': 'same-site' };
+  const overrides = { AUTH_CONSUMER_ORIGINS: CONSUMER_ORIGIN };
   const registered = await post(
     '/v1/auth/register',
     { name: 'Consumer', email, password: 'correct-horse-41' },
-    { headers: originHeaders, overrides: { AUTH_CONSUMER_ORIGINS: CONSUMER_ORIGIN } },
+    { headers: originHeaders, overrides },
   );
   expect(registered.status).toBe(201);
-  await post('/v1/auth/verify-email', { token: verificationToken() });
+  // Actual verify-email from the approved consumer origin through the real
+  // public verification seam (captured AuthMailer token): proves
+  // consumer-origin verification and its CORS grant, not a headerless call.
+  const verified = await post(
+    '/v1/auth/verify-email',
+    { token: verificationToken() },
+    { headers: originHeaders, overrides },
+  );
+  expect(verified.status).toBe(200);
+  expect(verified.headers.get('access-control-allow-origin')).toBe(CONSUMER_ORIGIN);
+  expect(verified.headers.get('access-control-allow-credentials')).toBe('true');
+  expect(verified.headers.get('vary')).toContain('Origin');
   const login = await post(
     '/v1/auth/login',
     { email, password: 'correct-horse-41' },
@@ -239,6 +251,31 @@ describe('public consumer operation CORS responses', () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ code: 'internal-error' });
   });
+
+  it('preserves private/no-store and Vary on early malformed-config token/account errors', async () => {
+    const overrides = { AUTH_CONSUMER_ORIGINS: '*' };
+    for (const request of [
+      () => get('/v1/me', { headers: { origin: CONSUMER_ORIGIN }, overrides }),
+      () =>
+        post(
+          '/v1/auth/token',
+          {},
+          { headers: { origin: CONSUMER_ORIGIN, 'sec-fetch-site': 'same-site' }, overrides },
+        ),
+    ]) {
+      const res = await request();
+      expect(res.status).toBe(500);
+      expect(await res.json()).toMatchObject({ code: 'internal-error' });
+      // The early middleware return bypasses route-level cache handling, so
+      // it must preserve the personal/token boundary itself.
+      expect(res.headers.get('cache-control')).toContain('private');
+      expect(res.headers.get('cache-control')).toContain('no-store');
+      expect(res.headers.get('vary')).toContain('Origin');
+      // Fail-closed: no CORS grant on malformed configuration.
+      expect(res.headers.get('access-control-allow-origin')).toBeNull();
+      expect(res.headers.get('access-control-allow-credentials')).toBeNull();
+    }
+  });
 });
 
 describe('consumer CORS preflight', () => {
@@ -311,6 +348,14 @@ describe('direct-browser consumer lifecycle from a configured origin', () => {
     expect(token.headers.get('access-control-allow-origin')).toBe(CONSUMER_ORIGIN);
     const issued = (await token.json()) as { accessToken: string };
     expect(typeof issued.accessToken).toBe('string');
+
+    // Renewal with the same live session succeeds before sign-out.
+    const renewed = await post('/v1/auth/token', {}, { cookie, headers, overrides });
+    expect(renewed.status).toBe(200);
+    expect(renewed.headers.get('cache-control')).toContain('no-store');
+    expect(renewed.headers.get('access-control-allow-origin')).toBe(CONSUMER_ORIGIN);
+    const renewedBody = (await renewed.json()) as { accessToken: string };
+    expect(typeof renewedBody.accessToken).toBe('string');
 
     const jwks = await get('/v1/auth/jwks', { headers, overrides });
     expect(jwks.status).toBe(200);

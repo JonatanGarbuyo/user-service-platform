@@ -79,10 +79,14 @@ export const CONSUMER_CORS_PATHS = [
 type ConsumerCorsContext = Context<{ Bindings: Env; Variables: { requestId: string } }>;
 
 function problem(c: ConsumerCorsContext) {
+  // Early malformed-configuration failures bypass route handlers, so they
+  // must preserve the personal/token cache boundary (`private, no-store`)
+  // and `Vary: Origin` themselves instead of relying on post-`next()`
+  // handling. No CORS grant is emitted: the configuration fails closed.
   return c.json(
     createProblem({ status: 500, code: 'internal-error', title: 'Internal Server Error' }),
     500,
-    { 'Content-Type': PROBLEM_JSON },
+    { 'Content-Type': PROBLEM_JSON, 'Cache-Control': 'private, no-store', Vary: 'Origin' },
   );
 }
 
