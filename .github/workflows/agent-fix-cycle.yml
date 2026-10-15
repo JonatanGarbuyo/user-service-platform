@@ -32,8 +32,12 @@ jobs:
     runs-on: ubuntu-latest
     # Backstop only: repository-owned worker bounds (ticket #31) terminate hung
     # workers well before this; the terminal step below still runs and
-    # publishes the terminal status.
-    timeout-minutes: 90
+    # publishes the terminal status. Budget (tickets #155/#156): 20
+    # correction + 15 gates + 60 review cycle (= 95) + at least 15
+    # operational margin needs at least 110 minutes, budgeted within this
+    # 120-minute backstop, so bounded phases and evidence upload complete
+    # before this backstop.
+    timeout-minutes: 120
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

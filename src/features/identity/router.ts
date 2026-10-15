@@ -1,19 +1,24 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
-import { resolveEffectiveConfig } from '../../config/index.js';
+import { resolveEffectiveConfig, type EffectiveConfig } from '../../config/index.js';
 import type { Env } from '../../env.js';
 import { PROBLEM_JSON, createProblem, type ProblemCode } from '../../shared/problem.js';
-import { createIdentityAuth } from './auth.js';
+import { createConsumerTokenAuth, createIdentityAuth } from './auth.js';
 import { resolveAdminIdentity } from './authorization.js';
 import { getAdminUserById, listAdminUsers } from './admin-users.js';
 import { bootstrapAdminUser } from './admin.js';
+import { resolveConsumerTokenConfig, extractTokenExpiry } from './consumer-tokens.js';
+import type { ConsumerJsonWebKey } from './contract.js';
 import { deferredAuthMailer, resolveAuthMailer, type AuthMailer } from './mailer.js';
+import { evaluateCookieMutationOrigin, resolveGatewayOrigins } from './origin-guard.js';
 import { resolveAuthPolicy, type AuthPolicy } from './policy.js';
 import {
   adminBootstrapRoute,
   adminMeRoute,
   adminUserDetailRoute,
   adminUsersRoute,
+  consumerJwksRoute,
+  consumerTokenRoute,
   currentUserRoute,
   loginRoute,
   registerRoute,
@@ -33,6 +38,12 @@ export interface IdentityRouterOptions {
 }
 
 type IdentityContext = Context<{ Bindings: Env; Variables: { requestId: string } }>;
+
+// Bounded public cache lifetime for the consumer JWKS document, in seconds
+// (spec #150). Receiving verifiers may cache fetched keys this long;
+// verification keys themselves are retained in D1 through every outstanding
+// token lifetime plus the documented clock tolerance.
+const CONSUMER_JWKS_CACHE_MAX_AGE_SECONDS = 300;
 
 // Better Auth failure surfaced either as an error Response (asResponse mode)
 // or as a thrown APIError. Only the numeric status and string code cross
@@ -102,11 +113,22 @@ function backgroundScheduler(c: IdentityContext): (task: Promise<unknown>) => vo
   };
 }
 
-function scopedAuth(
+// Shared per-request wiring for both auth builders: one effective
+// non-secret configuration, policy, secrets/bindings and background
+// scheduler. Plugin selection stays at the call sites so endpoint inference
+// keeps the precise plugin type.
+function scopedBase(
   c: IdentityContext,
   override?: AuthMailer,
   mailTransport: 'eager' | 'deferred' = 'eager',
-): { auth: ReturnType<typeof createIdentityAuth>; policy: AuthPolicy } {
+): {
+  readonly effective: EffectiveConfig;
+  readonly policy: AuthPolicy;
+  readonly mailer: AuthMailer;
+  readonly secret: string;
+  readonly baseURL: string;
+  readonly background: (task: Promise<unknown>) => void;
+} {
   // Application boundary (ticket #57, PR #61 review): compose one effective
   // non-secret configuration from the selected versioned profile + same-name
   // runtime overrides, then make policy/mailer read those effective values.
@@ -117,8 +139,8 @@ function scopedAuth(
     runtime: { ...c.env },
   });
   const policy = resolveAuthPolicy(effective.config);
-  const auth = createIdentityAuth({
-    db: c.env.DB,
+  return {
+    effective,
     policy,
     mailer: (mailTransport === 'deferred' ? deferredAuthMailer : resolveAuthMailer)(
       {
@@ -134,11 +156,55 @@ function scopedAuth(
       BETTER_AUTH_SECRET: c.env.BETTER_AUTH_SECRET,
     }),
     baseURL: new URL(c.req.url).origin,
-    verifyEmailActionURL: effective.config.AUTH_VERIFY_EMAIL_ACTION_URL,
-    resetPasswordActionURL: effective.config.AUTH_RESET_PASSWORD_ACTION_URL,
     background: backgroundScheduler(c),
+  };
+}
+
+function scopedAuth(
+  c: IdentityContext,
+  override?: AuthMailer,
+  mailTransport: 'eager' | 'deferred' = 'eager',
+): { auth: ReturnType<typeof createIdentityAuth>; policy: AuthPolicy } {
+  const base = scopedBase(c, override, mailTransport);
+  const auth = createIdentityAuth({
+    db: c.env.DB,
+    policy: base.policy,
+    mailer: base.mailer,
+    secret: base.secret,
+    baseURL: base.baseURL,
+    verifyEmailActionURL: base.effective.config.AUTH_VERIFY_EMAIL_ACTION_URL,
+    resetPasswordActionURL: base.effective.config.AUTH_RESET_PASSWORD_ACTION_URL,
+    background: base.background,
   });
-  return { auth, policy };
+  return { auth, policy: base.policy };
+}
+
+// Token-capable per-request wiring for the application-owned consumer token
+// operations (spec #150). The consumer JWT configuration resolves here and
+// fails closed before any key or token handling; deployments without stable
+// values never reach issuance or publication.
+function scopedTokenAuth(
+  c: IdentityContext,
+  override?: AuthMailer,
+): ReturnType<typeof createConsumerTokenAuth> {
+  const base = scopedBase(c, override);
+  const consumerTokens = resolveConsumerTokenConfig({
+    environment: base.effective.environment,
+    issuer: base.effective.config.AUTH_JWT_ISSUER,
+    audience: base.effective.config.AUTH_JWT_AUDIENCE,
+    ttlSeconds: base.effective.config.AUTH_JWT_TTL_SECONDS,
+  });
+  return createConsumerTokenAuth({
+    db: c.env.DB,
+    policy: base.policy,
+    mailer: base.mailer,
+    secret: base.secret,
+    baseURL: base.baseURL,
+    verifyEmailActionURL: base.effective.config.AUTH_VERIFY_EMAIL_ACTION_URL,
+    resetPasswordActionURL: base.effective.config.AUTH_RESET_PASSWORD_ACTION_URL,
+    background: base.background,
+    consumerTokens,
+  });
 }
 
 function problem(
@@ -147,6 +213,7 @@ function problem(
   code: ProblemCode,
   title: string,
   detail?: string,
+  cacheControl?: string,
 ) {
   return c.json(
     createProblem({
@@ -157,8 +224,48 @@ function problem(
       instance: new URL(c.req.url).pathname,
     }),
     status,
-    { 'Content-Type': PROBLEM_JSON },
+    cacheControl === undefined
+      ? { 'Content-Type': PROBLEM_JSON }
+      : { 'Content-Type': PROBLEM_JSON, 'Cache-Control': cacheControl },
   );
+}
+
+// Explicit Origin/Fetch Metadata protection for cookie-auth mutation
+// operations (spec #150, ADR-0013). Returns a rejection response when the
+// request must not mutate cookie-authenticated state, null when it may
+// proceed. Configuration defects fail closed as 500. The optional cache
+// control keeps token-route rejections private, no-store.
+function guardCookieMutation(
+  c: IdentityContext,
+  cacheControl?: string,
+): ReturnType<typeof problem> | null {
+  let gatewayOrigins: string[];
+  try {
+    const effective = resolveEffectiveConfig({
+      environment: c.env.ENVIRONMENT,
+      runtime: { ...c.env },
+    });
+    gatewayOrigins = resolveGatewayOrigins(effective.config.AUTH_GATEWAY_ORIGINS);
+  } catch {
+    return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, cacheControl);
+  }
+  const allowed = evaluateCookieMutationOrigin({
+    requestOrigin: new URL(c.req.url).origin,
+    origin: c.req.header('origin') ?? null,
+    secFetchSite: c.req.header('sec-fetch-site') ?? null,
+    gatewayOrigins,
+  });
+  if (!allowed) {
+    return problem(
+      c,
+      403,
+      'forbidden',
+      'Forbidden',
+      'The request origin is not allowed for this operation.',
+      cacheControl,
+    );
+  }
+  return null;
 }
 
 function forwardSessionCookies(c: IdentityContext, source: Response): void {
@@ -179,6 +286,10 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
   const override = options.authMailer;
 
   router.openapi(registerRoute, async (c) => {
+    const rejected = guardCookieMutation(c);
+    if (rejected !== null) {
+      return rejected;
+    }
     const { auth, policy } = scopedAuth(c, override);
     if (!policy.emailPasswordEnabled) {
       return problem(c, 403, 'email-password-disabled', 'Email authentication is disabled');
@@ -209,6 +320,10 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
   });
 
   router.openapi(loginRoute, async (c) => {
+    const rejected = guardCookieMutation(c);
+    if (rejected !== null) {
+      return rejected;
+    }
     const { auth, policy } = scopedAuth(c, override);
     if (!policy.emailPasswordEnabled) {
       return problem(c, 403, 'email-password-disabled', 'Email authentication is disabled');
@@ -392,6 +507,10 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
   });
 
   router.openapi(signOutRoute, async (c) => {
+    const rejected = guardCookieMutation(c);
+    if (rejected !== null) {
+      return rejected;
+    }
     const { auth } = scopedAuth(c, override);
     const outcome = await callEngine(() =>
       auth.api.signOut({
@@ -418,6 +537,128 @@ export function createIdentityRouter(options: IdentityRouterOptions = {}) {
       return problem(c, 500, 'internal-error', 'Internal Server Error');
     }
     return c.json({ status: 'ok' as const }, 200);
+  });
+
+  // Consumer token issuance/renewal (spec #150, ADR-0013). The live
+  // HttpOnly session is resolved authoritatively (expiry/revocation aware,
+  // cookie cache bypassed) before any token handling; the same operation
+  // serves initial issue and renewal. All responses are private, no-store.
+  router.openapi(consumerTokenRoute, async (c) => {
+    const noStore = 'private, no-store';
+    const rejected = guardCookieMutation(c, noStore);
+    if (rejected !== null) {
+      return rejected;
+    }
+    let tokenAuth: ReturnType<typeof scopedTokenAuth>;
+    try {
+      tokenAuth = scopedTokenAuth(c, override);
+    } catch {
+      return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, noStore);
+    }
+    const session = await resolveSessionContext({
+      env: c.env,
+      headers: c.req.raw.headers,
+      baseURL: new URL(c.req.url).origin,
+      authMailer: override,
+      background: backgroundScheduler(c),
+      requestId: c.get('requestId'),
+    });
+    if (session === null) {
+      return problem(c, 401, 'unauthenticated', 'Unauthenticated', undefined, noStore);
+    }
+    const outcome = await callEngine(() =>
+      tokenAuth.api.getToken({ headers: c.req.raw.headers, asResponse: true }),
+    );
+    if (outcome instanceof Response) {
+      if (outcome.ok) {
+        const token = asRecord(await outcome.json().catch(() => null))?.token;
+        if (typeof token !== 'string' || token.length === 0) {
+          return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, noStore);
+        }
+        const expiresAt = extractTokenExpiry(token);
+        if (expiresAt === null) {
+          return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, noStore);
+        }
+        return c.json({ accessToken: token, tokenType: 'Bearer' as const, expiresAt }, 200, {
+          'Content-Type': 'application/json',
+          'Cache-Control': noStore,
+        });
+      }
+      const failure = await readEngineFailure(outcome);
+      if (failure.status >= 500) {
+        return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, noStore);
+      }
+      // The authoritative session check passed but issuance found no live
+      // session (for example revoked between the two reads): deny as
+      // unauthenticated rather than minting.
+      return problem(c, 401, 'unauthenticated', 'Unauthenticated', undefined, noStore);
+    }
+    if (outcome.status >= 500) {
+      return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, noStore);
+    }
+    return problem(c, 401, 'unauthenticated', 'Unauthenticated', undefined, noStore);
+  });
+
+  // Consumer verification-key publication (spec #150, ADR-0013). Only public
+  // asymmetric key material is ever projected here; private keys stay in D1
+  // behind the engine encryption facility. Successful responses carry bounded
+  // public caching; failures are never cached.
+  router.openapi(consumerJwksRoute, async (c) => {
+    let tokenAuth: ReturnType<typeof scopedTokenAuth>;
+    try {
+      tokenAuth = scopedTokenAuth(c, override);
+    } catch {
+      return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, 'no-store');
+    }
+    const outcome = await callEngine(() =>
+      tokenAuth.api.getJwks({ headers: c.req.raw.headers, asResponse: true }),
+    );
+    if (outcome instanceof Response && outcome.ok) {
+      const keys = asRecord(await outcome.json().catch(() => null))?.keys;
+      if (!Array.isArray(keys)) {
+        return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, 'no-store');
+      }
+      const projected: ConsumerJsonWebKey[] = [];
+      for (const entry of keys) {
+        const record = asRecord(entry);
+        if (
+          record === null ||
+          typeof record.kid !== 'string' ||
+          typeof record.kty !== 'string' ||
+          typeof record.alg !== 'string'
+        ) {
+          return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, 'no-store');
+        }
+        const key: ConsumerJsonWebKey = {
+          kid: record.kid,
+          kty: record.kty,
+          alg: record.alg,
+        };
+        for (const field of ['use', 'crv', 'x', 'y', 'n', 'e'] as const) {
+          const value = record[field];
+          if (value === undefined) {
+            continue;
+          }
+          if (typeof value !== 'string') {
+            return problem(
+              c,
+              500,
+              'internal-error',
+              'Internal Server Error',
+              undefined,
+              'no-store',
+            );
+          }
+          key[field] = value;
+        }
+        projected.push(key);
+      }
+      return c.json({ keys: projected }, 200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': `public, max-age=${CONSUMER_JWKS_CACHE_MAX_AGE_SECONDS.toString()}`,
+      });
+    }
+    return problem(c, 500, 'internal-error', 'Internal Server Error', undefined, 'no-store');
   });
 
   router.openapi(adminMeRoute, async (c) => {

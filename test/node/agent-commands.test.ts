@@ -8,6 +8,12 @@ import {
   isAuthorizedAssociation,
   parseAgentCommand,
 } from '../../scripts/agent/command-guard.js';
+import {
+  ADDRESS_REVIEW_TIMEOUT_MS,
+  GATE_TIMEOUT_MS,
+  IMPLEMENT_TIMEOUT_MS,
+  REVIEW_CYCLE_TIMEOUT_MS,
+} from '../../scripts/review/worker-timeout.js';
 
 // Seam under test: deterministic GitHub-comment command guard (ticket #29).
 // Comment text selects only a fixed allowlist of exact commands and is never
@@ -529,5 +535,58 @@ describe('agent workflow contracts', () => {
         expect(workflow).not.toMatch(/\.opencode\/bin/);
       },
     );
+  });
+
+  // Ticket #156 (parent spec #155) enclosing workflow backstops. The
+  // `timeout-minutes` job backstop is a backstop only: repository-owned worker
+  // bounds terminate hung workers first, and the terminal step still publishes
+  // evidence. Budgets are independent spec literals so an undersized aggregate
+  // that would preempt a bounded phase or evidence upload fails here.
+  function workflowBackstopMinutes(name: string): number {
+    const parsed: unknown = parseYaml(readWorkflow(name));
+    const doc = asRecord(parsed);
+    const jobs = doc === undefined ? undefined : asRecord(doc.jobs);
+    const run = jobs === undefined ? undefined : asRecord(jobs.run);
+    const timeout = run === undefined ? undefined : run['timeout-minutes'];
+    if (typeof timeout !== 'number') {
+      throw new Error(`workflow ${name} has no numeric timeout-minutes`);
+    }
+    return timeout;
+  }
+
+  // Operational margin both enclosing workflows reserve for evidence upload
+  // and the terminal status step (parent spec #155).
+  const OPERATIONAL_MARGIN_MS = 15 * 60 * 1000;
+
+  function requiredTicketBudgetMs(): number {
+    return IMPLEMENT_TIMEOUT_MS + GATE_TIMEOUT_MS + REVIEW_CYCLE_TIMEOUT_MS + OPERATIONAL_MARGIN_MS;
+  }
+
+  function requiredCorrectionBudgetMs(): number {
+    return (
+      ADDRESS_REVIEW_TIMEOUT_MS + GATE_TIMEOUT_MS + REVIEW_CYCLE_TIMEOUT_MS + OPERATIONAL_MARGIN_MS
+    );
+  }
+
+  describe('enclosing workflow backstop budgets (ticket #156)', () => {
+    it('gives the ticket workflow a 150-minute backstop', () => {
+      expect(workflowBackstopMinutes('agent-ticket.yml')).toBe(150);
+    });
+
+    it('gives the correction workflow a 120-minute backstop', () => {
+      expect(workflowBackstopMinutes('agent-fix-cycle.yml')).toBe(120);
+    });
+
+    it('fits implementation, gates, review cycle and operational margin inside the ticket backstop', () => {
+      const backstopMs = workflowBackstopMinutes('agent-ticket.yml') * 60 * 1000;
+
+      expect(backstopMs).toBeGreaterThanOrEqual(requiredTicketBudgetMs());
+    });
+
+    it('fits correction, gates, review cycle and operational margin inside the correction backstop', () => {
+      const backstopMs = workflowBackstopMinutes('agent-fix-cycle.yml') * 60 * 1000;
+
+      expect(backstopMs).toBeGreaterThanOrEqual(requiredCorrectionBudgetMs());
+    });
   });
 });

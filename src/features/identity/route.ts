@@ -8,6 +8,8 @@ import {
   AdminUserListQuerySchema,
   AdminUserListSchema,
   AdminUserSchema,
+  ConsumerJwksResponseSchema,
+  ConsumerTokenResponseSchema,
   CurrentUserSchema,
   LoginRequestSchema,
   LoginResultSchema,
@@ -167,6 +169,51 @@ export const signOutRoute = createRoute({
       description: 'The session was invalidated.',
     },
     ...problemResponses('Sign-out failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const consumerTokenRoute = createRoute({
+  method: 'post',
+  path: '/auth/token',
+  operationId: 'issueConsumerToken',
+  summary: 'Issue or renew a consumer access token',
+  description:
+    'Issues or renews a short-lived application-owned access token from the ' +
+    'live HttpOnly cookie session. The request carries no user, claims, ' +
+    'issuer or audience: the token holds the opaque session subject, the ' +
+    'deployment-configured issuer/audience, integer issued/expiry bounds and ' +
+    'an empty entitlements list. Expiry never exceeds the live session ' +
+    'expiry. Revoked or expired sessions are denied further issuance; ' +
+    'already-issued offline tokens remain valid until their own expiry ' +
+    '(at most 15 minutes initially). All responses are private, no-store.',
+  tags: ['identity'],
+  responses: {
+    200: {
+      content: { 'application/json': { schema: ConsumerTokenResponseSchema } },
+      description: 'The access token, its type and its integer Unix expiry.',
+    },
+    ...problemResponses('Issuance failure as RFC 9457 Problem Details.'),
+  },
+});
+
+export const consumerJwksRoute = createRoute({
+  method: 'get',
+  path: '/auth/jwks',
+  operationId: 'getConsumerJwks',
+  summary: 'Publish consumer token verification keys',
+  description:
+    'Returns the active and retained public asymmetric verification keys as ' +
+    'an RFC 7517 JSON Web Key Set. Private key material is never published. ' +
+    'Responses carry bounded public caching; verification keys remain ' +
+    'available through every outstanding token lifetime plus the documented ' +
+    'clock tolerance.',
+  tags: ['identity'],
+  responses: {
+    200: {
+      content: { 'application/json': { schema: ConsumerJwksResponseSchema } },
+      description: 'The public verification keys.',
+    },
+    ...problemResponses('Publication failure as RFC 9457 Problem Details.'),
   },
 });
 
