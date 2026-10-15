@@ -225,11 +225,22 @@ export default {
     const flags = ['--config', config, '--env-file', envFile, '--local', '--persist-to', persist];
     await command('isolated migrations', [cli, 'd1', 'migrations', 'apply', 'DB', ...flags]);
     const port = await availablePort();
+    const inspectorPort = await availablePort();
     const base = `http://127.0.0.1:${String(port)}`;
     const processState = { spawnFailed: false };
     worker = spawn(
       process.execPath,
-      [cli, 'dev', ...flags, '--ip', '127.0.0.1', '--port', String(port)],
+      [
+        cli,
+        'dev',
+        ...flags,
+        '--ip',
+        '127.0.0.1',
+        '--port',
+        String(port),
+        '--inspector-port',
+        String(inspectorPort),
+      ],
       {
         cwd: root,
         stdio: 'ignore',
