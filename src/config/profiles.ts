@@ -26,6 +26,7 @@ export const NON_SECRET_VAR_NAMES = [
   'AUTH_JWT_AUDIENCE',
   'AUTH_JWT_TTL_SECONDS',
   'AUTH_GATEWAY_ORIGINS',
+  'AUTH_CONSUMER_ORIGINS',
   'SMTP_HOST',
   'SMTP_PORT',
   'SMTP_SECURE',
@@ -64,7 +65,9 @@ function freezeProfile(profile: NonSecretProfile): NonSecretProfile {
 // mail targets the service-owned fallback action pages (ticket #77).
 // Consumer JWT slots (spec #150) stay explicitly unset so local/test runs use
 // deterministic local-only issuer/audience/TTL defaults; sandbox/production
-// fail closed without explicit stable deployment values.
+// fail closed without explicit stable deployment values. Exact direct-browser
+// consumer-origin slots (spec #164, ADR-0013) stay unset: consumer CORS is
+// opt-in per deployment and same-origin-only until an operator names origins.
 export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'local',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -80,6 +83,7 @@ export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_JWT_AUDIENCE: '',
   AUTH_JWT_TTL_SECONDS: '',
   AUTH_GATEWAY_ORIGINS: '',
+  AUTH_CONSUMER_ORIGINS: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_SECURE: '',
@@ -92,9 +96,11 @@ export const LOCAL_PROFILE: NonSecretProfile = freezeProfile({
 // transport (ticket #58). Auth action URL slots stay explicitly unset so
 // sandbox mail targets the service-owned fallback pages unless a deployment
 // configures branded consumer pages (ticket #77). Consumer JWT issuer,
-// audience, TTL and gateway-origin slots stay explicitly unset and must be
-// supplied out-of-band per deployment; token issuance without them fails
-// closed (spec #150).
+// audience, TTL, gateway-origin and direct-consumer-origin slots stay
+// explicitly unset and must be supplied out-of-band per deployment; token
+// issuance without issuer/audience fails closed (spec #150) and consumer
+// CORS stays same-origin-only until exact consumer origins are named
+// (spec #164, ADR-0013).
 export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'sandbox',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -110,6 +116,7 @@ export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_JWT_AUDIENCE: '',
   AUTH_JWT_TTL_SECONDS: '',
   AUTH_GATEWAY_ORIGINS: '',
+  AUTH_CONSUMER_ORIGINS: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_SECURE: '',
@@ -122,9 +129,11 @@ export const SANDBOX_PROFILE: NonSecretProfile = freezeProfile({
 // transport (ticket #58). Auth action URL slots stay explicitly unset so
 // production mail targets the service-owned fallback pages unless a
 // deployment configures branded consumer pages (ticket #77). Consumer JWT
-// issuer, audience, TTL and gateway-origin slots stay explicitly unset and
-// must be supplied out-of-band per deployment; token issuance without them
-// fails closed (spec #150).
+// issuer, audience, TTL, gateway-origin and direct-consumer-origin slots stay
+// explicitly unset and must be supplied out-of-band per deployment; token
+// issuance without issuer/audience fails closed (spec #150) and consumer CORS
+// stays same-origin-only until exact consumer origins are named (spec #164,
+// ADR-0013).
 export const PRODUCTION_PROFILE: NonSecretProfile = freezeProfile({
   ENVIRONMENT: 'production',
   AUTH_REGISTRATION_ENABLED: 'true',
@@ -140,6 +149,7 @@ export const PRODUCTION_PROFILE: NonSecretProfile = freezeProfile({
   AUTH_JWT_AUDIENCE: '',
   AUTH_JWT_TTL_SECONDS: '',
   AUTH_GATEWAY_ORIGINS: '',
+  AUTH_CONSUMER_ORIGINS: '',
   SMTP_HOST: '',
   SMTP_PORT: '',
   SMTP_SECURE: '',
