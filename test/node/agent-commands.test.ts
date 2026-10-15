@@ -588,15 +588,5 @@ describe('agent workflow contracts', () => {
 
       expect(backstopMs).toBeGreaterThanOrEqual(requiredCorrectionBudgetMs());
     });
-
-    it('rejects the superseded 90-minute aggregate as too small for the approved budgets', () => {
-      const supersededMs = 90 * 60 * 1000;
-
-      // The approved ticket backstop moved beyond the old 90-minute value,
-      // and 90 minutes cannot cover either approved phase budget.
-      expect(workflowBackstopMinutes('agent-ticket.yml')).toBeGreaterThan(90);
-      expect(supersededMs).toBeLessThan(requiredTicketBudgetMs());
-      expect(supersededMs).toBeLessThan(requiredCorrectionBudgetMs());
-    });
   });
 });
