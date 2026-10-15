@@ -478,10 +478,11 @@ describe('consumer token TTL and session-expiry bounds', () => {
     const before = Math.floor(Date.now() / 1000);
 
     const issued = await readTokenSuccess(await issueToken(cookie));
+    const after = Math.floor(Date.now() / 1000);
 
     // The minted expiry respects the configured lifetime bound ...
     expect(issued.expiresAt).toBeGreaterThan(before);
-    expect(issued.expiresAt).toBeLessThanOrEqual(before + 900);
+    expect(issued.expiresAt).toBeLessThanOrEqual(after + 900);
     // ... and never exceeds the authoritative session expiry. The stored
     // session lifetime (engine seconds unit, observed end to end) is the
     // independent bound: the engine's sliding refresh keeps a live session
@@ -500,9 +501,10 @@ describe('consumer token TTL and session-expiry bounds', () => {
     const issued = await readTokenSuccess(
       await issueToken(cookie, { overrides: { AUTH_JWT_TTL_SECONDS: '120' } }),
     );
+    const after = Math.floor(Date.now() / 1000);
 
     expect(issued.expiresAt).toBeGreaterThan(before);
-    expect(issued.expiresAt).toBeLessThanOrEqual(before + 120);
+    expect(issued.expiresAt).toBeLessThanOrEqual(after + 120);
   });
 
   it('fails closed on malformed issuer, audience and TTL configuration', async () => {
