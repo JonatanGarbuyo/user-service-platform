@@ -158,3 +158,11 @@ The stable application-facing identity exposed to feature slices after authentic
 ### Session Context
 
 The stable application-facing session data available to authenticated feature slices. It is an application contract, not a Better Auth internal type.
+
+### Consumer Identity client
+
+The framework-independent browser client for reusable JWT sessions on cached editorial sites (spec #150, ADR-0013, ticket #152). It uses generated OpenAPI contracts, keeps the access token and public-key cache in versioned tab-scoped storage namespaced by service/issuer/audience, shares one controller with lazy coalesced renewal, and exposes a locally verified identity snapshot for UI only. Receiving APIs verify independently.
+
+### Same-origin gateway
+
+The consumer-owned same-origin API gateway that forwards service calls to this service while preserving cookies and the original browser `Origin`. It accepts only its own origin plus exact deployment-approved origins, forwards only `/v1/` paths, and never trusts arbitrary forwarded-host/origin headers (spec #150, ADR-0013).

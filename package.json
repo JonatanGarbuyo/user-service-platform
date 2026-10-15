@@ -5,7 +5,8 @@
   "type": "module",
   "packageManager": "npm@11.19.0",
   "workspaces": [
-    "admin"
+    "admin",
+    "tools/consumer-codegen"
   ],
   "engines": {
     "node": ">=24.21.0 <25"
@@ -28,6 +29,9 @@
     "test:harness": "vitest run --config vitest.harness.config.ts",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "npm run openapi:generate && git diff --exit-code -- openapi/openapi.json",
+    "consumer:generate": "tsx scripts/generate-consumer-client.ts",
+    "consumer:check": "npm run consumer:generate && git diff --exit-code -- src/features/identity/consumer-client/generated/api.d.ts",
+    "openapi:compat": "tsx scripts/openapi-compat.ts",
     "db:generate": "drizzle-kit generate",
     "smoke:sandbox": "tsx scripts/smoke-sandbox.ts",
     "deploy": "tsx scripts/deploy.ts",
@@ -64,6 +68,7 @@
     "better-auth": "1.7.4",
     "drizzle-orm": "0.45.2",
     "hono": "4.13.7",
+    "openapi-fetch": "0.17.0",
     "zod": "4.6.1"
   },
   "allowScripts": {

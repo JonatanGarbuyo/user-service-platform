@@ -93,6 +93,40 @@ commercial prices or the Astro repository. Maintenance PR #145 remains a
 separate open candidate pending final operator inspection, not a product
 prerequisite.
 
+## Consumer client recovery (2026-10-15)
+
+PR #153 completed #151 at main `f8785394810203cd76f663997be3074fe4e73ef8`.
+Standards and Spec PASS at `67b1ce88e46aa10aa77b96129649a62f11227988`;
+exact-HEAD CI 38671491683, post-merge CI 38721888600, sandbox/ordinary
+session smoke 38721888445 and Pages 38721888268 passed. Completion evidence:
+#151 comment 6190230331. JWT activation in sandbox still needs explicit issuer
+and audience; ordinary health/session smoke does not prove it.
+
+#152 implements the framework-independent client under spec #150/ADR-0013.
+The hosted implementation (38721979686) timed out at 30 minutes before any
+commit/PR. Artifact 11967362570 preserved 27 eligible files; its generated
+api.d.ts was truncated and the baseline OpenAPI artifact was excluded.
+Recovery used a fresh worktree at the exact recorded base, applied the complete
+tracked patch, restored the 22 eligible untracked files, regenerated the
+client types and restored the baseline byte-identically from a88774e. This
+preserves partial progress; it does not classify the timeout as a provider
+failure or a PASS. The prior #151-active checkpoint text is historical.
+
+Supplementary local Standards/Spec reviews found stale renewal denials clearing
+new logins, rollover JWKS outages becoming anonymous, response compatibility
+gaps and incomplete browser verification. These were fixed with regression
+coverage; the browser fixture now injects only captured mail at the public
+AuthMailer seam and drives both users through the public verify-email API.
+These local reviews do not replace the configured independent reviews.
+
+Local tests can run the Worker/D1 seam. The whole-browser Wrangler boot is
+blocked here by uv_interface_addresses (system error 1), so genuine browser
+acceptance and full CI remain required on the published recovery HEAD.
+Configured Standards and Spec must independently approve that same HEAD.
+Do not rerun /agent-ticket blindly or modify models/timeouts/approval policies.
+The maintenance PR #145, billing decision #147, social login, paid Entitlements
+and live JWT sandbox configuration remain separate from this client slice.
+
 ## Architecture baseline
 
 Canonical detail lives in `GLOSSARY.md`, ADR-0001 through ADR-0011, Wayfinder #1, and spec #8.
