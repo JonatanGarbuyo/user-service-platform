@@ -49,6 +49,19 @@ describe('worker timeout policy', () => {
     expect(GATE_TIMEOUT_MS).toBeLessThan(7_700_000);
   });
 
+  // Ticket #156 (parent spec #155): the implementation hard deadline is 60
+  // minutes, shared by all existing implementation entrypoints through
+  // `timeoutForWorker('implement')`. Expected values are independent spec
+  // literals, not recomputed from the implementation.
+  it('bounds implementation at the approved 60-minute hard deadline', () => {
+    expect(IMPLEMENT_TIMEOUT_MS).toBe(60 * 60 * 1000);
+    expect(timeoutForWorker('implement')).toBe(60 * 60 * 1000);
+  });
+
+  it('keeps productive implementation alive beyond the superseded 30-minute cutoff', () => {
+    expect(IMPLEMENT_TIMEOUT_MS).toBeGreaterThan(30 * 60 * 1000);
+  });
+
   it('extracts typed timeout details without ad-hoc casts', () => {
     expect(timeoutDetails(new WorkerTimeoutError('gates', 900_000, 'npm run lint'))).toEqual({
       workerLabel: 'gates',

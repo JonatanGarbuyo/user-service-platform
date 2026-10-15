@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { isWorkerTimeout } from '../../scripts/review/worker-timeout.js';
+import { IMPLEMENT_TIMEOUT_MS, isWorkerTimeout } from '../../scripts/review/worker-timeout.js';
 import { runWorkerStream, type SpawnedWorker } from '../../scripts/review/worker-stream.js';
 
 // Seam under test: bounded worker execution (ticket #31).
@@ -441,6 +441,54 @@ describe('worker stream timeout', () => {
     } finally {
       logSpy.mockRestore();
       killSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // Ticket #156 (parent spec #155): the shared implementation bound is 60
+  // minutes. A productive worker must survive beyond the superseded 30-minute
+  // cutoff and still terminate bounded at 60 minutes. Virtual time only; no
+  // wall-clock hour waits.
+  it('keeps an implement worker alive past 30 minutes and times out bounded at 60', async () => {
+    vi.useFakeTimers();
+    const { child } = createKillableChild();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const pending = runWorkerStream(
+        'opencode',
+        ['run', '--auto'],
+        {
+          label: 'implement',
+          timeoutMs: IMPLEMENT_TIMEOUT_MS,
+          killGraceMs: 1_000,
+          groupAlive: () => false,
+          groupPollMs: 50,
+        },
+        () => child,
+      );
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      // Past the superseded 30-minute cutoff the worker is still running.
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 1_000);
+      expect(settled).toBe(false);
+      expect(child.kill).not.toHaveBeenCalled();
+      // At the 60-minute bound the watchdog fires and terminates the tree.
+      const assertion = expect(pending).rejects.toSatisfy(isWorkerTimeout);
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      expect(child.kill).toHaveBeenCalled();
+      child.emit('close', 1);
+      await assertion;
+      await expect(pending).rejects.toMatchObject({ terminated: true });
+      expect(settled).toBe(true);
+    } finally {
+      logSpy.mockRestore();
       vi.useRealTimers();
     }
   });

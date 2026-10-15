@@ -1,11 +1,16 @@
 # Implementation recovery evidence after worker timeout/failure
 
 Ticket #127 policy. Two `/implement` executions for the administrator UI
-reached the unchanged 30-minute bound with no published ticket branch or PR,
-and the existing uploaded evidence preserved outcome/skill records but not
-the unpublished partial source changes. A retry therefore reran
+reached the then-current 30-minute bound with no published ticket branch or
+PR, and the existing uploaded evidence preserved outcome/skill records but
+not the unpublished partial source changes. A retry therefore reran
 implementation blindly. This record closes that execution gap without
 changing product scope, timeout bounds, or publication safeguards.
+
+Current bound (tickets #155/#156): the implementation hard deadline is now
+60 minutes, with the ticket workflow backstopped at 150 minutes and the
+correction workflow at 120 minutes. The historical 30-minute timeouts above
+are preserved as evidence; they are not retroactively reclassified.
 
 ## What is captured
 
