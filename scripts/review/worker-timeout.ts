@@ -5,8 +5,15 @@
 // that. Timeouts are distinct from model failure, gate failure, CI failure,
 // human decisions, stale HEAD, and workflow cancellation so the durable
 // status surface can report TIMEOUT with its own stage/reason/action.
+//
+// Implementation history (tickets #155/#156): the implement bound was
+// 30 minutes until run 38721979686 showed productive work reaching the
+// cutoff. The approved hard deadline is now 60 minutes, still well below the
+// observed hang. Reviewer/correction (20 minutes), review cycle (60), gates
+// (15), the termination handshake, recovery classification, models, retries,
+// approval policy and exact-HEAD acceptance are unchanged.
 export const REVIEWER_TIMEOUT_MS = 20 * 60 * 1000;
-export const IMPLEMENT_TIMEOUT_MS = 30 * 60 * 1000;
+export const IMPLEMENT_TIMEOUT_MS = 60 * 60 * 1000;
 export const ADDRESS_REVIEW_TIMEOUT_MS = 20 * 60 * 1000;
 export const REVIEW_CYCLE_TIMEOUT_MS = 60 * 60 * 1000;
 // Deterministic quality-gate suite bound (ticket #31): lint, formatting,
