@@ -60,10 +60,10 @@ production promotion and real charges remain separately controlled. The
 previous default hosted execution path remains available rather than being a
 prerequisite for progress.
 
-Maintenance #143/#144 has PR #145 READY at
-`fc3343e1bf90626e6a220d5076fc36fb2804469b` (run 38634721468 succeeded),
-pending final operator inspection; it does not block this product planning.
-The older dated product/administration snapshots below are historical.
+Maintenance #143/#144 is implemented by PR #145 (remove wall-clock CI
+polling waits from the real review-cycle regression tests), pending final
+operator inspection; it does not block this product planning. The older
+dated product/administration snapshots below are historical.
 
 ## Consumer JWT delivery (approved 2026-10-14)
 
@@ -90,7 +90,8 @@ Mercado Pago handles collection behind the backend boundary. Backend-local
 facts will drive future Entitlement snapshots; the consumer owns content,
 paywall, SEO and CDN configuration. Identity delivery does not wait for
 commercial prices or the Astro repository. Maintenance PR #145 remains a
-separate open READY candidate, not a product prerequisite.
+separate open candidate pending final operator inspection, not a product
+prerequisite.
 
 ## Architecture baseline
 
@@ -343,10 +344,19 @@ configuration, or infer provider/CLI cause without new evidence and
 authorization. When GitHub approval is needed, give the user the exact run
 link and let them approve; use the integration, no browser login.
 
+Current diagnostic frontier is parent spec #143 (remove wall-clock CI
+polling waits from the real review-cycle regression tests) plus
+implementation ticket #144 (implemented by PR #145, pending final operator
+acceptance). Ticket #144 keeps the real review-cycle CLI as the highest test
+seam and confines accelerated time to its spawned test child; production
+polling policy, workflow, approval, model and gate configuration stay
+unchanged.
+
 ## Maintenance debt
 
 - #38 `Audit deprecated transitive dependencies and npm security findings`: closed/completed.
-- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`), reviewer error diagnostics #137/#138 are completed via PR #139 (main `23c81a21529381598aba692fbf96e84535a46c4c`), and CI read recovery #140/#141 is completed via PR #142 (main `a88774e6b5a7433c0c185b0152a5c10c634f2728`). The current product route is map #146; maintenance #143/#144 awaits final inspection of PR #145. Query live GitHub before selecting work.
+- The read-only administration increment is closed/completed: #123 (admin parent spec) is closed, #124 is closed (PR #129 merged), #125 is closed (PR #130 merged), #126 is closed (PR #131 merged) and #127 is completed via PR #128. #121 is closed (PR #122 merged), and #116 (skill-evidence parent spec), #117 (its implementation slice), and #119 (manual-QA mailbox) are closed with PRs #118 and #120 merged alongside the earlier #109, #110, #112 and #115. Checkpoint reconciliation #132 is closed/completed via PR #133 (main `6ce361f488d8fd6e295abfb41c78a200d31953b1`), reviewer diagnostics #134/#135 are closed/completed via PR #136 (main `5eee5bacc41d0f5db5050e233312757f7a5c5ad6`), reviewer error diagnostics #137/#138 are completed via PR #139 (main `23c81a21529381598aba692fbf96e84535a46c4c`), and CI read recovery #140/#141 is completed via PR #142 (main `a88774e6b5a7433c0c185b0152a5c10c634f2728`). The current product route is map #146; maintenance #143/#144 is implemented by PR #145, pending final operator inspection. Query live GitHub before selecting work.
+
 - #114 vendored the missing local `grilling` and `codebase-design` dependencies identified by the v1.3 audit. Retro/pr adoption and an implement-spec integration workflow remain follow-up decisions, not part of this maintenance task.
 
 ## Maintaining this checkpoint
